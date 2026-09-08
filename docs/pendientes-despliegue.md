@@ -60,7 +60,12 @@ docker inspect -f '{{range .NetworkSettings.Networks}}{{.Gateway}} {{end}}' veci
 
 ## Endurecimiento
 
-### 4. No exponer `/v1/health/ready` hacia fuera
+### 4. ~~No exponer `/v1/health/ready` hacia fuera~~ — HECHO (2026-09-08)
+
+Resuelto en el bloque *Advanced* del host `api.vecingest.xdev.es` en Nginx Proxy
+Manager. Verificado desde fuera: `live` sigue devolviendo 200 y `ready` devuelve
+404, con y sin barra final. Los cinco contenedores siguen sanos: el healthcheck
+de Docker consulta `ready` dentro del contenedor, sin pasar por nginx.
 
 El PRD (§9, "Endpoints de salud separados") dice que hacia fuera solo se expone
 `live`; `ready` es el que consulta base de datos y almacenamiento y lo usa
