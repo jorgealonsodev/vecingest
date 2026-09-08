@@ -218,3 +218,85 @@ pero **ninguna línea de Go las lee** a fecha de hoy. Verificado con `grep`:
 
 Antes de implementar Turnstile hará falta decidir dónde aterriza la Site Key,
 que es pública y tiene que llegar al cliente.
+
+## Lo que queda de la Fase 14 (Checkpoint B) y quién tiene que hacerlo
+
+Estado a 2026-09-08. El bloqueo de infraestructura de la Fase 14
+(`openspec/changes/m0-foundation/tasks.md`) queda levantado: el servidor
+existe, los cinco contenedores están sanos y 13.2, 14.1, 14.2 y 14.6 quedan
+cerrados con evidencia real (`docs/security/evidence/checkpoint-b/2026-09-08-server-verification.md`).
+Lo que sigue **no lo puede cerrar un agente**: necesita a una persona.
+
+### 1. Crear la cuenta de superadmin (bloquea 14.3, 14.4 y 14.5)
+
+Todavía no existe ningún usuario en el despliegue: nadie ha ejecutado
+`vecingest bootstrap-superadmin`. Sin esa cuenta no hay con qué iniciar
+sesión (14.3/14.4) ni token con el que autenticar el `k6` de 14.5.
+
+El subcomando lee el email por flag y la contraseña **exclusivamente por
+stdin** (nunca por flag ni por variable de entorno; `api/cmd/vecingest/bootstrap_superadmin.go`):
+
+```bash
+echo -n 'LA_CONTRASEÑA_QUE_ELIJA_EL_USUARIO' | \
+  docker exec -i vecingest-api-1 /vecingest bootstrap-superadmin \
+    --email admin@ejemplo.com \
+    --password-stdin
+```
+
+Puntos importantes, verificados leyendo el código, no supuestos:
+
+- `--password-stdin` es obligatorio y no existe ningún `--password`: si se
+  omite, el comando falla explícitamente.
+- La contraseña se valida con `PasswordPolicy.Validate(ctx, password, false)`
+  — el tercer argumento (`totpActive`) está fijado a `false` en este
+  subcomando, así que **siempre exige el suelo de 15 caracteres del PRD
+  §5.1** (el de 12 con TOTP no aplica aquí: en el momento del bootstrap
+  todavía no hay TOTP configurado). También se comprueba contra HIBP
+  (k-anonymity), igual que cualquier alta.
+- Es idempotente: ejecutarlo dos veces con el mismo email no duplica el
+  usuario ni falla — el propio binario imprime
+  `bootstrap-superadmin: already exists, no change`.
+- La contraseña la elige la persona que lo ejecuta; nadie debe inventarla
+  por ella ni dejarla en ningún fichero de este repositorio.
+- El contenedor `api` corre como el usuario `nonroot` (`65532:65532`) y con
+  `read_only: true`, así que `docker exec -it ... sh` no sirve (la imagen
+  distroless no tiene shell); el `docker exec -i ... /vecingest ...` de
+  arriba invoca el binario directamente, sin shell, que es como está
+  pensado para funcionar.
+
+### 2. Login manual desde navegador y desde la app (14.3, 14.4)
+
+Con la cuenta ya creada, una persona tiene que:
+
+- Iniciar sesión desde un navegador real contra `https://app.vecingest.xdev.es`
+  y confirmar que llega hasta el portal.
+- Iniciar sesión desde la app Expo (modo claro y oscuro) contra el mismo
+  backend.
+
+Ninguno de los dos tiene sustituto automatizado razonable a este nivel: son
+la evidencia del criterio funcional del PRD para M0 ("Login desde web y
+móvil contra el servidor desplegado por Portainer").
+
+### 3. `k6` contra `GET /v1/me` (14.5)
+
+Con un token de la cuenta ya creada, hace falta lanzar `k6` contra
+`GET /v1/me` en `https://api.vecingest.xdev.es` y comprobar el p95 < 50 ms
+del PRD §10.1 (gate item 6). `docker stats --no-stream` ya se capturó como
+evidencia de apoyo (ver el fichero de evidencia), pero no sustituye a la
+medición de latencia real.
+
+### 4. Confirmar el 2FA de Portainer (14.7, mitad pendiente)
+
+La mitad de `docker.sock` de esta tarea ya está verificada (solo Portainer
+lo monta, comprobado en los 16 contenedores del host). El requisito de 2FA
+no se puede leer por CLI ni por API sin iniciar sesión, y el puerto HTTPS de
+Portainer (9443) no respondía desde fuera del host durante esta comprobación.
+Una persona tiene que entrar en la interfaz de Portainer y confirmar en
+Settings → Authentication que el 2FA está activo y es obligatorio.
+
+### 5. Cerrar 14.8 una vez lo anterior esté hecho
+
+`docs/security/gates/M0.md` ya refleja todo lo cerrado hasta hoy, pero la
+fila del criterio funcional y la mitad de la fila del gate item 6 siguen
+abiertas. 14.8 (marcar todas las filas de Checkpoint B en verde) no puede
+cerrarse hasta que los puntos 1-4 de arriba estén hechos.
