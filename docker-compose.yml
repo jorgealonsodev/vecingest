@@ -11,8 +11,21 @@
 #   `stack.env` file passed to containers via `env_file`. No need to list
 #   every variable here. `stack.env` only exists once Portainer creates
 #   it -- see the `env_file` note on `x-app-image` below.
-# - Images are built in CI (GitHub Actions) and published to GHCR.
-#   Portainer only pulls; "Re-pull image and redeploy" updates.
+# - Portainer BUILDS these images ON THE SERVER from this repository:
+#   `api`, `web` and `site` declare `build:` below (`worker` reuses the
+#   image `api` builds instead of building it twice). "Re-pull image and
+#   redeploy" is gone -- the redeploy webhook now triggers a rebuild
+#   instead of a pull. CI (deploy.yml) still builds the same Dockerfiles
+#   and runs a blocking Trivy scan as a pre-merge safety net, but that
+#   scanned image is never what Portainer runs: it no longer gates
+#   production, there is no SBOM/provenance for what's actually running,
+#   and there is no immutable `sha-`/`v<semver>` tag to roll back to --
+#   rolling back now means redeploying an earlier commit of this
+#   repository. This is an explicit, accepted tradeoff; see PRD_go.md
+#   §8.1.1 and §11. Building on the server also means the server needs
+#   the full build toolchain (Go, Node/pnpm/corepack) and enough free RAM
+#   to run a Go build plus two pnpm/Expo builds on top of Postgres --
+#   budget for this, it is not free on a memory-constrained box.
 # - Variable template: see env.example (no leading dot: a dotted name is
 #   unreadable to some tooling that guards .env* paths, and this file holds
 #   no secrets -- only names, defaults and comments).
@@ -65,7 +78,10 @@ x-hardening: &hardening
   tmpfs: [/tmp]
 
 x-app-image: &app-image
-  image: ${REGISTRY:-ghcr.io/tu-org}/vecingest-api:${TAG:-latest}
+  # Stable local tag: nothing pulls this name from anywhere, `api` builds
+  # it (see the `api` service's own `build:` below) and `worker` merges
+  # this anchor to reuse the exact same image without building it again.
+  image: vecingest-api:local
   # `stack.env` is written by Portainer at deploy time; it does not exist
   # when this file is run by hand (`docker compose up` at the repo root).
   # Compose treats a missing `env_file` entry as a hard error by default,
@@ -96,7 +112,12 @@ x-app-image: &app-image
 
 services:
   site: # public static web (Astro) -> DOMAIN, manually proxied by nginx
-    image: ${REGISTRY:-ghcr.io/tu-org}/vecingest-site:${TAG:-latest}
+    image: vecingest-site:local
+    build:
+      context: . # site/Dockerfile COPYs pnpm-workspace.yaml, site/, app/ and
+      # packages/shared from the workspace root -- it needs the whole repo,
+      # not just site/.
+      dockerfile: site/Dockerfile
     restart: unless-stopped
     <<: *hardening
     tmpfs: [/tmp, /var/cache/nginx, /var/run]
@@ -116,7 +137,19 @@ services:
       - "${SITE_PORT:-24221}:8080"
 
   web: # exported Expo app -> app.DOMAIN, manually proxied by nginx
-    image: ${REGISTRY:-ghcr.io/tu-org}/vecingest-web:${TAG:-latest}
+    image: vecingest-web:local
+    build:
+      context: . # app/Dockerfile.web COPYs pnpm-workspace.yaml, app/,
+      # packages/shared, site/package.json and api/openapi from the
+      # workspace root -- it needs the whole repo, not just app/.
+      dockerfile: app/Dockerfile.web
+      args:
+        # Expo inlines this into the static export at BUILD time, not at
+        # container runtime -- there is no environment variable to change
+        # afterwards, the image has to be rebuilt. It was a GitHub Actions
+        # secret in CI; on the server it comes from the stack's own
+        # environment instead (see env.example).
+        EXPO_PUBLIC_API_URL: ${EXPO_PUBLIC_API_URL}
     restart: unless-stopped
     <<: *hardening
     tmpfs: [/tmp, /var/cache/nginx, /var/run]
@@ -133,6 +166,10 @@ services:
 
   api: # Go binary -> api.DOMAIN, manually proxied by nginx
     <<: [*app-image, *hardening]
+    build:
+      context: . # api/Dockerfile COPYs api/go.mod, api/go.sum and api/
+      # from the workspace root -- context has to be the repo root, not api/.
+      dockerfile: api/Dockerfile
     restart: unless-stopped
     user: "65532:65532" # distroless's built-in nonroot account
     mem_limit: 256m

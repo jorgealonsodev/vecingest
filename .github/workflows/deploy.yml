@@ -1,13 +1,23 @@
 name: deploy
 
-# Phase 11 (openspec/changes/m0-foundation/tasks.md, D-M): reuses ci.yml and
-# security.yml as `needs` via workflow_call so a build can never start on a
-# red pipeline, builds each of the three images, scans the EXACT built
-# artifact with Trivy BEFORE it is ever pushed (a vulnerable image must
-# never reach GHCR), then publishes sha-<short> and latest on every run to
-# main, plus v<semver> on a version tag, with SBOM and provenance
-# attestations, and finally triggers the Portainer redeploy webhook.
-# `packages: write` is granted only to the job that pushes to GHCR.
+# Phase 11 (openspec/changes/m0-foundation/tasks.md, D-M) ORIGINALLY built
+# each image, scanned the exact built artifact with Trivy BEFORE any push,
+# published it to GHCR with SBOM/provenance, and let Portainer pull it.
+#
+# That is no longer how this deploys (PRD_go.md §8.1.1, explicit operator
+# decision): Portainer now BUILDS these same three images ON THE SERVER
+# from this repository (docker-compose.yml declares `build:`). This job
+# therefore no longer publishes anything Portainer consumes -- it is kept
+# as a PRE-MERGE SAFETY NET only: it still builds the same Dockerfiles and
+# still runs the same blocking Trivy scan, so a vulnerable base image or
+# dependency is caught at merge time, in CI, before anyone notices it in
+# the server's own build. It does NOT scan, sign, or gate what Portainer
+# actually builds and runs -- there is no scan step between Portainer's
+# build and production, no SBOM, no provenance attestation, and no
+# immutable `sha-`/`v<semver>` tag to roll back to (rollback is now
+# "redeploy an earlier commit", see PRD_go.md §11). No `packages: write`,
+# `id-token: write` or `attestations: write` is needed any more: nothing
+# here pushes to GHCR.
 
 on:
   push:
@@ -44,16 +54,13 @@ jobs:
       security-events: write
     uses: ./.github/workflows/security.yml
 
-  build-scan-publish:
-    name: build, scan, publish (${{ matrix.image }})
+  build-and-scan:
+    name: build & scan (${{ matrix.image }}) -- pre-merge safety net, not a deploy gate
     needs: [ci, security]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: read
-      packages: write
-      id-token: write
-      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -63,6 +70,13 @@ jobs:
             dockerfile: api/Dockerfile
           - image: web
             dockerfile: app/Dockerfile.web
+            # Same build-arg Portainer passes on the server (docker-compose.yml
+            # web.build.args), sourced from a GitHub secret here instead of
+            # the stack's environment. Expo inlines it at build time either
+            # way, so this only affects what this CI-only image contains --
+            # it is never published or run anywhere.
+            build_args: |
+              EXPO_PUBLIC_API_URL=${{ secrets.EXPO_PUBLIC_API_URL }}
           - image: site
             dockerfile: site/Dockerfile
     steps:
@@ -70,13 +84,7 @@ jobs:
 
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: build (local only, unpushed -- this exact artifact gets scanned)
+      - name: build (local only, never pushed -- this artifact is scanned then discarded)
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
@@ -84,12 +92,14 @@ jobs:
           push: false
           load: true
           tags: local/vecingest-${{ matrix.image }}:scan
+          build-args: ${{ matrix.build_args || '' }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
 
-      # Load-bearing ordering: this step runs BEFORE any push step below,
-      # scanning the exact bytes that will be published if it passes.
-      - name: Trivy image scan (blocking, HIGH/CRITICAL, BEFORE any push)
+      # Catches a vulnerable base image or dependency at merge time. This
+      # is NOT the image Portainer builds and runs on the server -- it is
+      # a separate build of the same Dockerfile, purely for early warning.
+      - name: Trivy image scan (blocking, HIGH/CRITICAL -- pre-merge signal only)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: local/vecingest-${{ matrix.image }}:scan
@@ -106,55 +116,15 @@ jobs:
             echo "::warning::vecingest-${{ matrix.image }} is ${mb} MiB, over the 30 MiB advisory budget"
           fi
 
-      - name: derive tags and push the SCANNED image (no rebuild)
-        id: push
-        run: |
-          set -euo pipefail
-          IMAGE="ghcr.io/${{ github.repository_owner }}/vecingest-${{ matrix.image }}"
-          SHORT_SHA=$(git rev-parse --short=12 HEAD)
-
-          docker tag "local/vecingest-${{ matrix.image }}:scan" "${IMAGE}:sha-${SHORT_SHA}"
-          docker tag "local/vecingest-${{ matrix.image }}:scan" "${IMAGE}:latest"
-          docker push "${IMAGE}:sha-${SHORT_SHA}"
-          docker push "${IMAGE}:latest"
-
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            docker tag "local/vecingest-${{ matrix.image }}:scan" "${IMAGE}:${GITHUB_REF_NAME}"
-            docker push "${IMAGE}:${GITHUB_REF_NAME}"
-          fi
-
-          digest=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}:latest" | cut -d'@' -f2)
-          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
-          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
-
-      - name: generate SBOM (SPDX) for the published image
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
-        with:
-          image: local/vecingest-${{ matrix.image }}:scan
-          output-file: sbom-${{ matrix.image }}.spdx.json
-          format: spdx-json
-
-      - name: attest build provenance
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-name: ${{ steps.push.outputs.image }}
-          subject-digest: ${{ steps.push.outputs.digest }}
-          push-to-registry: true
-
-      - name: attest SBOM
-        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
-        with:
-          subject-name: ${{ steps.push.outputs.image }}
-          subject-digest: ${{ steps.push.outputs.digest }}
-          sbom-path: sbom-${{ matrix.image }}.spdx.json
-          push-to-registry: true
-
   redeploy-webhook:
     name: trigger Portainer redeploy
-    needs: [build-scan-publish]
+    needs: [build-and-scan]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: POST Portainer stack webhook
+      # Portainer's stack has `build:` in docker-compose.yml now, so this
+      # webhook no longer triggers a pull -- it triggers a full rebuild on
+      # the server from whatever commit is checked out there (PRD §8.1.1).
+      - name: POST Portainer stack webhook (now triggers a server-side rebuild, not a pull)
         run: |
           curl --fail-with-body -sS -X POST "${{ secrets.PORTAINER_WEBHOOK_URL }}"

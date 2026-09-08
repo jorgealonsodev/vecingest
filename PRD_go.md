@@ -1102,7 +1102,7 @@ Tres fases con los mismos binarios y el mismo esquema. El paso de fase lo decide
 
 ## 8. Infraestructura y despliegue
 
-- **Fase A** (la que describe esta sección): servidor propio con Docker Compose desplegado como **stack de Portainer** (Docker standalone). Las fases B y C están en 7.10; Portainer gestiona también Swarm, así que el paso a fase B no cambia de herramienta. Portainer no construye imágenes: CI las publica en GHCR y el stack solo hace `pull`. Las variables se definen en Portainer (Environment variables); se sustituyen en `${VAR}` y llegan a los contenedores mediante `env_file: stack.env`, que Portainer genera automáticamente. Actualizar = cambiar `TAG` y "Re-pull image and redeploy". Servicios: `web` (nginx con el export de Expo), `site` (nginx con la web pública estática, generada con Astro), `api` (binario Go, `vecingest serve`), `worker` (misma imagen, `vecingest worker`), `db` (Postgres 17) y, opcional por perfil, `clamav`. Sin Redis. Ficheros en Cloudflare R2. Imagen de la API `distroless/static` con binario estático (< 30 MB), usuario no root, `HEALTHCHECK` en `api` y `worker`. Consumo objetivo del stack en reposo: api 40 MB + worker 40 MB + Postgres 300 MB + nginx ×2 10 MB ≈ 400 MB; con ClamAV, +1 GB.
+- **Fase A** (la que describe esta sección): servidor propio con Docker Compose desplegado como **stack de Portainer** (Docker standalone). Las fases B y C están en 7.10; Portainer gestiona también Swarm, así que el paso a fase B no cambia de herramienta. Portainer construye las imágenes en el servidor a partir de este repositorio (decisión de 8.1.1, con sus contrapartidas aceptadas). Las variables se definen en Portainer (Environment variables); se sustituyen en `${VAR}` y llegan a los contenedores mediante `env_file: stack.env`, que Portainer genera automáticamente. Actualizar = redesplegar, lo que dispara un rebuild sobre el commit que Portainer tenga en checkout. Servicios: `web` (nginx con el export de Expo), `site` (nginx con la web pública estática, generada con Astro), `api` (binario Go, `vecingest serve`), `worker` (misma imagen, `vecingest worker`), `db` (Postgres 17) y, opcional por perfil, `clamav`. Sin Redis. Ficheros en Cloudflare R2. Imagen de la API `distroless/static` con binario estático (< 30 MB), usuario no root, `HEALTHCHECK` en `api` y `worker`. Consumo objetivo del stack en reposo: api 40 MB + worker 40 MB + Postgres 300 MB + nginx ×2 10 MB ≈ 400 MB; con ClamAV, +1 GB.
 - Proxy inverso existente: nginx corre como **contenedor** en Portainer y hace de proxy inverso de todos los stacks del servidor; se configura **a mano**, apuntando a puertos publicados en el host, no a una red docker compartida. Nuestro stack publica esos puertos para que nginx los use como destino: `DOMAIN → host:SITE_PORT`, `app.DOMAIN → host:WEB_PORT`, `api.DOMAIN → host:API_PORT` (con `client_max_body_size 1m` en el host de la API: la API nunca recibe binarios). **`site` y `web` escuchan en 8080 dentro del contenedor, no en 80**: sus imágenes se construyen sobre `nginxinc/nginx-unprivileged` y corren como usuario no root, porque la imagen oficial de nginx arranca como root y no cumple el punto de contenedores no root de 10.1; por eso el puerto publicado en el host mapea a 8080, no a 80, dentro del contenedor.
 - Variables de entorno (plantilla en `env.example`, valores en Portainer, nunca en el repositorio): `DOMAIN`, `APP_URL`, `APP_ENV` (`development` | `staging` | `production`), `CORS_ORIGINS`, `POSTGRES_*` (superusuario, solo para el arranque de roles), `APP_DB_USER`, `APP_DB_PASSWORD`, `BOOTSTRAP_DATABASE_URL`, `MIGRATIONS_DATABASE_URL`, `JWT_SECRET`, `JWT_SECRET_PREVIOUS`, `JWT_REFRESH_SECRET`, `ENCRYPTION_KEY` (32 bytes en base64; en Portainer va como variable de entorno porque los secretos por fichero no están disponibles en Docker standalone; ver mitigación en 6.1), `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_BACKUP_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `SMTP_URL`, `MAIL_FROM`, `TURNSTILE_SECRET`, `TSA_URL`, `EXPO_ACCESS_TOKEN`, `SENTRY_DSN`, `PROXY_IP` (dirección que la API observa como origen de la petición de nginx, para `trust proxy`), `SITE_PORT`, `WEB_PORT` y `API_PORT` (puertos publicados en el host para que nginx los use como destino). El superadmin inicial no figura aquí: se crea con `vecingest bootstrap-superadmin` y sus credenciales no se guardan como variables del stack (ver 5.1).
 - Entornos: `development` (local con `docker compose -f docker-compose.dev.yml`, solo db; API con `air` para recarga y app en el host), `staging` (opcional, mismo compose con otro `.env` y subdominios `staging-*`), `production`.
@@ -1110,13 +1110,13 @@ Tres fases con los mismos binarios y el mismo esquema. El paso de fase lo decide
 - Migraciones: `vecingest migrate` se ejecuta en el arranque del contenedor `api` (con bloqueo de aviso en Postgres para que `worker` no arranque a la vez). La creación del rol `app_rw` sin `UPDATE`/`DELETE` en tablas append-only es una migración `goose`, no un script de `docker-entrypoint-initdb.d`, para no depender de bind mounts que Portainer no tiene. Las migraciones corren con el rol propietario; `api` y `worker` se conectan como `app_rw`.
 - Backups: cron diario con `pg_dump | age -r <clave pública>` a `R2_BACKUP_BUCKET` con credenciales de solo escritura (`R2_BACKUP_ACCESS_KEY_ID`/`SECRET`), versionado activado y retención 30 días. La clave privada de `age` no está en el servidor. Restauración probada el primer lunes de cada mes en `staging`.
 - Apps nativas: `eas build --profile production`; actualizaciones JS sin pasar por tienda con `eas update`.
-- CI (GitHub Actions): `golangci-lint`, `go test -race`, `make gen` con comprobación de que `openapi.yaml`, el código `sqlc` y el cliente TS están al día (falla si `git diff` no está limpio), lint y typecheck de la app, en cada PR; en merge a `main` construye `vecingest-api`, `vecingest-web` y `vecingest-site`, las escanea con Trivy y las publica en GHCR con etiqueta de versión y `latest`; después llama al webhook de redespliegue del stack de Portainer (Stack → Webhook). La web se construye con `EXPO_PUBLIC_API_URL` como `build-arg` desde un secreto de GitHub, porque Expo lo incrusta en el estático. Las apps nativas se publican manualmente con EAS desde `main` etiquetado.
+- CI (GitHub Actions): `golangci-lint`, `go test -race`, `make gen` con comprobación de que `openapi.yaml`, el código `sqlc` y el cliente TS están al día (falla si `git diff` no está limpio), lint y typecheck de la app, en cada PR; en merge a `main` construye `vecingest-api`, `vecingest-web` y `vecingest-site` y las escanea con Trivy, **como red de seguridad pre-merge, no como puerta de lo que se despliega**: Portainer construye su propia copia de las mismas imágenes en el servidor y esa es la que corre (decisión de 8.1.1) — CI ya no publica en GHCR ni genera SBOM/procedencia para nada que llegue a producción; después llama al webhook de redespliegue del stack de Portainer (Stack → Webhook), que ahora dispara un rebuild en el servidor, no un pull. La web se construye con `EXPO_PUBLIC_API_URL` como `build-arg`: en CI desde un secreto de GitHub, en el servidor desde la variable de entorno del stack (ver env.example), porque Expo lo incrusta en el estático. Las apps nativas se publican manualmente con EAS desde `main` etiquetado.
 
 ### 8.1 Stack de Portainer de referencia (`docker-compose.yml`)
 
 Este es el stack que despliega Portainer. Se mantiene en el repositorio en la raíz, `docker-compose.yml`; esta copia es de referencia y debe actualizarse si cambia aquel. El fichero vive en la raíz (no en `deploy/`) por dos motivos: el campo *compose path* de Portainer se queda en su valor por defecto sin nada que configurar, y `docker compose` carga automáticamente un `.env` situado junto al compose, así que copiar `env.example` a `.env` en la raíz basta para la sustitución de `${VAR}` sin `--env-file`. La plantilla se llama `env.example`, sin punto inicial, a propósito: no contiene secretos —solo nombres, valores por defecto y comentarios— y así queda fuera de los guardas que bloquean rutas `.env*`. `deploy/` conserva solo `docker-compose.dev.yml`, el stack local que Portainer nunca toca.
 
-**El stack se crea en Portainer como "Repository"**, apuntando al repositorio de GitHub con `docker-compose.yml` (en la raíz) como *compose path* — el valor por defecto de Portainer, sin nada que configurar —, no pegando el YAML a mano. Así la definición del stack vive versionada en git y no se puede desincronizar de lo que hay en el servidor. El despliegue lo dispara el webhook del stack, que `deploy.yml` llama al final de cada push a `main` que haya pasado CI y la puerta de seguridad; el equivalente manual es "Pull and redeploy". Portainer solo lee el compose del repositorio: **las imágenes las sigue construyendo y publicando CI en GHCR**, y Portainer las descarga (ver 8.1.1).
+**El stack se crea en Portainer como "Repository"**, apuntando al repositorio de GitHub con `docker-compose.yml` (en la raíz) como *compose path* — el valor por defecto de Portainer, sin nada que configurar —, no pegando el YAML a mano. Así la definición del stack vive versionada en git y no se puede desincronizar de lo que hay en el servidor. El despliegue lo dispara el webhook del stack, que `deploy.yml` llama al final de cada push a `main` que haya pasado CI y la puerta de seguridad; el equivalente manual es "Pull and redeploy" en el panel, pese al nombre: con `build:` declarado en el compose, Portainer construye de nuevo antes de levantar los contenedores. Portainer lee el compose del repositorio y **construye las imágenes él mismo, en el servidor** (ver 8.1.1 para la decisión y sus contrapartidas aceptadas).
 
 ```yaml
 # Stack para Portainer (Docker standalone, no Swarm).
@@ -1126,10 +1126,14 @@ Este es el stack que despliega Portainer. Se mantiene en el repositorio en la ra
 # - El stack se despliega desde el repositorio de GitHub (Portainer > Add stack >
 #   Repository, compose path por defecto `docker-compose.yml` en la raíz), no
 #   pegando este YAML.
-# - Las imágenes se construyen en CI (GitHub Actions) y se publican en GHCR.
-#   Portainer solo hace pull; el webhook del stack o "Pull and redeploy" actualiza.
-#   Portainer NO construye imágenes: ningún servicio declara `build:`, y hacerlo
-#   saltaría el escaneo de Trivy previo a la publicación (ver 8.1.1).
+# - Portainer CONSTRUYE las imágenes en el servidor: api, web y site
+#   declaran `build:` (worker reutiliza la que construye api). Esto es
+#   una decisión explícita del operador con cuatro contrapartidas
+#   aceptadas -- sin escaneo previo a producción, sin SBOM/procedencia,
+#   sin etiqueta inmutable a la que volver, y RAM del build compitiendo
+#   con Postgres en el redespliegue -- ver 8.1.1. CI (deploy.yml) sigue
+#   construyendo y escaneando con Trivy como red de seguridad
+#   pre-merge, pero esa imagen ya no es la que corre.
 # - Plantilla de variables: ver env.example
 #
 # Proxy inverso: el servidor corre un único contenedor nginx en Portainer
@@ -1175,7 +1179,8 @@ x-hardening: &hardening
   tmpfs: [/tmp]
 
 x-app-image: &app-image
-  image: ${REGISTRY:-ghcr.io/tu-org}/vecingest-api:${TAG:-latest}
+  image: vecingest-api:local        # etiqueta local estable; api la construye
+                                    # (ver su `build:` abajo), worker la reutiliza
   # `stack.env` lo escribe Portainer al desplegar; no existe si este
   # fichero se ejecuta a mano (`docker compose up` en la raíz). Compose
   # trata una entrada `env_file` que falta como error, así que se usa la
@@ -1205,7 +1210,10 @@ x-app-image: &app-image
 
 services:
   site:                           # web pública estática (Astro) → DOMAIN, proxiada a mano por nginx
-    image: ${REGISTRY:-ghcr.io/tu-org}/vecingest-site:${TAG:-latest}
+    image: vecingest-site:local
+    build:
+      context: .                  # site/Dockerfile hace COPY desde la raíz del workspace
+      dockerfile: site/Dockerfile
     restart: unless-stopped
     <<: *hardening
     tmpfs: [/tmp, /var/cache/nginx, /var/run]
@@ -1219,7 +1227,12 @@ services:
       - "${SITE_PORT:-24221}:8080"
 
   web:                            # app Expo exportada → app.DOMAIN, proxiada a mano por nginx
-    image: ${REGISTRY:-ghcr.io/tu-org}/vecingest-web:${TAG:-latest}
+    image: vecingest-web:local
+    build:
+      context: .                  # app/Dockerfile.web hace COPY desde la raíz del workspace
+      dockerfile: app/Dockerfile.web
+      args:
+        EXPO_PUBLIC_API_URL: ${EXPO_PUBLIC_API_URL}   # Expo lo incrusta al construir, no en runtime
     restart: unless-stopped
     <<: *hardening
     tmpfs: [/tmp, /var/cache/nginx, /var/run]
@@ -1231,6 +1244,9 @@ services:
 
   api:                            # binario Go → api.DOMAIN, proxiada a mano por nginx
     <<: [*app-image, *hardening]
+    build:
+      context: .                  # api/Dockerfile hace COPY desde la raíz del workspace
+      dockerfile: api/Dockerfile
     restart: unless-stopped
     user: "65532:65532"             # nonroot de distroless
     mem_limit: 256m
@@ -1311,16 +1327,16 @@ volumes:
   clamav_db:
 ```
 
-### 8.1.1 Quién construye las imágenes, y por qué no Portainer
+### 8.1.1 Quién construye las imágenes: decisión de construir en Portainer
 
-Portainer despliega el stack **desde GitHub**, pero **no construye imágenes**: ningún servicio del compose declara `build:`, todos usan `image:` apuntando a GHCR. Construirlas en el servidor es técnicamente posible y rompe cuatro cosas de este mismo documento:
+**Decisión (explícita e informada del operador, no un descuido):** Portainer despliega el stack **desde GitHub** y también **construye las imágenes en el servidor** — `api`, `web` y `site` declaran `build:` en `docker-compose.yml` (`worker` reutiliza la imagen que construye `api`, no la reconstruye). Se descartó la alternativa de mantener a Portainer como puro consumidor de imágenes publicadas en GHCR (la que describía esta sección hasta ahora) precisamente porque construir en el servidor rompe cuatro cosas de este mismo documento. Esas cuatro roturas no se resolvieron: **se aceptaron como coste conocido**, y quedan documentadas aquí para que quien lea esto después no crea que siguen vigentes las garantías de la sección 8.1.1 anterior:
 
-1. **El escaneo previo a la publicación.** `deploy.yml` construye la imagen sin publicarla, la escanea con Trivy bloqueando en HIGH y CRITICAL, y solo entonces publica **esa misma imagen ya escaneada, sin reconstruir**. Si la construye Portainer no hay ningún momento anterior a producción en el que escanearla: la imagen vulnerable ya está corriendo.
-2. **El SBOM y la atestación de procedencia**, que genera el paso de publicación de CI. Una imagen construida en el servidor no tiene ni una ni otra, y la cadena de suministro deja de ser auditable.
-3. **Las etiquetas inmutables** `sha-<short>` y `v<semver>`. Son las que permiten volver atrás cambiando `TAG` y redesplegando. Construyendo en el servidor solo existe lo último que se compiló.
-4. **La memoria del servidor.** La sección 11 pone base de datos, cola y API en la misma máquina. Un build de Go más otro de Expo compiten por RAM con Postgres, y la imagen de la API pesa menos de 30 MB precisamente porque se construye en varias etapas en CI y solo viaja el binario.
+1. **No hay escaneo previo a producción.** `deploy.yml` sigue construyendo la imagen y escaneándola con Trivy bloqueando en HIGH y CRITICAL, pero **esa imagen escaneada nunca es la que corre**: Portainer construye la suya, por separado, sin pasar por ese escaneo. El Trivy de CI queda como red de seguridad *pre-merge* (detecta una base o dependencia vulnerable en el momento del merge a `main`), no como puerta que impida que algo vulnerable llegue a producción — ver el punto reescrito en 10.1.
+2. **No hay SBOM ni atestación de procedencia** de lo que corre en producción. CI sigue sin generarlas para una imagen que ya no publica (ver 8.1 y `.github/workflows/deploy.yml`), y una imagen construida en el servidor tampoco las tiene: la cadena de suministro de lo que realmente se ejecuta deja de ser auditable.
+3. **No hay etiquetas inmutables `sha-<short>` ni `v<semver>` a las que volver.** `REGISTRY`/`TAG` ya no seleccionan nada (ver env.example, 8.2): lo que corre es siempre el resultado del último build sobre el commit que Portainer tenga en checkout. La mitigación real es la sección 11: volver atrás significa redesplegar un commit anterior del repositorio, no cambiar una etiqueta.
+4. **Compite por la memoria del servidor.** La sección 11 pone base de datos, cola y API en la misma máquina. Un build de Go más dos builds de Expo/Astro (pnpm + Node) ahora corren en ese mismo servidor y compiten por RAM y CPU con Postgres durante cada redespliegue, no solo en CI. La imagen de la API sigue pesando lo mismo (se construye igual, en varias etapas, y solo viaja el binario final), pero el *proceso de construir* ya no está aislado del servidor de producción.
 
-Si en algún momento se decide construir en el servidor, hay que reescribir antes el punto de la puerta de seguridad de 10.1 que exige escaneo bloqueante, porque tal como está redactado no se podría cumplir.
+Mitigación operativa: medir el pico de RAM durante `docker compose build` en el servidor real antes de dar por buena la fase A con este cambio (ver la medición de este mismo cambio: build local, no estimación), y considerar un runner de build separado si el pico compite en exceso con Postgres.
 
 ### 8.2 Variables del stack (`env.example`)
 
@@ -1355,9 +1371,14 @@ API_PORT=34246                               # puerto publicado en el host para 
 # equivocado.
 PROXY_IP=[docker inspect -f '{{range .NetworkSettings.Networks}}{{.Gateway}} {{end}}' $(docker ps -qf name=api) ]
 
-# Imágenes
-REGISTRY=[tu organización en GHCR, p. ej. ghcr.io/jorgealonsodev]
-TAG=latest                                   # en producción usar una etiqueta de versión, p. ej. v1.4.2
+# Imágenes: Portainer las construye EN EL SERVIDOR desde este repositorio
+# (docker-compose.yml declara `build:` en api, web y site); ya no hay REGISTRY
+# ni TAG que seleccionen qué se descarga, porque no se descarga nada. Lo que
+# corre siempre es el resultado del build más reciente sobre el commit que
+# Portainer tenga en checkout al redesplegar -- ver PRD_go.md §8.1.1 y §11
+# para las contrapartidas aceptadas (sin escaneo previo a producción, sin
+# SBOM/procedencia, sin etiqueta inmutable a la que volver).
+EXPO_PUBLIC_API_URL=[URL pública de la API, p. ej. https://api.tudominio.com — build-arg de `web`: Expo lo incrusta en el estático al construir la imagen, no se puede cambiar en caliente]
 
 # Base de datos
 # POSTGRES_* es el superusuario de la imagen: solo lo usa el arranque de roles.
@@ -1466,7 +1487,7 @@ Formato: cada línea es una comprobación con su evidencia. El hito se cierra cu
 - [ ] 2FA TOTP funcionando y obligatorio para `superadmin`; login de superadmin en ruta separada. *Evidencia: test.*
 - [ ] `internal/config` valida el entorno: el proceso no arranca con una variable ausente. *Evidencia: test de arranque.*
 - [ ] Presupuesto de recursos medido: `api` y `worker` < 128 MB en reposo, imagen < 30 MB, arranque < 1 s, p95 de `GET /v1/me` < 50 ms en el servidor. *Evidencia: `docker stats` y `k6` archivados en `docs/security/gates/M0.md`.*
-- [ ] `gitleaks`, `govulncheck`, `gosec`, `pnpm audit --audit-level=high` (app), Trivy y Semgrep en CI y bloqueantes. *Evidencia: workflow en verde y un PR de prueba bloqueado.*
+- [ ] `gitleaks`, `govulncheck`, `gosec`, `pnpm audit --audit-level=high` (app), Trivy y Semgrep en CI y bloqueantes. **Esto ya no es una puerta de lo que corre en producción**: desde la decisión de 8.1.1, Portainer construye su propia imagen en el servidor, sin pasar por este Trivy ni por ningún otro escaneo — el gate solo bloquea el *merge* a `main` (una base o dependencia vulnerable no llega al repositorio), no el *despliegue*. Lo único verificable sobre lo que realmente corre es, en el servidor: `docker compose config -q` sin errores, y una inspección manual/`docker inspect` de la imagen ya construida (usuario, capacidades, tamaño) — no hay escaneo de vulnerabilidades equivalente sobre ese artefacto. *Evidencia: workflow de CI en verde y un PR de prueba bloqueado (pre-merge); `docker inspect` de la imagen construida en el servidor (post-despliegue, sin escaneo de CVE).*
 - [ ] Contenedores `read_only`, no root (distroless `nonroot`), `cap_drop: ALL`, `mem_limit` y `GOMEMLIMIT`; Portainer con 2FA y sin exponer `docker.sock` a otros contenedores. *Evidencia: `docker inspect` archivado.*
 - [ ] Rol `app_rw` de Postgres sin `UPDATE`, `DELETE` ni `TRUNCATE` en las tablas append-only (`audit_log`, y `votes` y `time_entries` cuando existan) —`TRUNCATE` es un privilegio distinto de `DELETE` y revocar solo los dos primeros deja la tabla vaciable—, sin ser propietario de esas tablas ni miembro del rol propietario; test que intenta las tres operaciones y falla. *Evidencia: test.*
 - [ ] Rate limiting (`httprate`) con `trust proxy` acotado a `PROXY_IP`. *Evidencia: test con `X-Forwarded-For` falso desde otra IP → ignorado.*
@@ -1551,6 +1572,7 @@ Formato: cada línea es una comprobación con su evidencia. El hito se cierra cu
 - **Cuenta de Expo/EAS como punto único de compromiso**: puede publicar código a todos los móviles. Mitigado con 2FA, code signing de updates con clave fuera de Expo y acceso limitado a dos personas.
 - **Escalar antes de tiempo**: la tentación de montar Kubernetes, Citus o NATS en fase A. Cada pieza añade operación, coste y superficie de ataque; se añaden solo cuando un SLO lo pide (7.10).
 - **Un único servidor** (fase A): BD y API en la misma máquina sin alta disponibilidad. Aceptado para el MVP; el RTO de 4 h se cubre con backups y un runbook de restauración probado. Si se superan ~200 comunidades activas, separar la base de datos.
+- **Sin rollback por etiqueta de imagen** (decidido en 8.1.1: Portainer construye en el servidor en vez de descargar de GHCR). Se pierden las etiquetas inmutables `sha-<short>`/`v<semver>`: no hay una imagen anterior conocida a la que volver cambiando `TAG`. Riesgo aceptado junto con el resto de contrapartidas de 8.1.1. **Mitigación real:** volver atrás significa redesplegar un commit anterior del repositorio (Portainer reconstruye desde ese commit), no cambiar una variable; documentar en el runbook de despliegue qué commit estaba en producción antes de cada redespliegue, para saber a cuál volver.
 - **Dos lenguajes en el monorepo** (Go en la API, TypeScript en app y web): el riesgo es la deriva del contrato. Mitigado con el `openapi.yaml` generado y la comprobación en CI de que el cliente TS está al día; nadie escribe tipos a mano en los dos lados.
 - **ClamAV frente al presupuesto de memoria**: es el único servicio que rompe el objetivo de 1 GB. Perfil opcional y escaneo diferido documentados en 7.7; decidir en M2 según la RAM disponible.
 - **Panel de administración con tablas grandes en React Native Web**: mitigado con `@tanstack/react-table` + virtualización (`FlashList`); si aun así no rinde, ver el riesgo de migración a Next.js.

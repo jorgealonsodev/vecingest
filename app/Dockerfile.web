@@ -27,6 +27,13 @@ COPY api/openapi ./api/openapi
 COPY packages/shared ./packages/shared
 COPY app ./app
 RUN pnpm --filter @vecingest/shared build
+# Expo inlines EXPO_PUBLIC_* variables into the static bundle at build
+# time (there is no runtime env var to change after the image exists).
+# In CI this came from a GitHub Actions secret passed as --build-arg; on
+# the server, docker-compose.yml's `web.build.args` passes it from the
+# stack's own environment instead (see env.example).
+ARG EXPO_PUBLIC_API_URL
+ENV EXPO_PUBLIC_API_URL=${EXPO_PUBLIC_API_URL}
 RUN pnpm --filter app build
 
 FROM nginxinc/nginx-unprivileged:1.30-alpine
