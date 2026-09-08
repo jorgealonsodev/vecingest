@@ -1201,7 +1201,7 @@ x-app-image: &app-image
     # `BOOTSTRAP_DATABASE_URL` llegan por stack.env.
     DATABASE_URL: postgres://${APP_DB_USER}:${APP_DB_PASSWORD}@db:5432/${POSTGRES_DB}
       CLAMAV_HOST: clamav
-    S3_ENDPOINT: https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com
+    S3_ENDPOINT: https://${R2_ACCOUNT_ID}.eu.r2.cloudflarestorage.com
     S3_REGION: auto
     S3_BUCKET: ${R2_BUCKET}
     S3_ACCESS_KEY: ${R2_ACCESS_KEY_ID}
