@@ -1202,12 +1202,22 @@ x-app-image: &app-image
     PORT: 3000
     APP_URL: https://app.${DOMAIN}
     CORS_ORIGINS: https://app.${DOMAIN},https://${DOMAIN}
-    # Tres roles distintos. `${POSTGRES_USER}` es superusuario y solo se usa una vez, en el
-    # arranque de roles; `vecingest_owner` aplica las migraciones de goose; `app_rw` es el
-    # runtime y no posee ninguna tabla. Conectar la API como superusuario haría imposible
-    # el punto del rol restringido de 10.1. `MIGRATIONS_DATABASE_URL` y
-    # `BOOTSTRAP_DATABASE_URL` llegan por stack.env.
+    # Tres roles distintos. `${POSTGRES_USER}` es superusuario; `app_rw` es el runtime y no
+    # posee ninguna tabla; `vecingest_owner` posee todos los objetos del esquema. Conectar
+    # la API como superusuario haría imposible el punto del rol restringido de 10.1.
     DATABASE_URL: postgres://${APP_DB_USER}:${APP_DB_PASSWORD}@db:5432/${POSTGRES_DB}
+    # Las dos URLs de migración se DERIVAN aquí, no se teclean en el entorno del stack.
+    # Antes eran dos variables escritas a mano y los dos fallos aparecieron en un despliegue
+    # real: nadie puede inventar una contraseña para `vecingest_owner` (se crea NOLOGIN, así
+    # que no existe ninguna), y pegar la URL larga del owner en el editor de variables de
+    # Portainer la partió en dos líneas, tumbando el stack entero con
+    # `unexpected character "?" in variable name`.
+    BOOTSTRAP_DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    # El set de esquema conecta como superusuario pero asume inmediatamente `vecingest_owner`
+    # mediante el parámetro `options` de libpq, así que todo objeto que crea pertenece a ese
+    # rol mientras el rol sigue siendo NOLOGIN e inalcanzable. %20 es un espacio y %3D un `=`;
+    # deben quedarse codificados o la URL se interpreta mal.
+    MIGRATIONS_DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?options=-c%20role%3Dvecingest_owner
       CLAMAV_HOST: clamav
     S3_ENDPOINT: https://${R2_ACCOUNT_ID}.eu.r2.cloudflarestorage.com
     S3_REGION: auto
@@ -1396,11 +1406,11 @@ POSTGRES_PASSWORD=[openssl rand -hex 32]
 POSTGRES_DB=vecingest
 APP_DB_USER=app_rw                           # rol de runtime, sin UPDATE/DELETE/TRUNCATE en tablas append-only
 APP_DB_PASSWORD=[openssl rand -hex 32]
-# Las dos URLs completas. Compón cada una con los valores de arriba; la contraseña de
-# `vecingest_owner` no tiene variable propia porque solo vive dentro de esta URL:
-# genérala también con [openssl rand -hex 32] y guárdala donde guardes el resto.
-BOOTSTRAP_DATABASE_URL=[postgres://vecingest:$POSTGRES_PASSWORD@db:5432/vecingest]
-MIGRATIONS_DATABASE_URL=[postgres://vecingest_owner:CONTRASEÑA_DEL_OWNER@db:5432/vecingest]
+# BOOTSTRAP_DATABASE_URL y MIGRATIONS_DATABASE_URL ya NO se ponen aquí ni en Portainer:
+# las construye docker-compose.yml a partir de POSTGRES_USER, POSTGRES_PASSWORD y
+# POSTGRES_DB. Se quitaron tras romper un despliegue real por dos motivos distintos:
+# `vecingest_owner` se crea NOLOGIN y sin contraseña, así que no hay ninguna que teclear,
+# y la URL larga se partió en dos líneas al pegarla en el editor de variables.
 
 # Claves de la aplicación (32 bytes en base64 cada una; no viajan en ninguna URL)
 JWT_SECRET=[openssl rand -base64 32]
