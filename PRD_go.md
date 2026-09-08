@@ -176,9 +176,9 @@ Texto consolidado del BOE, última actualización publicada el 21/03/2026 (RDL 7
 - **Cookies y aviso legal** (LSSI): la web pública lleva banner de cookies solo si usa cookies no técnicas; aviso legal con datos del titular; términos de uso y política de privacidad enlazados desde el registro y el pie.
 - **Firma electrónica** (Reglamento eIDAS 910/2014 y Ley 6/2020):
   - **Firma simple** con identificación de usuario, IP, hora y aceptación explícita: suficiente para delegaciones de voto, aceptación de tareas, partes de trabajo y acuse de recibo.
-  - **Firma avanzada** (OTP por SMS o código TOTP de la app de autenticación + sello de tiempo + hash del documento; **no** se acepta OTP por email para votar ni firmar, porque el email es el mismo factor que la cuenta): la que se exige en la plataforma para **votar a distancia en juntas `hybrid` o `remote_only`** y para **firmar actas** (presidente y secretario). Se conserva la evidencia (`signature_evidence`).
+  - **Firma avanzada** (OTP por email o código TOTP de la app de autenticación + sello de tiempo + hash del documento): la que se exige en la plataforma para **votar a distancia en juntas `hybrid` o `remote_only`** y para **firmar actas** (presidente y secretario). Se conserva la evidencia (`signature_evidence`).
   - **Firma cualificada** (certificado digital, DNIe): no se exige; se prevé integración con un prestador cualificado (fase 3) para comunidades que lo acuerden en estatutos.
-- **Identidad del votante**: para dar validez al voto telemático se exige, además de la cuenta creada por invitación del administrador, verificación de teléfono (OTP) en el momento de votar y que el propietario haya sido dado de alta por el admin con su DNI/NIE (`users.id_document_encrypted`). No se guarda copia del documento, solo el número cifrado, y se muestra enmascarado.
+- **Identidad del votante**: para dar validez al voto telemático se exige, además de la cuenta creada por invitación del administrador, verificación por OTP en el momento de votar (al email de la cuenta, o TOTP si el propietario lo tiene activo) y que el propietario haya sido dado de alta por el admin con su DNI/NIE (`users.id_document_encrypted`). No se guarda copia del documento, solo el número cifrado, y se muestra enmascarado.
 
 ### 4.5 Accesibilidad y consumidores
 
@@ -209,7 +209,7 @@ Las filas marcadas "conocimiento previo" no han cambiado en años, pero conviene
 ### 5.1 Autenticación
 - Registro por invitación: el administrador crea la vivienda e invita por email (enlace con token) o genera un código de 8 caracteres para entregar en papel. Nadie se registra libremente en una comunidad. La invitación caduca a los 14 días y puede reenviarse.
 - Login con email + contraseña. Recuperación por email. Longitud mínima de contraseña condicionada al segundo factor: **15 caracteres** en cuentas sin 2FA y **12 caracteres** con TOTP activo (NIST SP 800-63B rev. 4, de 26-08-2025: 15 es el mínimo para autenticación solo con contraseña, 8 el mínimo cuando la contraseña es un factor de MFA). El mensaje de error indica qué regla aplica. Comprobadas contra filtraciones conocidas (API k-anonymity de Have I Been Pwned, prefijo de 5 caracteres del hash SHA-1, cabecera `Add-Padding: true` y descarte de las entradas con recuento 0) y hasheadas con Argon2id (m=19456 KiB, t=2, p=1, sal de 16 bytes, tag de 32 bytes; perfil de OWASP, elegido sobre los 64 MiB del RFC 9106 porque la fase A sitúa base de datos, cola y API en la misma máquina). Las respuestas de login, recuperación e invitación no revelan si el email existe.
-- Verificación de teléfono (OTP de 6 dígitos, 5 min, 5 intentos) necesaria antes de poder votar a distancia o firmar actas; el OTP se guarda hasheado y nunca se registra en logs.
+- Verificación por OTP de 6 dígitos (5 min, 5 intentos) necesaria antes de poder votar a distancia o firmar actas. El código se envía **al email de la cuenta**, o se toma de TOTP si el propietario lo tiene activo. El OTP se guarda hasheado y nunca se registra en logs.
 - 2FA con TOTP (`otplib`): **obligatorio para `superadmin` desde M0 y para `admin`/`admin_staff` desde M1**; opcional para el resto. Códigos de recuperación de un solo uso.
 - Tokens JWT: access (15 min) + refresh (30 días con rotación; un refresh usado dos veces invalida toda la familia de tokens).
   - Móvil: ambos tokens en `expo-secure-store`. Se envían como `Authorization: Bearer`.
@@ -372,7 +372,7 @@ Objetivo: **OWASP ASVS nivel 2** para la API y **OWASP MASVS-L1 + R** (resilienc
 | Alteración del registro de jornada o del `audit_log` | Tablas append-only: el rol de BD de la aplicación no tiene `UPDATE`/`DELETE` sobre `audit_log`, `votes`, `time_entries`, `signature_evidence`; hash encadenado y anclaje diario del `audit_log` |
 | Fuga por logs o errores | Redacción de PII en el handler de `slog`, errores genéricos hacia el cliente (`code` estable, detalle solo en servidor), Sentry sin PII, OpenAPI y Swagger UI desactivados en producción |
 | Spoofing de IP para evadir límites | `trust proxy` restringido a la IP de NPM |
-| Fraude de SMS (SMS pumping) | OTP solo a teléfonos verificados por el admin en el alta o por el propio usuario con límite de 3 envíos/hora y 10/día por número y por cuenta; bloqueo de prefijos de tarificación especial; alerta si el gasto diario de SMS supera un umbral |
+| **Compromiso del buzón de correo del propietario** (riesgo asumido, ver 11) | El OTP de voto y firma viaja por el mismo canal que la recuperación de contraseña, así que quien controla el buzón puede suplantar al votante por completo. Mitigación parcial: límite de 3 envíos/hora y 10/día por cuenta, OTP de un solo uso hasheado en BD, alerta al propietario por cada emisión, y `signature_evidence` registra el canal usado para que una impugnación pueda distinguir un voto firmado con TOTP de uno firmado por email. Se ofrece TOTP como alternativa más fuerte y se recomienda activarlo a quien vaya a votar |
 | Phishing con emails de la plataforma | SPF, DKIM (2048) y DMARC `p=reject` en el dominio de envío (`mail.DOMAIN`), BIMI opcional; los emails nunca piden contraseña ni incluyen enlaces a dominios de terceros; nombre del despacho como remitente visible pero dominio de la plataforma |
 | Compromiso del servidor (ransomware) | Backups cifrados con clave distinta (`age`) hacia un bucket R2 **separado con credenciales de solo escritura** y *object lock*/versionado; la API no tiene credenciales para borrar backups; restauración probada mensualmente; el servidor solo expone 80/443 (NPM) y SSH con clave |
 | Compromiso de un contenedor vecino en la red de NPM (red compartida con otros proyectos) | `db` solo en red interna; `api` valida `Origin`/`Host`; contenedores `read_only`, `no-new-privileges`, `cap_drop: ALL`, usuario no root, límites de memoria |
@@ -384,7 +384,7 @@ Objetivo: **OWASP ASVS nivel 2** para la API y **OWASP MASVS-L1 + R** (resilienc
 **Gestión de claves y secretos**
 - `ENCRYPTION_KEY` con versión (`v1:` como prefijo del cifrado) para poder rotar re-cifrando en segundo plano. Al desplegar con Portainer sobre Docker standalone no hay `secrets` de Docker, así que llega como variable de entorno; mitigación: la app la lee al arrancar y la borra de `process.env`, el acceso a Portainer exige 2FA y rol de administrador solo para dos personas, y el `docker.sock` no se expone a ningún otro contenedor. Si el servidor pasa a Swarm o se añade un gestor de secretos (Infisical/Vault), se migra a `secrets:`.
 - Credenciales de R2 por bucket y por uso: una para la API (lectura/escritura en el bucket principal), otra de solo escritura para backups, ninguna con permiso de borrar el bucket de backups.
-- Rotación anual como mínimo de JWT (con `kid`), R2, SMTP y SMS; rotación inmediata ante cualquier sospecha. Procedimiento en el runbook.
+- Rotación anual como mínimo de JWT (con `kid`), R2 y SMTP; rotación inmediata ante cualquier sospecha. Procedimiento en el runbook.
 - Ningún secreto en el repositorio ni en la imagen Docker (comprobado con `gitleaks` en CI).
 
 **Endurecimiento del servidor** (runbook, no código)
@@ -420,7 +420,7 @@ Objetivo: **OWASP ASVS nivel 2** para la API y **OWASP MASVS-L1 + R** (resilienc
 | PDF | `maroto` v2 (sobre `gofpdf`) para actas, convocatorias, certificados e informes. Sin Chromium |
 | Despliegue | Fase A: Docker Compose (Portainer) en servidor propio tras Nginx Proxy Manager. Fase B: varios servidores con Docker Swarm gestionado desde el mismo Portainer, Postgres HA con Patroni. Fase C: Kubernetes (k3s o gestionado) con CloudNativePG, autoescalado de `api` y `worker` |
 | Apps nativas | EAS Build + EAS Update |
-| SMS (OTP) | Proveedor con API REST (p. ej. Twilio o un proveedor español); abstraído en `internal/sms` |
+| OTP de voto y firma | Se envía por email con el mismo `internal/mail` que el resto del correo; TOTP (`otplib`) como alternativa más fuerte para quien lo active. **Sin proveedor de SMS**: decisión de fase 1, ver 11 |
 | Antivirus | ClamAV en contenedor aparte, opcional por perfil de compose (es el mayor consumidor de memoria del stack; ver 7.7) |
 | Observabilidad | OpenTelemetry en Go (trazas y métricas) → Prometheus + Grafana + Loki; alertas sobre los SLO. Fase A en el mismo servidor con retención corta; fase B en nodo aparte |
 | CDN y borde | Cloudflare delante de todo: caché de `site` y `web` (estáticos), WAF, protección DDoS, Turnstile. Los estáticos pueden servirse desde Cloudflare Pages sin contenedor |
@@ -457,7 +457,7 @@ Objetivo: **OWASP ASVS nivel 2** para la API y **OWASP MASVS-L1 + R** (resilienc
 │   │   ├── db/             # consultas .sql y código generado por sqlc
 │   │   ├── jobs/           # workers de River y jobs periódicos
 │   │   ├── legal/          # LegalRulesService y cálculo de mayorías
-│   │   ├── mail/, sms/, push/, storage/ (R2), clamav/, tsa/, pdf/
+│   │   ├── mail/, push/, storage/ (R2), clamav/, tsa/, pdf/
 │   │   └── config/         # carga y validación de variables de entorno
 │   ├── migrations/         # SQL con goose (incluye la creación del rol app_rw)
 │   ├── openapi/            # openapi.yaml generado por huma en build (fuente del cliente TS)
@@ -545,9 +545,9 @@ invitations
 password_reset_tokens
   id, user_id FK, token_hash (unique), expires_at (1 h), used_at, requested_ip
 
-otp_challenges                  -- verificación de teléfono, firma avanzada
+otp_challenges                  -- verificación por OTP, firma avanzada
   id, user_id FK, purpose (phone_verify | vote | sign_minutes | sensitive_action),
-  code_hash, channel (sms | totp), expires_at, attempts int, verified_at
+  code_hash, channel (email | totp), expires_at, attempts int, verified_at
 
 user_mfa
   user_id PK FK, totp_secret_encrypted, enabled_at, recovery_codes_hashed text[]
@@ -1104,7 +1104,7 @@ Tres fases con los mismos binarios y el mismo esquema. El paso de fase lo decide
 
 - **Fase A** (la que describe esta sección): servidor propio con Docker Compose desplegado como **stack de Portainer** (Docker standalone). Las fases B y C están en 7.10; Portainer gestiona también Swarm, así que el paso a fase B no cambia de herramienta. Portainer no construye imágenes: CI las publica en GHCR y el stack solo hace `pull`. Las variables se definen en Portainer (Environment variables); se sustituyen en `${VAR}` y llegan a los contenedores mediante `env_file: stack.env`, que Portainer genera automáticamente. Actualizar = cambiar `TAG` y "Re-pull image and redeploy". Servicios: `web` (nginx con el export de Expo), `site` (nginx con la web pública estática, generada con Astro), `api` (binario Go, `vecingest serve`), `worker` (misma imagen, `vecingest worker`), `db` (Postgres 17) y, opcional por perfil, `clamav`. Sin Redis. Ficheros en Cloudflare R2. Imagen de la API `distroless/static` con binario estático (< 30 MB), usuario no root, `HEALTHCHECK` en `api` y `worker`. Consumo objetivo del stack en reposo: api 40 MB + worker 40 MB + Postgres 300 MB + nginx ×2 10 MB ≈ 400 MB; con ClamAV, +1 GB.
 - Proxy inverso existente: nginx corre como **contenedor** en Portainer y hace de proxy inverso de todos los stacks del servidor; se configura **a mano**, apuntando a puertos publicados en el host, no a una red docker compartida. Nuestro stack publica esos puertos para que nginx los use como destino: `DOMAIN → host:SITE_PORT`, `app.DOMAIN → host:WEB_PORT`, `api.DOMAIN → host:API_PORT` (con `client_max_body_size 1m` en el host de la API: la API nunca recibe binarios). **`site` y `web` escuchan en 8080 dentro del contenedor, no en 80**: sus imágenes se construyen sobre `nginxinc/nginx-unprivileged` y corren como usuario no root, porque la imagen oficial de nginx arranca como root y no cumple el punto de contenedores no root de 10.1; por eso el puerto publicado en el host mapea a 8080, no a 80, dentro del contenedor.
-- Variables de entorno (plantilla en `env.example`, valores en Portainer, nunca en el repositorio): `DOMAIN`, `APP_URL`, `APP_ENV` (`development` | `staging` | `production`), `CORS_ORIGINS`, `POSTGRES_*` (superusuario, solo para el arranque de roles), `APP_DB_USER`, `APP_DB_PASSWORD`, `BOOTSTRAP_DATABASE_URL`, `MIGRATIONS_DATABASE_URL`, `JWT_SECRET`, `JWT_SECRET_PREVIOUS`, `JWT_REFRESH_SECRET`, `ENCRYPTION_KEY` (32 bytes en base64; en Portainer va como variable de entorno porque los secretos por fichero no están disponibles en Docker standalone; ver mitigación en 6.1), `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_BACKUP_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `SMTP_URL`, `MAIL_FROM`, `SMS_PROVIDER`, `SMS_API_KEY`, `SMS_FROM`, `TURNSTILE_SECRET`, `TSA_URL`, `EXPO_ACCESS_TOKEN`, `SENTRY_DSN`, `PROXY_IP` (dirección que la API observa como origen de la petición de nginx, para `trust proxy`), `SITE_PORT`, `WEB_PORT` y `API_PORT` (puertos publicados en el host para que nginx los use como destino). El superadmin inicial no figura aquí: se crea con `vecingest bootstrap-superadmin` y sus credenciales no se guardan como variables del stack (ver 5.1).
+- Variables de entorno (plantilla en `env.example`, valores en Portainer, nunca en el repositorio): `DOMAIN`, `APP_URL`, `APP_ENV` (`development` | `staging` | `production`), `CORS_ORIGINS`, `POSTGRES_*` (superusuario, solo para el arranque de roles), `APP_DB_USER`, `APP_DB_PASSWORD`, `BOOTSTRAP_DATABASE_URL`, `MIGRATIONS_DATABASE_URL`, `JWT_SECRET`, `JWT_SECRET_PREVIOUS`, `JWT_REFRESH_SECRET`, `ENCRYPTION_KEY` (32 bytes en base64; en Portainer va como variable de entorno porque los secretos por fichero no están disponibles en Docker standalone; ver mitigación en 6.1), `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_BACKUP_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `SMTP_URL`, `MAIL_FROM`, `TURNSTILE_SECRET`, `TSA_URL`, `EXPO_ACCESS_TOKEN`, `SENTRY_DSN`, `PROXY_IP` (dirección que la API observa como origen de la petición de nginx, para `trust proxy`), `SITE_PORT`, `WEB_PORT` y `API_PORT` (puertos publicados en el host para que nginx los use como destino). El superadmin inicial no figura aquí: se crea con `vecingest bootstrap-superadmin` y sus credenciales no se guardan como variables del stack (ver 5.1).
 - Entornos: `development` (local con `docker compose -f docker-compose.dev.yml`, solo db; API con `air` para recarga y app en el host), `staging` (opcional, mismo compose con otro `.env` y subdominios `staging-*`), `production`.
 - Datos de prueba: `vecingest seed` crea un despacho, dos comunidades con viviendas, una empresa verificada y usuarios de cada rol con contraseña conocida (solo si `APP_ENV != production`).
 - Migraciones: `vecingest migrate` se ejecuta en el arranque del contenedor `api` (con bloqueo de aviso en Postgres para que `worker` no arranque a la vez). La creación del rol `app_rw` sin `UPDATE`/`DELETE` en tablas append-only es una migración `goose`, no un script de `docker-entrypoint-initdb.d`, para no depender de bind mounts que Portainer no tiene. Las migraciones corren con el rol propietario; `api` y `worker` se conectan como `app_rw`.
@@ -1392,12 +1392,12 @@ R2_BACKUP_BUCKET=vecingest-backups           # lo usa el cron de backups del hos
 R2_BACKUP_ACCESS_KEY_ID=[token DISTINTO, con permiso de SOLO escritura sobre el bucket de backups]
 R2_BACKUP_SECRET_ACCESS_KEY=[se muestra UNA sola vez al crear el token]
 
-# Email y SMS
+# Email
+# No hay proveedor de SMS: el OTP de voto y firma va por email o por TOTP
+# (decisión de fase 1, ver 11). El correo pasa a ser un canal crítico, no solo
+# de avisos: si el SMTP cae, nadie puede votar a distancia ni firmar un acta.
 SMTP_URL=[smtps://usuario:contraseña@smtp.tuproveedor.com:465 — credenciales del proveedor de correo]
 MAIL_FROM="Vecingest <no-reply@mail.vecingest.app>"
-SMS_PROVIDER=twilio
-SMS_API_KEY=[panel del proveedor de SMS; en Twilio, Console > Account > API keys & tokens]
-SMS_FROM=[el número o alfanumérico remitente dado de alta en el proveedor]
 
 # Servicios externos
 TURNSTILE_SECRET=[Cloudflare > Turnstile > tu widget > "Secret Key"]
@@ -1452,7 +1452,7 @@ Cada hito tiene dos criterios: el funcional y la **puerta de seguridad**. Los do
 | M4 | Publicación en tiendas, backups, CI de despliegue | Apps en TestFlight y Play internal testing | Pentest externo sin hallazgos altos abiertos, DAST, OTA firmado, runbook de incidentes, cumplimiento de tiendas |
 | M5 | Recibos y saldo, morosidad | Propietario ve su saldo; el admin exporta un certificado de deuda | Cifrado de IBAN con clave versionada; reautenticación para cambiarlo; certificados de deuda con acceso registrado |
 | M6 | Reservas de zonas comunes | Dos vecinos no pueden reservar la misma franja | Constraint de exclusión probado bajo concurrencia; sin fuga de reservas de otras viviendas |
-| M7 | Juntas y voto online | Convocatoria válida según art. 16, votación con OTP, acta firmada y notificada | Integridad probatoria: cadena de hash, anclaje RFC 3161, SMS/TOTP verificados, revisión legal de evidencias, pentest específico del módulo |
+| M7 | Juntas y voto online | Convocatoria válida según art. 16, votación con OTP, acta firmada y notificada | Integridad probatoria: cadena de hash, anclaje RFC 3161, OTP por email/TOTP verificados con el canal registrado, revisión legal de evidencias, pentest específico del módulo |
 | M8 | Empresa: tareas, registro de facturas, fichaje | Informe mensual de jornada exportado y factura vinculada a incidencia | Fichajes y facturas append-only, aislamiento entre empresas, documentación PRL con acceso controlado |
 
 ### 10.1 Puertas de seguridad por hito (checklist verificable)
@@ -1520,7 +1520,8 @@ Formato: cada línea es una comprobación con su evidencia. El hito se cierra cu
 **M7 — Juntas y voto**
 - [ ] Cadena de hash verificable con un comando de línea (`vecingest verify-chain <meeting_id>`) que recorre `votes` y comprueba cada eslabón. *Evidencia: test y comando.*
 - [ ] Anclaje RFC 3161 del `head_hash` al cerrar cada punto y envío al presidente/secretario. *Evidencia: sello archivado y verificado con `openssl ts -verify`.*
-- [ ] OTP solo SMS/TOTP; límites anti SMS pumping activos; test que intenta 4 envíos en una hora y falla. *Evidencia: test.*
+- [ ] OTP solo por email o TOTP; límites de emisión activos (3/hora, 10/día por cuenta); test que intenta 4 envíos en una hora y falla. *Evidencia: test.*
+- [ ] `signature_evidence` registra el canal del OTP (`email` o `totp`) en cada voto y cada firma de acta, para que la fuerza probatoria de cada uno sea distinguible a posteriori. *Evidencia: test.*
 - [ ] Deudores no pueden votar aunque manipulen la petición; resultados excluyen su cuota. *Evidencia: test.*
 - [ ] Voto emitido desde un dispositivo no puede modificarse por otro usuario de la misma vivienda sin nueva OTP. *Evidencia: test.*
 - [ ] Pentest específico del módulo de voto (manipulación de resultados, doble voto, delegación falsa). *Evidencia: informe.*
@@ -1539,6 +1540,8 @@ Formato: cada línea es una comprobación con su evidencia. El hito se cierra cu
 - Cada funcionalidad nueva añade su fila a la tabla de amenazas de 6.1 antes de escribir código.
 
 ## 11. Riesgos y decisiones abiertas
+
+- **OTP de voto y firma por email en vez de SMS** (decidido en fase 1, revisable). Se elimina el proveedor de SMS: desaparecen su coste por mensaje, la rotación de sus credenciales y la amenaza de *SMS pumping*. El precio es real y está aceptado a conciencia: **el email es el mismo canal que la recuperación de contraseña**, así que quien controle el buzón de un propietario puede suplantar su voto por completo, y eso debilita la fuerza probatoria de un voto impugnado bajo el art. 17. Mitigaciones: OTP de un solo uso hasheado, límite de emisión, aviso al propietario en cada envío, y `signature_evidence` guarda el canal para poder distinguir después un voto firmado con TOTP de uno firmado por email. **Se recomienda activar TOTP a quien vaya a votar a distancia.** Disparador para revisar la decisión: la primera impugnación que cuestione la identidad del votante, o el primer caso real de buzón comprometido.
 
 - **Panel de administrador en Expo web**: si las tablas y filtros resultan pesados, migrar el portal admin a Next.js compartiendo `packages/shared`. Decidir en M3.
 - **Multitenancy**: se opta por base de datos única con filtrado por `community_id`/`office_id`. Revisar si se supera el millar de comunidades.
