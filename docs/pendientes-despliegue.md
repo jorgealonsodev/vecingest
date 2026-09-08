@@ -69,14 +69,20 @@ de Docker consulta `ready` dentro del contenedor, sin pasar por nginx.
 
 El PRD (§9, "Endpoints de salud separados") dice que hacia fuera solo se expone
 `live`; `ready` es el que consulta base de datos y almacenamiento y lo usa
-Docker internamente. Hoy responde desde internet. Devuelve únicamente
-`{"ok":true}`, así que no filtra nada todavía, pero es un mapa gratuito de las
-dependencias en cuanto alguien le añada detalle, y una palanca para forzar
-consultas a la base de datos desde fuera.
+Docker internamente. Estuvo respondiendo desde internet hasta este cambio.
+Devolvía únicamente `{"ok":true}`, así que no llegó a filtrar nada, pero era un
+mapa gratuito de las dependencias en cuanto alguien le añadiera detalle, y una
+palanca para forzar consultas a la base de datos desde fuera.
 
 ```nginx
-location = /v1/health/ready { return 404; }
+location = /v1/health/ready {
+    return 404;
+}
 ```
+
+El `=` no es opcional: hace coincidencia exacta y en nginx eso tiene prioridad
+sobre el `location /` que genera Nginx Proxy Manager para el `proxy_pass`. Sin
+el `=` sería un prefijo y competiría con la regla general en vez de imponerse.
 
 ### 5. Bucket lock de 30 días sobre `vecingest-backups`
 
