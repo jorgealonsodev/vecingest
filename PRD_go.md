@@ -1252,7 +1252,7 @@ services:
     mem_limit: 256m
     environment:
       GOMEMLIMIT: 200MiB
-    command: ["/vecingest", "serve", "--migrate"]
+    command: ["serve", "--migrate"] # the image ENTRYPOINT is already ["/vecingest"]; repeating it here would arrive as the subcommand
     healthcheck:
       test: ["CMD", "/vecingest", "health", "--ready"]   # el binario hace la petición; distroless no tiene wget
       interval: 30s
@@ -1273,7 +1273,7 @@ services:
     mem_limit: 256m
     environment:
       GOMEMLIMIT: 200MiB
-    command: ["/vecingest", "worker"]
+    command: ["worker"] # ENTRYPOINT supplies /vecingest
     stop_grace_period: 30s
     healthcheck:
       test: ["CMD", "/vecingest", "health", "--worker"]
