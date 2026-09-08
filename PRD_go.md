@@ -374,7 +374,7 @@ Objetivo: **OWASP ASVS nivel 2** para la API y **OWASP MASVS-L1 + R** (resilienc
 | Spoofing de IP para evadir límites | `trust proxy` restringido a la IP de NPM |
 | **Compromiso del buzón de correo del propietario** (riesgo asumido, ver 11) | El OTP de voto y firma viaja por el mismo canal que la recuperación de contraseña, así que quien controla el buzón puede suplantar al votante por completo. Mitigación parcial: límite de 3 envíos/hora y 10/día por cuenta, OTP de un solo uso hasheado en BD, alerta al propietario por cada emisión, y `signature_evidence` registra el canal usado para que una impugnación pueda distinguir un voto firmado con TOTP de uno firmado por email. Se ofrece TOTP como alternativa más fuerte y se recomienda activarlo a quien vaya a votar |
 | Phishing con emails de la plataforma | SPF, DKIM (2048) y DMARC `p=reject` en el dominio de envío (`mail.DOMAIN`), BIMI opcional; los emails nunca piden contraseña ni incluyen enlaces a dominios de terceros; nombre del despacho como remitente visible pero dominio de la plataforma |
-| Compromiso del servidor (ransomware) | Backups cifrados con clave distinta (`age`) hacia un bucket R2 **separado con credenciales de solo escritura** y *object lock*/versionado; la API no tiene credenciales para borrar backups; restauración probada mensualmente; el servidor solo expone 80/443 (NPM) y SSH con clave |
+| Compromiso del servidor (ransomware) | Backups cifrados con clave distinta (`age`) hacia un bucket R2 **separado, con un token acotado solo a ese bucket** y un **bucket lock** con retencion de 30 dias que impide borrar o sobrescribir un objeto aunque el token tenga escritura (R2 no ofrece permiso de solo escritura); la API no tiene credenciales para borrar backups; restauración probada mensualmente; el servidor solo expone 80/443 (NPM) y SSH con clave |
 | Compromiso de un contenedor vecino en la red de NPM (red compartida con otros proyectos) | `db` solo en red interna; `api` valida `Origin`/`Host`; contenedores `read_only`, `no-new-privileges`, `cap_drop: ALL`, usuario no root, límites de memoria |
 | Cadena de suministro (dependencias, imágenes, OTA) | Renovate, `govulncheck` y `pnpm audit` (app) y Trivy en CI (falla con CVE alta), imagen final `FROM scratch` o `distroless/static` con el binario estático, `go.sum` verificado con `GOFLAGS=-mod=mod` desactivado y `GONOSUMDB` vacío, code signing de EAS Update, 2FA obligatorio en GitHub, Expo, Cloudflare y el registro de dominios |
 | Abuso de formularios públicos (spam de altas de empresa, contacto) | Turnstile, límite por IP, verificación de email antes de crear el registro `pending` |
@@ -383,7 +383,7 @@ Objetivo: **OWASP ASVS nivel 2** para la API y **OWASP MASVS-L1 + R** (resilienc
 
 **Gestión de claves y secretos**
 - `ENCRYPTION_KEY` con versión (`v1:` como prefijo del cifrado) para poder rotar re-cifrando en segundo plano. Al desplegar con Portainer sobre Docker standalone no hay `secrets` de Docker, así que llega como variable de entorno; mitigación: la app la lee al arrancar y la borra de `process.env`, el acceso a Portainer exige 2FA y rol de administrador solo para dos personas, y el `docker.sock` no se expone a ningún otro contenedor. Si el servidor pasa a Swarm o se añade un gestor de secretos (Infisical/Vault), se migra a `secrets:`.
-- Credenciales de R2 por bucket y por uso: una para la API (lectura/escritura en el bucket principal), otra de solo escritura para backups, ninguna con permiso de borrar el bucket de backups.
+- Credenciales de R2 por bucket y por uso: una para la API acotada a `R2_BUCKET`, otra acotada a `R2_BACKUP_BUCKET`, ninguna con permiso de administrador (que permitiria borrar buckets enteros). R2 **no ofrece un permiso de solo escritura** -- sus presets son Admin Read & Write, Admin Read only, Object Read & Write y Object Read only -- asi que la garantia de que un backup no se puede borrar no la da el token, la da un **bucket lock** con retencion de 30 dias sobre `R2_BACKUP_BUCKET`.
 - Rotación anual como mínimo de JWT (con `kid`), R2 y SMTP; rotación inmediata ante cualquier sospecha. Procedimiento en el runbook.
 - Ningún secreto en el repositorio ni en la imagen Docker (comprobado con `gitleaks` en CI).
 
@@ -1108,7 +1108,7 @@ Tres fases con los mismos binarios y el mismo esquema. El paso de fase lo decide
 - Entornos: `development` (local con `docker compose -f docker-compose.dev.yml`, solo db; API con `air` para recarga y app en el host), `staging` (opcional, mismo compose con otro `.env` y subdominios `staging-*`), `production`.
 - Datos de prueba: `vecingest seed` crea un despacho, dos comunidades con viviendas, una empresa verificada y usuarios de cada rol con contraseña conocida (solo si `APP_ENV != production`).
 - Migraciones: `vecingest migrate` se ejecuta en el arranque del contenedor `api` (con bloqueo de aviso en Postgres para que `worker` no arranque a la vez). La creación del rol `app_rw` sin `UPDATE`/`DELETE` en tablas append-only es una migración `goose`, no un script de `docker-entrypoint-initdb.d`, para no depender de bind mounts que Portainer no tiene. Las migraciones corren con el rol propietario; `api` y `worker` se conectan como `app_rw`.
-- Backups: cron diario con `pg_dump | age -r <clave pública>` a `R2_BACKUP_BUCKET` con credenciales de solo escritura (`R2_BACKUP_ACCESS_KEY_ID`/`SECRET`), versionado activado y retención 30 días. La clave privada de `age` no está en el servidor. Restauración probada el primer lunes de cada mes en `staging`.
+- Backups: cron diario con `pg_dump | age -r <clave pública>` a `R2_BACKUP_BUCKET` con un token acotado a ese bucket (`R2_BACKUP_ACCESS_KEY_ID`/`SECRET`, Object Read & Write: R2 no tiene solo-escritura), **bucket lock** con retención de 30 días y versionado activado. La clave privada de `age` no está en el servidor. Restauración probada el primer lunes de cada mes en `staging`.
 - Apps nativas: `eas build --profile production`; actualizaciones JS sin pasar por tienda con `eas update`.
 - CI (GitHub Actions): `golangci-lint`, `go test -race`, `make gen` con comprobación de que `openapi.yaml`, el código `sqlc` y el cliente TS están al día (falla si `git diff` no está limpio), lint y typecheck de la app, en cada PR; en merge a `main` construye `vecingest-api`, `vecingest-web` y `vecingest-site` y las escanea con Trivy, **como red de seguridad pre-merge, no como puerta de lo que se despliega**: Portainer construye su propia copia de las mismas imágenes en el servidor y esa es la que corre (decisión de 8.1.1) — CI ya no publica en GHCR ni genera SBOM/procedencia para nada que llegue a producción; después llama al webhook de redespliegue del stack de Portainer (Stack → Webhook), que ahora dispara un rebuild en el servidor, no un pull. La web se construye con `EXPO_PUBLIC_API_URL` como `build-arg`: en CI desde un secreto de GitHub, en el servidor desde la variable de entorno del stack (ver env.example), porque Expo lo incrusta en el estático. Las apps nativas se publican manualmente con EAS desde `main` etiquetado.
 
@@ -1409,8 +1409,18 @@ R2_ACCOUNT_ID=[Cloudflare > R2 > Overview, "Account ID" a la derecha]
 R2_BUCKET=vecingest
 R2_ACCESS_KEY_ID=[token R2 con permiso de lectura y escritura sobre R2_BUCKET]
 R2_SECRET_ACCESS_KEY=[se muestra UNA sola vez al crear el token: cópialo entonces]
-R2_BACKUP_BUCKET=vecingest-backups           # lo usa el cron de backups del host, no la API
-R2_BACKUP_ACCESS_KEY_ID=[token DISTINTO, con permiso de SOLO escritura sobre el bucket de backups]
+# R2_BACKUP_* NO se ponen en Portainer: las usa el cron de copias del host,
+# nunca la API. Si se pegan en las variables del stack, el contenedor de la API
+# acaba teniendo credenciales sobre el bucket de copias, que es exactamente lo
+# que esta separacion evita.
+#
+# R2 no ofrece permiso de SOLO escritura: sus unicos presets son Admin Read &
+# Write, Admin Read only, Object Read & Write y Object Read only. El token de
+# copias es por tanto Object Read & Write ACOTADO a R2_BACKUP_BUCKET, y la
+# inmutabilidad frente a borrado la da un bucket lock con retencion de 30 dias
+# sobre ese bucket, no el permiso del token. Ver 11.
+R2_BACKUP_BUCKET=vecingest-backups
+R2_BACKUP_ACCESS_KEY_ID=[token DISTINTO, Object Read & Write acotado solo a R2_BACKUP_BUCKET]
 R2_BACKUP_SECRET_ACCESS_KEY=[se muestra UNA sola vez al crear el token]
 
 # Email
@@ -1516,7 +1526,7 @@ Formato: cada línea es una comprobación con su evidencia. El hito se cierra cu
 **M3 — Web y datos**
 - [ ] CSP sin `unsafe-inline` en Expo web; informe de ZAP baseline sin alertas medias. *Evidencia: informe.*
 - [ ] Sentry sin PII ni cuerpos de petición. *Evidencia: captura de configuración y evento de prueba.*
-- [ ] Backup cifrado con `age` a bucket separado con credenciales de solo escritura y versionado; **restauración completa probada en staging**. *Evidencia: entrada en el runbook con fecha y duración.*
+- [ ] Backup cifrado con `age` a bucket separado, con un token acotado a ese bucket y un **bucket lock** de 30 días (R2 no ofrece solo-escritura: la inmutabilidad la da el lock, no el permiso); **restauración completa probada en staging**. *Evidencia: entrada en el runbook con fecha y duración, más captura de la regla de bucket lock activa.*
 - [ ] Markdown sanitizado: test con `<script>`, `javascript:` y `onerror`. *Evidencia: test.*
 - [ ] Exportación RGPD con reautenticación y enlace de un solo uso. *Evidencia: test.*
 
