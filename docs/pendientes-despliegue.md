@@ -12,21 +12,40 @@ https://api.vecingest.xdev.es/v1/health/live  HTTP 200  {"ok":true}
 
 Lo que sigue no bloquea el funcionamiento, pero sí queda por hacer.
 
-## Bloqueantes antes de que entre ningún vecino real
+## Antes de que entre ningún vecino real
 
-### 1. Cerrar los tres puertos publicados en el cortafuegos
+### 1. Los puertos publicados dependen solo del cortafuegos de Oracle
 
-`site` (24221), `web` (38043) y `api` (34246) se publican en `0.0.0.0`. Hoy se
-puede llegar a los tres por la IP del servidor, saltándose nginx, Cloudflare,
-el WAF y el certificado. Bajo el montaje anterior de red compartida entre
-contenedores esos puertos nunca fueron alcanzables desde internet; ahora sí lo
-son, y solo el cortafuegos del host lo impide.
+`site` (24221), `web` (38043) y `api` (34246) se publican en `0.0.0.0`, pero
+**no son alcanzables desde internet**. Comprobado desde fuera: los tres dan
+tiempo de espera agotado, mientras 22 y 443 responden.
 
-```bash
-sudo ufw deny 24221/tcp
-sudo ufw deny 38043/tcp
-sudo ufw deny 34246/tcp
+Quien los bloquea es la *security list* de la VCN, en la consola de Oracle
+Cloud. No es el cortafuegos de la máquina, y la diferencia importa:
+
 ```
+-A INPUT -p tcp --dport 22 -j ACCEPT
+-A INPUT -j REJECT --reject-with icmp-host-prohibited
+```
+
+Ese `REJECT` no protege un puerto publicado por Docker. El tráfico hacia un
+puerto publicado se redirige en `nat/PREROUTING` y continúa por `FORWARD`, sin
+pasar nunca por `INPUT` -- por eso el 443 del proxy responde pese a esa regla.
+Añadir reglas de ufw (que además no está instalado) tendría el mismo efecto
+nulo: es el fallo clásico de ufw con Docker, y deja reglas escritas que no
+bloquean nada.
+
+Consecuencia práctica: la única barrera está fuera del servidor y fuera de este
+repositorio. Abrir esos puertos en la consola de Oracle los expone al mundo sin
+que nada en la máquina lo impida, y desde ahí se llega a la API saltándose
+nginx, el certificado, Cloudflare y el `return 404` del punto 4.
+
+Si en algún momento se quiere defensa en profundidad en la propia máquina, no
+sirve `INPUT`: hay que escribir las reglas en la cadena `DOCKER-USER` (hoy
+vacía), o publicar los puertos en una dirección concreta en vez de en
+`0.0.0.0`. Ojo con lo segundo: `127.0.0.1` **rompería el proxy**, porque NPM
+corre en redes bridge (172.18.0.2 y 172.19.0.3) y para él `127.0.0.1` es su
+propio contenedor, no el host.
 
 ### 2. `SMTP_URL` real
 
