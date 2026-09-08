@@ -1,0 +1,119 @@
+# openspec/config.yaml — vecingest
+schema: spec-driven
+
+# NOTE: this supersedes a stale sdd-init run against a deleted Node/NestJS PRD.
+# Authority is PRD_go.md (Go backend). The Node context is void.
+
+context: |
+  Monorepo, greenfield (0 commits, no go.mod/package.json yet).
+  Backend: Go 1.26+, chi, huma (OpenAPI 3.1), pgx, sqlc+goose, no ORM, distroless/static.
+  Jobs: River (Postgres queue, transactional); NATS JetStream fan-out from phase B.
+  Cache/limits: in-process+Postgres in phase A; Valkey from phase B.
+  DB: PostgreSQL 17 (btree_gist, pg_partman, pg_stat_statements). PDF: maroto v2.
+  Frontend: Expo (RN) + Expo Router + TS, TanStack Query, Zustand, RN Paper,
+  RHForm+Zod (Zod schemas GENERATED from OpenAPI, never hand-written).
+  Source of truth: PRD_go.md. Domain: Spanish "propiedad horizontal" (LPH).
+
+strict_tdd: true
+strict_tdd_note: >
+  Enabled per global user policy and PRD_go.md section 9 (Makefile as single
+  workspace entrypoint: `make test`, `make gen`, `make lint`). NONE of the
+  commands below are runnable yet: there is no go.mod and no package.json in
+  this repository. sdd-tasks/sdd-apply MUST scaffold the module/workspace
+  files (go.mod, package.json, Makefile, CI) before any RED test can run.
+
+testing:
+  workspace_entrypoint:
+    declared_not_yet_implemented: true
+    commands:
+      dev: "make dev"
+      generate: "make gen"   # sqlc + openapi.yaml (huma) + TS client + Zod schemas; CI fails if `git diff` is dirty
+      test: "make test"
+      lint: "make lint"
+  projects:
+    - path: api/
+      stack: "Go 1.26+ (chi, huma, pgx, sqlc, goose, River v0.47.0 — River's go.mod declares go 1.26.0, a hard minimum for consumers since Go 1.21; current stable is 1.27.1)"
+      test_command: "cd api && go test -race ./..."
+      integration_test_command: "cd api && make test-e2e   # Postgres via Testcontainers"
+      unit_layer: true
+      integration_layer: true
+      e2e_layer: false
+      coverage:
+        available: true
+        command: "go test -race -cover ./internal/domain/... ./internal/legal/..."
+        threshold_pct: 80
+        scope: "internal/domain/... and internal/legal/... only (not global)"
+      quality:
+        linter: "golangci-lint (gosec, errcheck, sqlclosecheck)"
+        formatter: "gofumpt"
+        security_ci: "gitleaks, govulncheck, gosec, Trivy, Semgrep"
+      notes: >
+        Permission-matrix tests generated from openapi.yaml (route x role x
+        foreign-resource). e2e uses a real Postgres via Testcontainers, not mocks.
+    - path: app/
+      stack: "Expo (React Native) + Expo Router + TypeScript, pnpm workspace + Turborepo"
+      test_command: "pnpm --filter app test   # React Native Testing Library"
+      lint_command: "pnpm --filter app lint"
+      typecheck_command: "pnpm --filter app exec tsc --noEmit"
+      unit_layer: true
+      integration_layer: false
+      e2e_layer: true
+      e2e_tool: "Maestro — 5 critical flows (login, create incident, accept invitation, read announcement, vote). Runs before store releases, NOT on every PR."
+      coverage:
+        available: false
+        note: "No coverage threshold declared in PRD_go.md for app/."
+      quality:
+        linter: "ESLint"
+        formatter: "Prettier"
+        typechecker: "tsc --noEmit (strict, no `any`)"
+    - path: packages/shared/
+      stack: "TS client + Zod schemas, GENERATED from api/openapi/openapi.yaml (openapi-typescript, openapi-fetch, openapi-zod-client)"
+      test_command: null
+      note: "Never hand-edited. CI fails if regenerating via `make gen` produces a diff."
+    - path: site/
+      stack: "Astro static public site + nginx"
+      test_command: null
+      note: "No test command declared in PRD_go.md."
+  shared_tooling:
+    - "lefthook — pre-commit hooks for both Go and TS sides"
+    - "Renovate — weekly grouped dependency updates"
+
+rules:
+  proposal:
+    - Include a rollback plan for any change touching auth, money, votes, files, or personal data (PRD DoD point 10).
+    - Reference the applicable milestone security gate (docs/security/gates/M<n>.md, PRD section 10.1) when the change affects that milestone's scope.
+  specs:
+    - Use Given/When/Then for scenarios; use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY).
+    - Reuse the glossary in PRD_go.md section 12 for entity names; do not invent new domain terms.
+    - Legal rules (deadlines, percentages, majorities) are DATA in the `legal_rules` table, never hardcoded constants — specs must not encode a legal threshold as a fixed value.
+  design:
+    - Include sequence diagrams for multi-actor or multi-step flows (incident lifecycle, meeting/voting, invitation acceptance).
+    - Document which of the `Cache` / `Limiter` / `Queue` / `Search` interfaces are touched, and confirm the phase-A in-memory/Postgres implementation vs. the phase-B distributed one (Valkey/NATS) is not hardcoded into callers.
+    - State the tenant-scope column (`community_id` / `office_id` / `company_id`) for every new table or query.
+  tasks:
+    - Group tasks by milestone (M0..M8) using PRD_go.md section 10; use hierarchical numbering.
+    - Keep tasks completable in one session; scaffolding tasks (go.mod, package.json, Makefile, CI) come first when the module does not exist yet.
+    - Strict TDD is enabled: every task implementing behavior states its RED test first.
+  apply:
+    guidelines:
+      - "Go: wrap errors with context (`fmt.Errorf(\"...: %w\", err)`), no `panic` outside `main`, `context.Context` on every I/O-performing function, no unmanaged goroutines."
+      - "No ORM. Every sqlc query against a scoped table MUST filter by its tenant column (`community_id`/`office_id`/`company_id`) — this is enforced by `make lint-scope`."
+      - "Authorization lives in the app via `RequireMembership(scope, roles...)` chi middleware, never Postgres RLS, never a header/body-supplied tenant."
+      - "Money: `numeric` in Postgres, `shopspring/decimal` in Go, decimal strings in the API (\"123.45\"). Never `float64`."
+      - "Dates: store UTC (`timestamptz`). Compute Spanish legal deadlines (LPH) in `Europe/Madrid` via `time.LoadLocation` (tzdata embedded with `time/tzdata`). Natural-day deadlines count from 00:00 of the day after the triggering event."
+      - "Legal rules (LPH deadlines/majorities/percentages) are read from the `legal_rules` table through `internal/legal` (`Rules.Get(ctx, key, at time.Time)`); never hardcode a legal threshold as a Go constant."
+      - "Append-only tables (`audit_log`, `votes`, `time_entries`) — the `app_rw` Postgres role has no `UPDATE`/`DELETE` on them; do not add code paths that assume otherwise."
+      - "Every sensitive action (money, votes, personal data, permissions) writes an `audit_log` entry with `before`/`after`."
+      - "If a Go input/output struct changes, run `make gen` and commit the regenerated `openapi.yaml`, sqlc code, and TS client — CI fails on a dirty diff."
+      - "Migrations use `goose` with expand/contract; never `DROP`/`RENAME` in the same release as the code that stops using the old shape."
+    tdd: true
+    test_command: "cd api && go test -race ./...   |   pnpm --filter app test"
+  verify:
+    test_command: "cd api && go test -race ./...   |   pnpm --filter app test"
+    build_command: "cd api && go build ./...   |   pnpm --filter app exec tsc --noEmit"
+    coverage_threshold: 80
+    coverage_scope: "api/internal/domain/... and api/internal/legal/... only"
+    security_gate_note: "PRD DoD point 10 requires golangci-lint/gosec/govulncheck/gitleaks/Trivy/Semgrep green and a scope-membership 403 test on every new route."
+  archive:
+    - Warn before merging destructive deltas (removed requirements, dropped columns).
+    - Never treat a migration as archivable if it drops or renames a column in the same change that stops using it (expand/contract only).

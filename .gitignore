@@ -1,0 +1,25 @@
+# Go
+/api/vecingest
+/api/*.test
+/api/coverage.out
+
+# Node / pnpm
+node_modules/
+.turbo/
+dist/
+.expo/
+
+# Env
+.env
+.env.local
+deploy/.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Local agent tooling — the skill registry holds absolute paths from one machine
+.atl/
