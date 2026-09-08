@@ -1190,6 +1190,14 @@ x-app-image: &app-image
     - path: stack.env
       required: false
   environment:
+    # NOTE: `<<:` is a YAML merge, and it is SHALLOW. A service that declares
+    # its own `environment:` key REPLACES this whole block instead of adding
+    # to it -- which is exactly how api and worker once booted with only
+    # GOMEMLIMIT set and died on `config validation failed: CORS_ORIGINS:
+    # missing; DATABASE_URL: missing; PORT: missing`. Anything every app
+    # container needs belongs HERE, and no app service may carry its own
+    # `environment:` key.
+    GOMEMLIMIT: 200MiB
     APP_ENV: production
     PORT: 3000
     APP_URL: https://app.${DOMAIN}
@@ -1250,8 +1258,6 @@ services:
     restart: unless-stopped
     user: "65532:65532"             # nonroot de distroless
     mem_limit: 256m
-    environment:
-      GOMEMLIMIT: 200MiB
     command: ["serve", "--migrate"] # the image ENTRYPOINT is already ["/vecingest"]; repeating it here would arrive as the subcommand
     healthcheck:
       test: ["CMD", "/vecingest", "health", "--ready"]   # el binario hace la petición; distroless no tiene wget
@@ -1271,8 +1277,6 @@ services:
     restart: unless-stopped
     user: "65532:65532"
     mem_limit: 256m
-    environment:
-      GOMEMLIMIT: 200MiB
     command: ["worker"] # ENTRYPOINT supplies /vecingest
     stop_grace_period: 30s
     healthcheck:
