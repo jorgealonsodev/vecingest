@@ -70,13 +70,6 @@ jobs:
             dockerfile: api/Dockerfile
           - image: web
             dockerfile: app/Dockerfile.web
-            # Same build-arg Portainer passes on the server (docker-compose.yml
-            # web.build.args), sourced from a GitHub secret here instead of
-            # the stack's environment. Expo inlines it at build time either
-            # way, so this only affects what this CI-only image contains --
-            # it is never published or run anywhere.
-            build_args: |
-              EXPO_PUBLIC_API_URL=${{ secrets.EXPO_PUBLIC_API_URL }}
           - image: site
             dockerfile: site/Dockerfile
     steps:
@@ -92,7 +85,18 @@ jobs:
           push: false
           load: true
           tags: local/vecingest-${{ matrix.image }}:scan
-          build-args: ${{ matrix.build_args || '' }}
+          # The `secrets` context is NOT available inside `strategy`, so this
+          # build-arg cannot live in the matrix `include` above: doing so makes
+          # GitHub reject the whole workflow at startup with zero jobs and zero
+          # annotations -- a 0s "failure" with nothing to read, which is how it
+          # went unnoticed from b41eb82 until Phase 14. `steps.*.with` is a
+          # scope where `secrets` does resolve.
+          #
+          # Same build-arg Portainer passes on the server (docker-compose.yml
+          # web.build.args). Expo inlines it at build time either way, so this
+          # only affects what this CI-only image contains -- it is never
+          # published or run anywhere.
+          build-args: ${{ matrix.image == 'web' && format('EXPO_PUBLIC_API_URL={0}', secrets.EXPO_PUBLIC_API_URL) || '' }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
 
