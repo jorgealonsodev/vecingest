@@ -26,13 +26,47 @@ jobs:
     name: gitleaks (secret scanning)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write # only needed to upload the SARIF below
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # gitleaks scans full history, not just the diff
-      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+
+      # NOT gitleaks/gitleaks-action: on push events it always builds a
+      # `--log-opts=<baseRef>^..<headRef>` commit range from the push
+      # payload's first/last commit, with no full-scan mode. On this
+      # repository's first-ever push both refs collapsed to the root
+      # commit, so `<root>^` had no parent and `git log` failed with
+      # "unknown revision or path not in the working tree"; gitleaks then
+      # scanned ~0 bytes, logged "no leaks found" (vacuously -- nothing was
+      # read) and still exited 1. A full-history scan of the CLI itself
+      # sidesteps that whole class of range-resolution bug (also hit on
+      # force-pushes, rebases, and shallow clones), at negligible cost for
+      # a repository this size.
+      - name: install gitleaks (pinned version, checksum-verified)
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_VERSION: 8.24.3
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -sSLO "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c  gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | sha256sum -c -
+          tar -xzf "gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+
+      - name: gitleaks full scan (blocking, entire history)
+        run: |
+          gitleaks detect --source . --redact -v \
+            --report-format sarif --report-path results.sarif \
+            --exit-code 1
+
+      - name: upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          sarif_file: results.sarif
 
   govulncheck:
     name: govulncheck (known Go vulnerabilities)
@@ -149,6 +183,12 @@ jobs:
           scan-type: fs
           scan-ref: .
           severity: HIGH,CRITICAL
+          # trivy-action's entrypoint.sh unconditionally `unset`s TRIVY_SEVERITY
+          # when format=sarif unless this is set to true ("Building SARIF
+          # report with all severities") -- so without it, `severity:` above
+          # is silently ignored and ANY finding of ANY severity (including
+          # UNKNOWN/LOW/MEDIUM) trips `exit-code: 1`, not just HIGH/CRITICAL.
+          limit-severities-for-sarif: "true"
           exit-code: "1" # blocking
           format: sarif
           output: trivy-fs.sarif

@@ -16,6 +16,14 @@ on:
 
 permissions:
   contents: read
+  # A called reusable workflow's job may never request a broader scope than
+  # its caller grants it (GitHub Actions hard-fails the whole run with
+  # startup_failure otherwise -- see the `ci`/`security` job permissions
+  # below). `pull-requests: read` covers ci.yml's `changes` job (dorny/
+  # paths-filter) and `security-events: write` covers security.yml's
+  # `gosec`/`semgrep`/`trivy-fs` SARIF uploads.
+  pull-requests: read
+  security-events: write
 
 concurrency:
   group: deploy-${{ github.ref }}
@@ -24,10 +32,16 @@ concurrency:
 jobs:
   ci:
     name: ci (reused)
+    permissions:
+      contents: read
+      pull-requests: read
     uses: ./.github/workflows/ci.yml
 
   security:
     name: security (reused)
+    permissions:
+      contents: read
+      security-events: write
     uses: ./.github/workflows/security.yml
 
   build-scan-publish:

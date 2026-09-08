@@ -1,0 +1,15 @@
+# Both fingerprints below are confirmed false positives from switching the
+# `gitleaks` job to a full-history scan (`gitleaks detect --source .`,
+# see .github/workflows/security.yml). Format: commit:file:rule-id:line.
+
+# generic-api-key false positive: this is prose in a workflow comment
+# ("...the dev-only seed fixture password, cmd/lintcompose's operator-
+# supplied path..." from the gosec job's explanatory comment), not a
+# credential. High entropy from natural-language wording tripped the
+# rule's heuristic.
+6b229b776497521c08809807cfeebc3a4e0efb70:.github/workflows/security.yml:generic-api-key:64
+
+# generic-api-key false positive: `testPassword = "correct-horse-battery-
+# staple-1"` is a hardcoded fixture constant used only by
+# api_integration_test.go's own HTTP test server, never a real credential.
+6b229b776497521c08809807cfeebc3a4e0efb70:api/internal/http/api/api_integration_test.go:generic-api-key:35
