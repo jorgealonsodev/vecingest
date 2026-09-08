@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "vecingest",
+    "slug": "vecingest",
+    "scheme": "vecingest",
+    "version": "0.0.1",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "plugins": ["expo-router", "expo-secure-store"],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.vecingest.app"
+    },
+    "android": {
+      "package": "com.vecingest.app"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

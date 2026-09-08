@@ -1,0 +1,288 @@
+name: ci
+
+# Phase 11 (openspec/changes/m0-foundation/tasks.md, D-M), remediated
+# post-verification (verify-report.md CRITICAL-1/2, plus the per-job
+# path-filter improvement): `changes` detects which parts of the
+# monorepo moved and gates every other job on it; `go` proves the fast
+# unit suite is genuinely Docker-free (the load-bearing claim design.md
+# D-M rests its skippability argument on) and no longer measures
+# coverage in the same breath; `coverage` owns the domain coverage gate
+# against the FULL suite (Testcontainers included), because `-short`
+# strips out exactly the tests that carry session/audit/mfa coverage and
+# the 80% gate is mathematically unreachable under `-short` (66.0% vs.
+# 85.1%, see verify-report.md CRITICAL-2); `gen` and `scope` are the two
+# generation/tenancy linters that have no other home; `ts` is the
+# pnpm/turbo side; `e2e` is the real-Postgres integration suite;
+# `ci-required` is a single always-run aggregate so a required branch
+# -protection status check can never be permanently pending just because
+# a path filter skipped every real job. Reused by deploy.yml via
+# `workflow_call` before any image is built -- deploy.yml's `needs: [ci,
+# security]` depends on this ENTIRE workflow succeeding (a `workflow_call`
+# caller job only succeeds if every job in the called workflow does),
+# so `coverage` stays a required gate for deploy without deploy.yml
+# needing to name it directly.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # changes decides which of the jobs below actually need to run for
+  # this diff. Deliberately NOT expressed as top-level `on.<event>.paths`
+  # filters: deploy.yml calls this workflow via `workflow_call`, and a
+  # called workflow ignores its own trigger-level `paths:` filters
+  # entirely -- that would only save time on a standalone `ci` run and
+  # still run everything on every deploy, the opposite of the intent.
+  # Per-job `if:` conditions below are the only level that composes
+  # correctly with `workflow_call`.
+  changes:
+    name: changes (path-based job filters)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      gen_inputs: ${{ steps.filter.outputs.gen_inputs }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # push-event diffs need history; PR diffs use the GitHub API instead
+      - id: filter
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          # some-with-excludes: a filter is true only if some changed
+          # file matches a positive rule AND none of that filter's own
+          # negated rules. This is the documented idiom for "any file
+          # OUTSIDE this subtree" -- the default `some` quantifier would
+          # make `- '**'` alone always true and the negations no-ops.
+          predicate-quantifier: some-with-excludes
+          filters: |
+            backend:
+              - '**'
+              - '!app/**'
+              - '!site/**'
+            frontend:
+              - '**'
+              - '!api/**'
+            gen_inputs:
+              - 'api/**'
+              - 'packages/shared/**'
+              - 'pnpm-lock.yaml'
+              - 'package.json'
+              - 'pnpm-workspace.yaml'
+
+  go:
+    name: go (lint, build, fast unit -short, golden)
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: api/go.mod
+          cache-dependency-path: api/go.sum
+
+      - name: install gofumpt
+        run: go install mvdan.cc/gofumpt@v0.9.2
+
+      - name: gofumpt check (fails on any unformatted file)
+        run: |
+          cd api
+          unformatted="$(gofumpt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not gofumpt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: golangci-lint (gosec, errcheck, sqlclosecheck, forbidigo)
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.13.2
+          working-directory: api
+          args: --timeout=5m
+
+      - name: go build
+        run: cd api && go build ./...
+
+      # Load-bearing step (design.md D-M): ubuntu-latest ships Docker
+      # installed and running. Without stopping it, a Testcontainers
+      # acquisition inside an unguarded unit test would simply succeed
+      # against the live daemon and only slow the job down -- it would
+      # NOT fail it, which is what "no Docker daemon available" requires
+      # to be a real contract instead of a documentation claim.
+      - name: stop the Docker daemon (fast job must run with none available)
+        run: |
+          sudo systemctl stop docker.socket docker.service
+          if docker version >/dev/null 2>&1; then
+            echo "::error::Docker is still reachable after stopping it -- the -short skippability contract cannot be verified"
+            exit 1
+          fi
+          echo "Docker daemon confirmed unreachable for the rest of this job."
+
+      - name: fast unit suite (-short, no Docker daemon)
+        run: cd api && go test -race -short -count=1 ./...
+
+      # A golden may only change through `make test-golden-update`
+      # (-update). A dirty diff here means a run accidentally regenerated
+      # or hand-edited a golden file. Kept in this job (not `coverage`)
+      # because it is a generic git-diff safety net independent of which
+      # suite ran; a golden-producing test skipped under -short simply
+      # cannot have dirtied its own golden file in this job either.
+      - name: golden files must stay clean
+        run: git diff --exit-code -- '**/testdata/*.golden'
+
+  # coverage owns the domain coverage gate (CRITICAL-2 fix). It
+  # deliberately does NOT stop Docker and does NOT pass -short: `go`'s
+  # fast lane and this job's coverage measurement are two different
+  # goals that cannot both be satisfied by one `go test` invocation --
+  # -short strips every Testcontainers-backed test out of the run,
+  # taking session/audit/mfa coverage from 80.7/82.8/82.7% down to
+  # 12.3/56.3/56.1% and the domain total from 85.1% to 66.0%, below the
+  # 80% gate `openspec/config.yaml` declares. Measuring the full suite
+  # here, with Docker available, is what makes the 80% gate reachable at
+  # all while `go` keeps proving the Docker-free contract undiluted.
+  coverage:
+    name: coverage (domain >= 80%, full suite incl. Testcontainers)
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: api/go.mod
+          cache-dependency-path: api/go.sum
+
+      - name: domain coverage >= 80% (internal/domain/..., full suite, Testcontainers included)
+        run: |
+          cd api
+          go test -race -count=1 -covermode=atomic -coverprofile=coverage.out ./internal/domain/...
+          pct=$(go tool cover -func=coverage.out | tail -1 | awk '{gsub("%","",$3); print $3}')
+          echo "internal/domain/... total coverage: ${pct}%"
+          awk -v p="$pct" 'BEGIN { if (p + 0 < 80) { print "coverage " p "% is below the 80% gate"; exit 1 } }'
+
+  gen:
+    name: gen (make gen dirty-diff gate)
+    needs: changes
+    if: needs.changes.outputs.gen_inputs == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: api/go.mod
+          cache-dependency-path: api/go.sum
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.x"
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: "10.33.0"
+          run_install: false
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: make gen (sqlc -> openapi.yaml -> TS client -> Zod schemas)
+        run: make gen
+
+      - name: dirty-diff gate (api-contract-generation, CI Dirty-Diff Gate)
+        run: git diff --exit-code
+
+  ts:
+    name: ts (turbo lint/typecheck/test)
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.x"
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: "10.33.0"
+          run_install: false
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run lint typecheck test
+
+  e2e:
+    name: e2e (make test-e2e, Testcontainers Postgres 17)
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: api/go.mod
+          cache-dependency-path: api/go.sum
+
+      # Deliberately does NOT stop Docker: this job is the one place in
+      # ci.yml that needs a live daemon (Testcontainers Postgres 17).
+      - name: full integration suite
+        run: make test-e2e
+
+  scope:
+    name: scope (make lint-scope, tenant-column enforcement)
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: api/go.mod
+          cache-dependency-path: api/go.sum
+
+      - run: make lint-scope
+
+  # ci-required is the single status check a branch-protection rule
+  # should require. Every job above can be legitimately skipped by a
+  # path filter, and GitHub reports a skipped required job as "pending"
+  # forever rather than "success" unless something else always runs and
+  # succeeds -- this job is that something else. `if: always()` makes it
+  # run even when an upstream job failed or was skipped; it then fails
+  # only on an actual failure/cancellation, never on a skip.
+  ci-required:
+    name: ci-required (aggregate gate)
+    needs: [changes, go, coverage, gen, ts, e2e, scope]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: verify no required job failed or was cancelled
+        run: |
+          results="${{ needs.changes.result }} ${{ needs.go.result }} ${{ needs.coverage.result }} ${{ needs.gen.result }} ${{ needs.ts.result }} ${{ needs.e2e.result }} ${{ needs.scope.result }}"
+          echo "job results: $results"
+          bad=0
+          for r in $results; do
+            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
+              bad=1
+            fi
+          done
+          if [ "$bad" = "1" ]; then
+            echo "::error::at least one required ci.yml job failed or was cancelled"
+            exit 1
+          fi
+          echo "ci-required: OK -- every job succeeded or was skipped by a path filter"

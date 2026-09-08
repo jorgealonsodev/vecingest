@@ -1,0 +1,24 @@
+rules:
+  - id: no-interpolated-pii-in-slog-message
+    languages: [generic]
+    severity: WARNING
+    message: >-
+      Do not build a slog message with fmt.Sprintf or string
+      concatenation over a PII-typed value (design D-J's call-site
+      discipline). slogpii.Handler redacts known PII patterns found IN
+      the message string, but a value that never matches the email/
+      phone/IBAN shape (e.g. a name, or a PII value already formatted
+      into an unusual shape) has no other safety net once it is baked
+      into the message text. Pass PII as a structured slog.Any/
+      slog.String attribute (or better, a domain/pii typed value) so
+      the wrapping Handler and its LogValuer leg can redact it, instead
+      of pre-formatting it into the message.
+    patterns:
+      - pattern-either:
+          - pattern: slog.$LEVEL(fmt.Sprintf(...), ...)
+          - pattern-regex: \bslog\.(Debug|Info|Warn|Error)\([^,)]*\+[^,)]*\)
+    paths:
+      include:
+        - "**/internal/**/*.go"
+      exclude:
+        - "**/*_test.go"

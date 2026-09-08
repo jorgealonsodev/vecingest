@@ -1,0 +1,14 @@
+pre-commit:
+  parallel: true
+  commands:
+    go-fmt:
+      root: "api/"
+      glob: "*.go"
+      run: gofumpt -l -d {staged_files}
+    go-vet:
+      root: "api/"
+      glob: "*.go"
+      run: go vet ./...
+    ts-lint:
+      glob: "{app,packages/shared,site}/**/*.{ts,tsx}"
+      run: pnpm turbo run lint --filter=...[HEAD^]

@@ -1,0 +1,41 @@
+# CI wiring (gofumpt check, golangci-lint invocation) is Phase 11 (WU-11)
+# scope; this file only needs to exist and declare the design's D-money
+# forbidigo rule from M0, verified locally against api/ with:
+#   golangci-lint run --enable-only forbidigo ./...
+run:
+  timeout: 5m
+
+linters:
+  disable-all: true
+  enable:
+    - forbidigo
+    - errcheck
+    - gosec
+    - sqlclosecheck
+
+linters-settings:
+  forbidigo:
+    # design D-money rule: no float64/float32 under internal/http/dto,
+    # internal/domain or internal/db -- money is numeric in the
+    # database and decimal.Decimal in Go (sqlc.yaml's own numeric
+    # override), never a float. No M0 table or endpoint carries money;
+    # this guard exists so the mistake fails CI before the first money
+    # column is ever added.
+    forbid:
+      - pattern: '^float64$'
+        msg: "float64 is forbidden -- money is numeric/decimal.Decimal, never a float (design D-money rule)."
+      - pattern: '^float32$'
+        msg: "float32 is forbidden -- money is numeric/decimal.Decimal, never a float (design D-money rule)."
+    exclude-godoc-examples: false
+    analyze-types: true
+
+issues:
+  # The forbidigo rule is scoped to the money-sensitive layers by path,
+  # not by pattern: everywhere else in the module, a float is out of
+  # scope for this specific rule.
+  include:
+    - EXC0001
+  exclude-rules:
+    - path-except: '(internal/http/dto|internal/domain|internal/db)/'
+      linters:
+        - forbidigo

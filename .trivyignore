@@ -1,0 +1,11 @@
+# CVE-2025-71329 / CVE-2025-71330: image-size@1.2.1, a transitive dependency
+# of metro@0.87.0 (the React Native/Expo bundler). Both are Denial-of-Service
+# findings in image-size's dimension parser with no fixed version published
+# upstream yet. This package only ever runs inside the developer/CI build
+# pipeline (bundling this repository's own asset files); it never processes
+# runtime, user-uploaded, or otherwise untrusted input -- production file
+# uploads are a separate Go/R2 pipeline (M2 scope), not this Node bundler.
+# Accepted residual risk, recorded in docs/security/threat-model.md; revisit
+# when Renovate reports a fixed image-size release.
+CVE-2025-71329
+CVE-2025-71330

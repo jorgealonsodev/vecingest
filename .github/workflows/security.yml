@@ -1,0 +1,160 @@
+name: security
+
+# Phase 11 (openspec/changes/m0-foundation/tasks.md, D-M): six independent,
+# ALL-BLOCKING scans -- no continue-on-error anywhere in this file. The
+# weekly schedule trigger is what catches a new CVE against unchanged code
+# (PRD 10.1 gate item 7); pull_request/push catch a newly introduced one.
+# Reused by deploy.yml via `workflow_call` before any image is built.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 4 * * 1" # weekly, Monday 04:17 UTC
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gitleaks:
+    name: gitleaks (secret scanning)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # gitleaks scans full history, not just the diff
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  govulncheck:
+    name: govulncheck (known Go vulnerabilities)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
+        with:
+          go-version-file: api/go.mod
+          work-dir: api
+
+  gosec:
+    name: gosec (Go security linter, SARIF)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write # only this job uploads SARIF
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: api/go.mod
+          cache-dependency-path: api/go.sum
+
+      # NOT the standalone `gosec` binary: this codebase's accepted-risk
+      # annotations (HIBP's mandatory SHA-1, the dev-only seed fixture
+      # password, cmd/lintcompose's operator-supplied path) are written
+      # as `//nolint:gosec` -- golangci-lint's own suppression syntax,
+      # which its embedded gosec analyzer honors but the standalone
+      # `gosec` CLI does not recognize at all (it only understands its
+      # own `#nosec` comments). Running the standalone binary here would
+      # re-flag every already-reviewed exception as a fresh finding and
+      # turn this "blocking" gate into permanent noise -- confirmed by
+      # running both side by side against this exact codebase.
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.13.2
+          working-directory: api
+          args: --enable-only=gosec --output.sarif.path=../gosec.sarif
+
+      - name: upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          sarif_file: gosec.sarif
+
+  semgrep:
+    name: semgrep (OWASP Top 10, Go, TypeScript, project rules)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write # only this job uploads SARIF
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - run: pip install semgrep==1.176.1
+
+      # api/.semgrep holds three project-specific rules that enforce
+      # real invariants no registry ruleset knows about: D-O's
+      # single-writer audit_log, the SQL/Go float-for-money ban, and
+      # D-J's PII-in-log-message call-site rule (verify-report.md
+      # CRITICAL-4). Without --config api/.semgrep they exist on disk
+      # but are never executed by anything.
+      - name: run semgrep (blocking, SARIF output)
+        run: |
+          semgrep scan \
+            --config p/owasp-top-ten \
+            --config p/golang \
+            --config p/typescript \
+            --config api/.semgrep \
+            --sarif --output semgrep.sarif \
+            --error
+
+      - name: upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          sarif_file: semgrep.sarif
+
+  pnpm-audit:
+    name: pnpm audit --audit-level=high (app dependencies)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22.x"
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: "10.33.0"
+          run_install: false
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --audit-level=high
+
+  trivy-fs:
+    name: trivy (filesystem/dependency scan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write # only this job uploads SARIF
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: "1" # blocking
+          format: sarif
+          output: trivy-fs.sarif
+
+      - name: upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          sarif_file: trivy-fs.sarif

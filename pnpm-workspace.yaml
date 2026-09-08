@@ -1,0 +1,19 @@
+packages:
+  - "app"
+  - "packages/shared"
+  - "site"
+
+# CVE-2025-71329 / CVE-2025-71330 (image-size, transitive dev/build-time
+# dependency of metro via expo): no fixed version is published upstream.
+# Accepted residual risk, recorded in docs/security/threat-model.md.
+# Written by `pnpm audit --ignore-unfixable`; do not add a fixable CVE here.
+auditConfig:
+  ignoreCves:
+    - CVE-2025-71330
+    - CVE-2025-71329
+
+# Supply-chain hardening (PRD_go.md 6.1, "Cadena de suministro"; semgrep
+# package_managers.pnpm rules, wired blocking in security.yml).
+blockExoticSubdeps: true
+minimumReleaseAge: 10080 # 7 days, in minutes
+trustPolicy: no-downgrade

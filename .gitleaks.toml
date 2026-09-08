@@ -1,0 +1,11 @@
+title = "vecingest gitleaks config"
+
+# Extend gitleaks' own default ruleset rather than replacing it.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "PRD_go.md section 8.2 documents the .env.example variable NAMES as a reference template (JWT_SECRET=, ENCRYPTION_KEY=, ...); it never carries a real secret value. Real secrets are only ever supplied at runtime via Portainer stack environment variables (PRD section 6.1, 'Gestión de claves y secretos') and are never committed."
+paths = [
+  '''^PRD_go\.md$''',
+]

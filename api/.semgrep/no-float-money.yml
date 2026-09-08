@@ -1,0 +1,37 @@
+rules:
+  - id: no-float-money-go
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      float64/float32 are forbidden under internal/http/dto,
+      internal/domain and internal/db. Money is numeric in the database
+      and decimal.Decimal in Go (design D-money rule, PRD §9); no M0
+      table or endpoint carries money, but the guard is installed before
+      the first money column exists so the mistake fails CI instead of
+      compiling silently.
+    patterns:
+      - pattern-regex: \bfloat(32|64)\b
+    paths:
+      include:
+        - "**/internal/http/dto/**/*.go"
+        - "**/internal/domain/**/*.go"
+        - "**/internal/db/**/*.go"
+
+  - id: no-float-columns-in-migrations
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      "double precision"/"real" columns are forbidden in
+      migrations/**.sql. Money is `numeric` (design D-money rule); a
+      float column defeats the sqlc.yaml numeric -> decimal.Decimal
+      override at the source, before sqlc ever runs.
+      NOTE: this is a lexical scan, not a SQL-DDL-aware one -- a comment
+      containing the bare word "real" outside a column-type position
+      would also match. Given how rarely that word appears in migration
+      SQL, the false-positive cost is judged lower than the risk of a
+      hand-rolled DDL parser missing a real violation.
+    patterns:
+      - pattern-regex: (?i)\b(double precision|real)\b
+    paths:
+      include:
+        - "**/migrations/**/*.sql"

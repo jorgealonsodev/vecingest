@@ -1,0 +1,31 @@
+{
+  "name": "@vecingest/shared",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Generated TS client, Zod schemas and stable error codes from api/openapi/openapi.yaml. Never hand-edited (api-contract-generation: Generation Chain).",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./client": "./src/client/index.ts",
+    "./schemas": "./src/schemas/index.ts",
+    "./errors": "./src/errors.ts"
+  },
+  "scripts": {
+    "generate": "node scripts/generate.mjs",
+    "build": "pnpm run generate && tsc --noEmit",
+    "lint": "echo 'packages/shared: lint not yet configured (Phase 11)' && exit 0",
+    "typecheck": "tsc --noEmit",
+    "test": "echo 'packages/shared: no test command (generated-only package, config.yaml test_command: null)' && exit 0"
+  },
+  "dependencies": {
+    "openapi-fetch": "0.17.0",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "openapi-typescript": "7.13.0",
+    "openapi-zod-client": "1.18.3",
+    "typescript": "5.9.3"
+  }
+}

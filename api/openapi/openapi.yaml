@@ -1,0 +1,715 @@
+components:
+  schemas:
+    CSRFTokenResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/CSRFTokenResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        csrf_token:
+          type: string
+      required:
+        - csrf_token
+      type: object
+    Cookie:
+      additionalProperties: false
+      properties:
+        Domain:
+          type: string
+        Expires:
+          format: date-time
+          type: string
+        HttpOnly:
+          type: boolean
+        MaxAge:
+          format: int64
+          type: integer
+        Name:
+          type: string
+        Partitioned:
+          type: boolean
+        Path:
+          type: string
+        Quoted:
+          type: boolean
+        Raw:
+          type: string
+        RawExpires:
+          type: string
+        SameSite:
+          format: int64
+          type: integer
+        Secure:
+          type: boolean
+        Unparsed:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        Value:
+          type: string
+      required:
+        - Name
+        - Value
+        - Quoted
+        - Path
+        - Domain
+        - Expires
+        - RawExpires
+        - MaxAge
+        - Secure
+        - HttpOnly
+        - SameSite
+        - Partitioned
+        - Raw
+        - Unparsed
+      type: object
+    ErrorDetail:
+      additionalProperties: false
+      properties:
+        location:
+          description: Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id'
+          type: string
+        message:
+          description: Error message text
+          type: string
+        value:
+          description: The value at the given location
+      type: object
+    ErrorModel:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/ErrorModel.json
+          format: uri
+          readOnly: true
+          type: string
+        detail:
+          description: A human-readable explanation specific to this occurrence of the problem.
+          examples:
+            - Property foo is required but is missing.
+          type: string
+        errors:
+          description: Optional list of individual error details
+          items:
+            $ref: "#/components/schemas/ErrorDetail"
+          type:
+            - array
+            - "null"
+        instance:
+          description: A URI reference that identifies the specific occurrence of the problem.
+          examples:
+            - https://example.com/error-log/abc123
+          format: uri
+          type: string
+        status:
+          description: HTTP status code
+          examples:
+            - 400
+          format: int64
+          type: integer
+        title:
+          description: A short, human-readable summary of the problem type. This value should not change between occurrences of the error.
+          examples:
+            - Bad Request
+          type: string
+        type:
+          default: about:blank
+          description: A URI reference to human-readable documentation for the error.
+          examples:
+            - https://example.com/errors/example
+          format: uri
+          type: string
+      type: object
+    ForgotPasswordRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/ForgotPasswordRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        email:
+          format: email
+          type: string
+      required:
+        - email
+      type: object
+    ForgotPasswordResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/ForgotPasswordResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        accepted:
+          type: boolean
+      required:
+        - accepted
+      type: object
+    ListSessionsResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/ListSessionsResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        sessions:
+          items:
+            $ref: "#/components/schemas/SessionSummary"
+          type:
+            - array
+            - "null"
+      required:
+        - sessions
+      type: object
+    LiveResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/LiveResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        ok:
+          type: boolean
+      required:
+        - ok
+      type: object
+    LoginRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/LoginRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        device_name:
+          maxLength: 255
+          type: string
+        email:
+          description: Account email address.
+          format: email
+          type: string
+        password:
+          description: Absolute floor is 12; the applicable 12-or-15 rule is enforced dynamically server-side (D-F).
+          minLength: 12
+          type: string
+        platform:
+          description: "Determines refresh-token transport: web gets an HttpOnly cookie, ios/android get it in the response body."
+          enum:
+            - ios
+            - android
+            - web
+          type: string
+      required:
+        - email
+        - password
+        - platform
+      type: object
+    LoginResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/LoginResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        access_token:
+          type: string
+        csrf_token:
+          description: Present only on the cookie (web) transport.
+          type: string
+        expires_in:
+          description: Access-token lifetime in seconds.
+          format: int64
+          type: integer
+        refresh_token:
+          description: Present only on the body (native) transport.
+          type: string
+      required:
+        - access_token
+        - expires_in
+      type: object
+    MeResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/MeResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        email:
+          type: string
+        id:
+          type: string
+        is_superadmin:
+          type: boolean
+      required:
+        - id
+        - email
+        - is_superadmin
+      type: object
+    ReadyResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/ReadyResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        ok:
+          type: boolean
+      required:
+        - ok
+      type: object
+    RefreshRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/RefreshRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        refresh_token:
+          type: string
+      type: object
+    ResetPasswordRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/ResetPasswordRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        new_password:
+          minLength: 12
+          type: string
+        token:
+          type: string
+      required:
+        - token
+        - new_password
+      type: object
+    ResetPasswordResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/ResetPasswordResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        accepted:
+          type: boolean
+      required:
+        - accepted
+      type: object
+    SessionSummary:
+      additionalProperties: false
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        device_name:
+          type: string
+        family_id:
+          description: Also the :id path parameter for DELETE /v1/me/sessions/:id.
+          type: string
+        last_used_at:
+          format: date-time
+          type: string
+        platform:
+          type: string
+      required:
+        - family_id
+        - platform
+        - created_at
+      type: object
+    SuperadminLoginRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/SuperadminLoginRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        device_name:
+          maxLength: 255
+          type: string
+        email:
+          format: email
+          type: string
+        password:
+          minLength: 12
+          type: string
+        platform:
+          enum:
+            - ios
+            - android
+            - web
+          type: string
+        totp_code:
+          description: Required unless the response is 403 MFA enrollment-required.
+          type: string
+      required:
+        - email
+        - password
+        - platform
+      type: object
+info:
+  title: Vecingest API
+  version: 0.1.0
+openapi: 3.1.0
+paths:
+  /v1/auth/forgot-password:
+    post:
+      operationId: forgotPassword
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ForgotPasswordRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ForgotPasswordResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Request a password reset
+      tags:
+        - auth
+  /v1/auth/login:
+    post:
+      operationId: login
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+          description: OK
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Password login
+      tags:
+        - auth
+  /v1/auth/logout:
+    post:
+      operationId: logout
+      parameters:
+        - in: header
+          name: Authorization
+          schema:
+            type: string
+      responses:
+        "204":
+          description: No Content
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Revoke the current session family
+      tags:
+        - auth
+  /v1/auth/refresh:
+    post:
+      operationId: refresh
+      parameters:
+        - in: cookie
+          name: vecingest_refresh
+          schema:
+            $ref: "#/components/schemas/Cookie"
+        - in: header
+          name: X-CSRF-Token
+          schema:
+            type: string
+        - in: header
+          name: Origin
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+          description: OK
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Rotate the refresh token
+      tags:
+        - auth
+  /v1/auth/refresh/csrf:
+    get:
+      operationId: refreshCSRF
+      parameters:
+        - in: cookie
+          name: vecingest_refresh
+          schema:
+            $ref: "#/components/schemas/Cookie"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CSRFTokenResponse"
+          description: OK
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+            Cross-Origin-Resource-Policy:
+              schema:
+                type: string
+            Vary:
+              schema:
+                type: string
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Restore the CSRF token after a page reload
+      tags:
+        - auth
+  /v1/auth/reset-password:
+    post:
+      operationId: resetPassword
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResetPasswordRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResetPasswordResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Complete a password reset
+      tags:
+        - auth
+  /v1/auth/superadmin/login:
+    post:
+      operationId: superadminLogin
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuperadminLoginRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+          description: OK
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: TOTP-gated superadmin login
+      tags:
+        - auth
+  /v1/health/live:
+    get:
+      operationId: healthLive
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LiveResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Liveness probe
+      tags:
+        - health
+  /v1/health/ready:
+    get:
+      operationId: healthReady
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Readiness probe
+      tags:
+        - health
+  /v1/me:
+    get:
+      operationId: getMe
+      parameters:
+        - in: header
+          name: Authorization
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Get the caller's own profile
+      tags:
+        - me
+  /v1/me/sessions:
+    get:
+      operationId: listMySessions
+      parameters:
+        - in: header
+          name: Authorization
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListSessionsResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: List the caller's own live sessions
+      tags:
+        - me
+  /v1/me/sessions/{id}:
+    delete:
+      operationId: revokeMySession
+      parameters:
+        - in: header
+          name: Authorization
+          schema:
+            type: string
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Revoke one of the caller's own sessions
+      tags:
+        - me

@@ -40,9 +40,14 @@ testing:
       e2e_layer: false
       coverage:
         available: true
-        command: "go test -race -cover ./internal/domain/... ./internal/legal/..."
+        command: "go test -race -cover ./internal/domain/..."
         threshold_pct: 80
-        scope: "internal/domain/... and internal/legal/... only (not global)"
+        scope: >
+          internal/domain/... only at M0. The PRD scopes the gate to
+          internal/domain/... and internal/legal/..., but internal/legal has no
+          content until M7 (LPH rules land with the meetings module), and naming a
+          non-existent package makes the command fail outright rather than report
+          zero coverage. Re-add ./internal/legal/... in the milestone that creates it.
       quality:
         linter: "golangci-lint (gosec, errcheck, sqlclosecheck)"
         formatter: "gofumpt"

@@ -1,0 +1,41 @@
+version: "2"
+linters:
+  default: none
+  enable:
+    - errcheck
+    - forbidigo
+    - gosec
+    - sqlclosecheck
+  settings:
+    forbidigo:
+      # design D-money rule: money is numeric/decimal.Decimal, never a
+      # float64/float32, enforced under internal/http/dto,
+      # internal/domain and internal/db via the path exclusion below.
+      forbid:
+        - pattern: '^float64$'
+          msg: float64 is forbidden -- money is numeric/decimal.Decimal, never a float (design D-money rule).
+        - pattern: '^float32$'
+          msg: float32 is forbidden -- money is numeric/decimal.Decimal, never a float (design D-money rule).
+      exclude-godoc-examples: false
+      analyze-types: true
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+    rules:
+      - linters:
+          - forbidigo
+        path-except: (internal/http/dto|internal/domain|internal/db)/
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

@@ -1,0 +1,10 @@
+{
+  "name": "site",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "lint": "echo 'site: lint not yet configured' && exit 0",
+    "typecheck": "echo 'site: typecheck not yet configured' && exit 0",
+    "build": "mkdir -p dist && printf '<!doctype html><title>vecingest site (placeholder, no dedicated content phase in m0-foundation)</title>' > dist/index.html && echo 'site: build not yet configured -- wrote a placeholder dist/ so site/Dockerfile builds (task 8.2/8.3)'"
+  }
+}

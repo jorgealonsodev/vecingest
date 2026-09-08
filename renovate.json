@@ -1,0 +1,28 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "schedule": ["before 6am on monday"],
+  "timezone": "Europe/Madrid",
+  "minimumReleaseAge": "7 days",
+  "packageRules": [
+    {
+      "description": "River is still 0.x with no API stability guarantee (D-L). Group its updates but never auto-merge.",
+      "matchPackageNames": ["github.com/riverqueue/river{/,}**"],
+      "groupName": "riverqueue/river",
+      "automerge": false,
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": "Group all other Go module updates weekly.",
+      "matchManagers": ["gomod"],
+      "groupName": "go dependencies",
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": "Group all pnpm/npm updates weekly.",
+      "matchManagers": ["npm"],
+      "groupName": "js dependencies",
+      "minimumReleaseAge": "7 days"
+    }
+  ]
+}

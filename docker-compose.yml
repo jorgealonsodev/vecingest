@@ -1,0 +1,228 @@
+# Stack for Portainer (Docker standalone, no Swarm), deployed from the
+# GitHub repository: Portainer > Add stack > Repository, with this file's
+# repo-root path as the compose path (`docker-compose.yml`, Portainer's
+# own default -- nothing to configure). It lives at the repo root, not
+# under deploy/, for two reasons: Portainer's default compose path stays
+# untouched, and `docker compose` auto-loads a `.env` file sitting next
+# to the compose file, so copying `env.example` to `.env` here gives
+# ${VAR} substitution with zero flags for a manual/local run.
+# - Variables are defined in Portainer > Stack > Environment variables.
+#   Portainer substitutes them into ${VAR} and also dumps them into a
+#   `stack.env` file passed to containers via `env_file`. No need to list
+#   every variable here. `stack.env` only exists once Portainer creates
+#   it -- see the `env_file` note on `x-app-image` below.
+# - Images are built in CI (GitHub Actions) and published to GHCR.
+#   Portainer only pulls; "Re-pull image and redeploy" updates.
+# - Variable template: see env.example (no leading dot: a dotted name is
+#   unreadable to some tooling that guards .env* paths, and this file holds
+#   no secrets -- only names, defaults and comments).
+#
+# Reverse proxy: the server runs a single nginx container in Portainer
+# that reverse-proxies every stack on the box, configured BY HAND against
+# published host ports -- there is no shared docker network to join here.
+# `site`, `web` and `api` therefore publish `SITE_PORT`/`WEB_PORT`/
+# `API_PORT` on the host instead. See the per-service comments below for
+# the exact mapping and the firewall requirement that comes with it.
+#
+# Ports default to 24221 (site), 38043 (web) and 34246 (api) rather than
+# 8080/8081/3000: this server runs several stacks behind the same nginx
+# and those common ports are almost certainly already taken by another
+# one. These three were chosen by the operator and are NOT contiguous,
+# so THE FIREWALL RULE THAT CLOSES THEM FROM THE INTERNET MUST BE THREE
+# SEPARATE PORT RULES (24221, 38043, 34246) -- a single range rule does
+# not cover all three, and writing one will make someone believe two of
+# them are closed when they are not. Do not "tidy" these back to
+# 8080/3000 or collapse the firewall rule into a range.
+#
+# 38043 and 34246 fall inside Linux's default ephemeral port range
+# (`net.ipv4.ip_local_port_range`, normally 32768-60999): the kernel can
+# hand either one out as the source port of an outbound connection, and
+# if it does so before Docker binds it, the container fails to start
+# with "address already in use" -- intermittently, typically only after
+# a reboot or a redeploy. Reserve both on the host so only Docker holds
+# them:
+#   # /etc/sysctl.d/99-vecingest-reserved-ports.conf
+#   net.ipv4.ip_local_reserved_ports = 34246,38043
+#   then: sysctl --system
+# 24221 is below 32768 and needs no such reservation.
+#
+# Before deploying, confirm all three ports are actually free on the host:
+#   ss -ltnp | grep -E ':(24221|38043|34246)\b'
+# (no output means free).
+#
+# This file mirrors PRD_go.md §8.1 verbatim in shape, with the two
+# corrections D-K makes to that reference copy (the PRD itself labels it
+# "esta copia es de referencia"): the mis-indented `CLAMAV_HOST` key is
+# dropped entirely (ClamAV is M2 scope), and `clamav` stays only as an
+# inert `profiles: [av]` stub — it carries none of the hardening flags
+# below because it never runs at M0 unless a deployer opts into that
+# profile by hand.
+
+x-hardening: &hardening
+  read_only: true
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  tmpfs: [/tmp]
+
+x-app-image: &app-image
+  image: ${REGISTRY:-ghcr.io/tu-org}/vecingest-api:${TAG:-latest}
+  # `stack.env` is written by Portainer at deploy time; it does not exist
+  # when this file is run by hand (`docker compose up` at the repo root).
+  # Compose treats a missing `env_file` entry as a hard error by default,
+  # so this is the long form with `required: false` -- without it, a
+  # manual run fails before anything starts with "env file ... not found".
+  env_file:
+    - path: stack.env
+      required: false
+  environment:
+    APP_ENV: production
+    PORT: 3000
+    DOMAIN: ${DOMAIN}
+    APP_URL: https://app.${DOMAIN}
+    CORS_ORIGINS: https://app.${DOMAIN},https://${DOMAIN}
+    # Three distinct roles. `${POSTGRES_USER}` is the superuser and is used
+    # only once, at role bootstrap; `vecingest_owner` applies goose
+    # migrations; `app_rw` is the runtime role and owns no table.
+    # Connecting the API as the superuser would make the restricted-role
+    # gate in PRD §10.1 unachievable. `MIGRATIONS_DATABASE_URL` and
+    # `BOOTSTRAP_DATABASE_URL` arrive via stack.env.
+    DATABASE_URL: postgres://${APP_DB_USER}:${APP_DB_PASSWORD}@db:5432/${POSTGRES_DB}
+    S3_ENDPOINT: https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com
+    S3_REGION: auto
+    S3_BUCKET: ${R2_BUCKET}
+    S3_ACCESS_KEY: ${R2_ACCESS_KEY_ID}
+    S3_SECRET_KEY: ${R2_SECRET_ACCESS_KEY}
+    TSA_URL: ${TSA_URL:-https://freetsa.org/tsr}
+
+services:
+  site: # public static web (Astro) -> DOMAIN, manually proxied by nginx
+    image: ${REGISTRY:-ghcr.io/tu-org}/vecingest-site:${TAG:-latest}
+    restart: unless-stopped
+    <<: *hardening
+    tmpfs: [/tmp, /var/cache/nginx, /var/run]
+    user: "1000:1000" # the official nginx image starts as root and fails
+    # the non-root container gate in PRD §10.1. This image builds on
+    # nginxinc/nginx-unprivileged and listens on 8080 (not 80), so the
+    # published host port below maps to 8080 inside the container -- the
+    # hand-configured nginx proxy must target host:SITE_PORT.
+    mem_limit: 128m
+    # Published on all interfaces (0.0.0.0) because the nginx container
+    # reaches this stack through the host address, not a shared docker
+    # network. THE HOST FIREWALL (ufw) MUST THEREFORE CLOSE SITE_PORT TO
+    # THE OUTSIDE WORLD: with the old shared-network setup this port was
+    # never reachable from the internet at all; published like this it
+    # IS reachable unless ufw explicitly blocks it. Do not skip this.
+    ports:
+      - "${SITE_PORT:-24221}:8080"
+
+  web: # exported Expo app -> app.DOMAIN, manually proxied by nginx
+    image: ${REGISTRY:-ghcr.io/tu-org}/vecingest-web:${TAG:-latest}
+    restart: unless-stopped
+    <<: *hardening
+    tmpfs: [/tmp, /var/cache/nginx, /var/run]
+    user: "1000:1000" # same non-root rationale as `site` above.
+    # Also nginx-unprivileged, listening on 8080 (not 80) -- same reason
+    # as `site`.
+    mem_limit: 128m
+    # Same 0.0.0.0 publishing caveat as `site` above: THE HOST FIREWALL
+    # (ufw) MUST CLOSE WEB_PORT TO THE OUTSIDE WORLD. This port was never
+    # internet-reachable under the old shared-network setup; now it is,
+    # unless ufw blocks it.
+    ports:
+      - "${WEB_PORT:-38043}:8080"
+
+  api: # Go binary -> api.DOMAIN, manually proxied by nginx
+    <<: [*app-image, *hardening]
+    restart: unless-stopped
+    user: "65532:65532" # distroless's built-in nonroot account
+    mem_limit: 256m
+    environment:
+      GOMEMLIMIT: 200MiB
+    command: ["/vecingest", "serve", "--migrate"]
+    healthcheck:
+      test: ["CMD", "/vecingest", "health", "--ready"] # the binary makes the request itself; distroless has no wget/curl
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      db: { condition: service_healthy }
+    # `internal` keeps api reaching db; it needs no other network to be
+    # reached itself -- nginx targets the published host port instead.
+    networks: [internal]
+    # Same 0.0.0.0 publishing caveat as `site`/`web` above: THE HOST
+    # FIREWALL (ufw) MUST CLOSE API_PORT TO THE OUTSIDE WORLD. This port
+    # was never internet-reachable under the old shared-network setup;
+    # now it is, unless ufw blocks it.
+    ports:
+      - "${API_PORT:-34246}:3000"
+
+  worker: # River + periodic jobs (same image), never exposed to the proxy
+    <<: [*app-image, *hardening]
+    restart: unless-stopped
+    user: "65532:65532"
+    mem_limit: 256m
+    environment:
+      GOMEMLIMIT: 200MiB
+    command: ["/vecingest", "worker"]
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "/vecingest", "health", "--worker"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      api: { condition: service_healthy }
+    networks: [internal]
+
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    command: postgres -c shared_buffers=256MB -c work_mem=8MB -c max_connections=40
+    # db is deliberately NOT given the full `*hardening` anchor: the
+    # official postgres image needs a writable filesystem (data directory,
+    # WAL, temp files) and its own entrypoint privilege drop, so
+    # `read_only`/`cap_drop`/`tmpfs`/`user` would break initdb and startup.
+    # This exception is explicit and matches PRD §8.1's own reference copy
+    # verbatim -- it is not an oversight, and lintcompose's policy table
+    # documents it the same way.
+    security_opt: [no-new-privileges:true]
+    mem_limit: 768m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # db publishes NO port and stays reachable only from `internal`.
+    # Publishing Postgres to the host would be a real regression -- it
+    # must never gain a `ports:` entry.
+    networks: [internal]
+
+  clamav: # optional: docker compose --profile av up -d
+    image: clamav/clamav:stable_base
+    profiles: [av]
+    restart: unless-stopped
+    volumes:
+      - clamav_db:/var/lib/clamav
+    mem_limit: 1536m
+    healthcheck:
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 60s
+      start_period: 300s
+    networks: [internal]
+
+networks:
+  internal: # bridge with no published ports of its own. db and clamav
+    # are only reachable from here; worker and clamav need outbound
+    # Internet access. api/site/web reach the outside world through
+    # their `ports:` publishing instead of a shared proxy network.
+
+volumes:
+  db_data:
+  clamav_db:

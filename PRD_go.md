@@ -475,9 +475,12 @@ Objetivo: **OWASP ASVS nivel 2** para la API y **OWASP MASVS-L1 + R** (resilienc
 │   ├── PULL_REQUEST_TEMPLATE.md   # incluye el checklist de seguridad del punto 10 de la DoD
 │   └── workflows/          # ci.yml, security.yml, deploy.yml, release-dast.yml
 ├── deploy/
-│   ├── docker-compose.yml  # stack de Portainer (copia de referencia en PRD 8.1)
-│   ├── docker-compose.dev.yml
-│   └── .env.example
+│   └── docker-compose.dev.yml   # stack local (solo db); Portainer nunca lo toca
+├── docker-compose.yml      # stack de Portainer (copia de referencia en PRD 8.1); vive en la
+│                           #   raíz para que el "compose path" de Portainer se quede en su
+│                           #   valor por defecto y `docker compose` cargue `.env` sin flags
+├── env.example             # plantilla junto al compose; sin punto inicial a propósito
+│                           #   copiándolo a `.env` sin `--env-file`
 ├── Makefile                # make dev, make test, make gen (sqlc + openapi + cliente TS), make lint
 └── PRD.md
 ```
@@ -1100,8 +1103,8 @@ Tres fases con los mismos binarios y el mismo esquema. El paso de fase lo decide
 ## 8. Infraestructura y despliegue
 
 - **Fase A** (la que describe esta sección): servidor propio con Docker Compose desplegado como **stack de Portainer** (Docker standalone). Las fases B y C están en 7.10; Portainer gestiona también Swarm, así que el paso a fase B no cambia de herramienta. Portainer no construye imágenes: CI las publica en GHCR y el stack solo hace `pull`. Las variables se definen en Portainer (Environment variables); se sustituyen en `${VAR}` y llegan a los contenedores mediante `env_file: stack.env`, que Portainer genera automáticamente. Actualizar = cambiar `TAG` y "Re-pull image and redeploy". Servicios: `web` (nginx con el export de Expo), `site` (nginx con la web pública estática, generada con Astro), `api` (binario Go, `vecingest serve`), `worker` (misma imagen, `vecingest worker`), `db` (Postgres 17) y, opcional por perfil, `clamav`. Sin Redis. Ficheros en Cloudflare R2. Imagen de la API `distroless/static` con binario estático (< 30 MB), usuario no root, `HEALTHCHECK` en `api` y `worker`. Consumo objetivo del stack en reposo: api 40 MB + worker 40 MB + Postgres 300 MB + nginx ×2 10 MB ≈ 400 MB; con ClamAV, +1 GB.
-- Proxy inverso existente: Nginx Proxy Manager en la red externa `PROXY_NETWORK`. Hosts: `DOMAIN → site:80`, `app.DOMAIN → web:80`, `api.DOMAIN → api:3000` (con `client_max_body_size 1m`: la API nunca recibe binarios).
-- Variables de entorno (plantilla en `.env.example`, valores en Portainer, nunca en el repositorio): `DOMAIN`, `APP_URL`, `APP_ENV` (`development` | `staging` | `production`), `CORS_ORIGINS`, `POSTGRES_*` (superusuario, solo para el arranque de roles), `APP_DB_USER`, `APP_DB_PASSWORD`, `BOOTSTRAP_DATABASE_URL`, `MIGRATIONS_DATABASE_URL`, `JWT_SECRET`, `JWT_SECRET_PREVIOUS`, `JWT_REFRESH_SECRET`, `ENCRYPTION_KEY` (32 bytes en base64; en Portainer va como variable de entorno porque los secretos por fichero no están disponibles en Docker standalone; ver mitigación en 6.1), `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_BACKUP_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `SMTP_URL`, `MAIL_FROM`, `SMS_PROVIDER`, `SMS_API_KEY`, `SMS_FROM`, `TURNSTILE_SECRET`, `TSA_URL`, `EXPO_ACCESS_TOKEN`, `SENTRY_DSN`, `PROXY_IP` (IP de NPM para `trust proxy`) y `PROXY_NETWORK`. El superadmin inicial no figura aquí: se crea con `vecingest bootstrap-superadmin` y sus credenciales no se guardan como variables del stack (ver 5.1).
+- Proxy inverso existente: nginx corre como **contenedor** en Portainer y hace de proxy inverso de todos los stacks del servidor; se configura **a mano**, apuntando a puertos publicados en el host, no a una red docker compartida. Nuestro stack publica esos puertos para que nginx los use como destino: `DOMAIN → host:SITE_PORT`, `app.DOMAIN → host:WEB_PORT`, `api.DOMAIN → host:API_PORT` (con `client_max_body_size 1m` en el host de la API: la API nunca recibe binarios). **`site` y `web` escuchan en 8080 dentro del contenedor, no en 80**: sus imágenes se construyen sobre `nginxinc/nginx-unprivileged` y corren como usuario no root, porque la imagen oficial de nginx arranca como root y no cumple el punto de contenedores no root de 10.1; por eso el puerto publicado en el host mapea a 8080, no a 80, dentro del contenedor.
+- Variables de entorno (plantilla en `env.example`, valores en Portainer, nunca en el repositorio): `DOMAIN`, `APP_URL`, `APP_ENV` (`development` | `staging` | `production`), `CORS_ORIGINS`, `POSTGRES_*` (superusuario, solo para el arranque de roles), `APP_DB_USER`, `APP_DB_PASSWORD`, `BOOTSTRAP_DATABASE_URL`, `MIGRATIONS_DATABASE_URL`, `JWT_SECRET`, `JWT_SECRET_PREVIOUS`, `JWT_REFRESH_SECRET`, `ENCRYPTION_KEY` (32 bytes en base64; en Portainer va como variable de entorno porque los secretos por fichero no están disponibles en Docker standalone; ver mitigación en 6.1), `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_BACKUP_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `SMTP_URL`, `MAIL_FROM`, `SMS_PROVIDER`, `SMS_API_KEY`, `SMS_FROM`, `TURNSTILE_SECRET`, `TSA_URL`, `EXPO_ACCESS_TOKEN`, `SENTRY_DSN`, `PROXY_IP` (dirección que la API observa como origen de la petición de nginx, para `trust proxy`), `SITE_PORT`, `WEB_PORT` y `API_PORT` (puertos publicados en el host para que nginx los use como destino). El superadmin inicial no figura aquí: se crea con `vecingest bootstrap-superadmin` y sus credenciales no se guardan como variables del stack (ver 5.1).
 - Entornos: `development` (local con `docker compose -f docker-compose.dev.yml`, solo db; API con `air` para recarga y app en el host), `staging` (opcional, mismo compose con otro `.env` y subdominios `staging-*`), `production`.
 - Datos de prueba: `vecingest seed` crea un despacho, dos comunidades con viviendas, una empresa verificada y usuarios de cada rol con contraseña conocida (solo si `APP_ENV != production`).
 - Migraciones: `vecingest migrate` se ejecuta en el arranque del contenedor `api` (con bloqueo de aviso en Postgres para que `worker` no arranque a la vez). La creación del rol `app_rw` sin `UPDATE`/`DELETE` en tablas append-only es una migración `goose`, no un script de `docker-entrypoint-initdb.d`, para no depender de bind mounts que Portainer no tiene. Las migraciones corren con el rol propietario; `api` y `worker` se conectan como `app_rw`.
@@ -1111,16 +1114,59 @@ Tres fases con los mismos binarios y el mismo esquema. El paso de fase lo decide
 
 ### 8.1 Stack de Portainer de referencia (`docker-compose.yml`)
 
-Este es el stack que despliega Portainer. Se mantiene en el repositorio en `deploy/docker-compose.yml`; esta copia es de referencia y debe actualizarse si cambia aquel.
+Este es el stack que despliega Portainer. Se mantiene en el repositorio en la raíz, `docker-compose.yml`; esta copia es de referencia y debe actualizarse si cambia aquel. El fichero vive en la raíz (no en `deploy/`) por dos motivos: el campo *compose path* de Portainer se queda en su valor por defecto sin nada que configurar, y `docker compose` carga automáticamente un `.env` situado junto al compose, así que copiar `env.example` a `.env` en la raíz basta para la sustitución de `${VAR}` sin `--env-file`. La plantilla se llama `env.example`, sin punto inicial, a propósito: no contiene secretos —solo nombres, valores por defecto y comentarios— y así queda fuera de los guardas que bloquean rutas `.env*`. `deploy/` conserva solo `docker-compose.dev.yml`, el stack local que Portainer nunca toca.
+
+**El stack se crea en Portainer como "Repository"**, apuntando al repositorio de GitHub con `docker-compose.yml` (en la raíz) como *compose path* — el valor por defecto de Portainer, sin nada que configurar —, no pegando el YAML a mano. Así la definición del stack vive versionada en git y no se puede desincronizar de lo que hay en el servidor. El despliegue lo dispara el webhook del stack, que `deploy.yml` llama al final de cada push a `main` que haya pasado CI y la puerta de seguridad; el equivalente manual es "Pull and redeploy". Portainer solo lee el compose del repositorio: **las imágenes las sigue construyendo y publicando CI en GHCR**, y Portainer las descarga (ver 8.1.1).
 
 ```yaml
 # Stack para Portainer (Docker standalone, no Swarm).
 # - Las variables se definen en Portainer > Stack > Environment variables.
 #   Portainer las sustituye en ${VAR} y además las vuelca en un fichero `stack.env`
 #   que se pasa a los contenedores con `env_file`. No hace falta listar cada variable.
+# - El stack se despliega desde el repositorio de GitHub (Portainer > Add stack >
+#   Repository, compose path por defecto `docker-compose.yml` en la raíz), no
+#   pegando este YAML.
 # - Las imágenes se construyen en CI (GitHub Actions) y se publican en GHCR.
-#   Portainer solo hace pull; "Re-pull image and redeploy" actualiza.
-# - Plantilla de variables: ver .env.example
+#   Portainer solo hace pull; el webhook del stack o "Pull and redeploy" actualiza.
+#   Portainer NO construye imágenes: ningún servicio declara `build:`, y hacerlo
+#   saltaría el escaneo de Trivy previo a la publicación (ver 8.1.1).
+# - Plantilla de variables: ver env.example
+#
+# Proxy inverso: el servidor corre un único contenedor nginx en Portainer
+# que hace de proxy inverso de todos los stacks de la máquina, configurado
+# A MANO contra puertos publicados en el host -- no hay ninguna red docker
+# compartida a la que unirse. `site`, `web` y `api` publican por eso
+# `SITE_PORT`/`WEB_PORT`/`API_PORT` en el host. La publicación se hace en
+# todas las interfaces (0.0.0.0), porque el contenedor de nginx llega a
+# este stack por la dirección del host, no por una red docker compartida.
+# POR ESO EL CORTAFUEGOS DEL HOST DEBE CERRAR SITE_PORT, WEB_PORT Y
+# API_PORT DESDE FUERA: con la red compartida anterior nunca eran
+# alcanzables desde Internet; publicados así lo son, salvo que ufw los
+# bloquee explícitamente.
+#
+# Los puertos por defecto son 24221 (site), 38043 (web) y 34246 (api),
+# elegidos por el operador porque este servidor corre varios stacks
+# detrás del mismo nginx y 8080/8081/3000 seguramente ya están ocupados.
+# NO son contiguos, así que LA REGLA DE CORTAFUEGOS QUE LOS CIERRA DEBE
+# SER TRES REGLAS DE PUERTO SEPARADAS (24221, 38043, 34246) -- una regla
+# de rango no cubre las tres, y quien la escriba creerá que dos quedan
+# cerradas cuando no es así.
+#
+# 38043 y 34246 caen dentro del rango efímero por defecto de Linux
+# (`net.ipv4.ip_local_port_range`, normalmente 32768-60999): el kernel
+# puede asignar cualquiera de los dos como puerto de origen de una
+# conexión saliente, y si lo hace antes de que Docker lo reserve, el
+# contenedor falla al arrancar con "address already in use" -- de forma
+# intermitente, típicamente solo tras un reinicio o un redespliegue.
+# Reservar ambos en el host para que solo Docker los use:
+#   # /etc/sysctl.d/99-vecingest-reserved-ports.conf
+#   net.ipv4.ip_local_reserved_ports = 34246,38043
+#   luego: sysctl --system
+# 24221 está por debajo de 32768 y no necesita esta reserva.
+#
+# Antes de desplegar, comprobar que los tres puertos están libres:
+#   ss -ltnp | grep -E ':(24221|38043|34246)\b'
+# (sin salida significa libre).
 
 x-hardening: &hardening
   read_only: true
@@ -1130,7 +1176,14 @@ x-hardening: &hardening
 
 x-app-image: &app-image
   image: ${REGISTRY:-ghcr.io/tu-org}/vecingest-api:${TAG:-latest}
-  env_file: [stack.env]
+  # `stack.env` lo escribe Portainer al desplegar; no existe si este
+  # fichero se ejecuta a mano (`docker compose up` en la raíz). Compose
+  # trata una entrada `env_file` que falta como error, así que se usa la
+  # forma larga con `required: false` -- si no, un `docker compose up`
+  # manual falla antes de arrancar nada con "env file ... not found".
+  env_file:
+    - path: stack.env
+      required: false
   environment:
     APP_ENV: production
     PORT: 3000
@@ -1151,7 +1204,7 @@ x-app-image: &app-image
     TSA_URL: ${TSA_URL:-https://freetsa.org/tsr}
 
 services:
-  site:                           # web pública estática (Astro) → DOMAIN
+  site:                           # web pública estática (Astro) → DOMAIN, proxiada a mano por nginx
     image: ${REGISTRY:-ghcr.io/tu-org}/vecingest-site:${TAG:-latest}
     restart: unless-stopped
     <<: *hardening
@@ -1159,23 +1212,24 @@ services:
     user: "1000:1000"             # La imagen oficial de nginx arranca como root y no cumple el
                                   # punto de contenedores no root de 10.1. Esta imagen se
                                   # construye sobre nginxinc/nginx-unprivileged y escucha en
-                                  # 8080: NPM debe apuntar a 8080, no a 80.
+                                  # 8080, no en 80: el puerto publicado abajo mapea a 8080
+                                  # dentro del contenedor, y nginx debe apuntar a host:SITE_PORT.
     mem_limit: 128m
-    networks: [proxy]
+    ports:
+      - "${SITE_PORT:-24221}:8080"
 
-  web:                            # app Expo exportada → app.DOMAIN
+  web:                            # app Expo exportada → app.DOMAIN, proxiada a mano por nginx
     image: ${REGISTRY:-ghcr.io/tu-org}/vecingest-web:${TAG:-latest}
     restart: unless-stopped
     <<: *hardening
     tmpfs: [/tmp, /var/cache/nginx, /var/run]
-    user: "1000:1000"             # La imagen oficial de nginx arranca como root y no cumple el
-                                  # punto de contenedores no root de 10.1. Esta imagen se
-                                  # construye sobre nginxinc/nginx-unprivileged y escucha en
-                                  # 8080: NPM debe apuntar a 8080, no a 80.
+    user: "1000:1000"             # Mismo motivo que `site`: nginx-unprivileged, escucha en
+                                  # 8080, no en 80.
     mem_limit: 128m
-    networks: [proxy]
+    ports:
+      - "${WEB_PORT:-38043}:8080"
 
-  api:                            # binario Go → api.DOMAIN
+  api:                            # binario Go → api.DOMAIN, proxiada a mano por nginx
     <<: [*app-image, *hardening]
     restart: unless-stopped
     user: "65532:65532"             # nonroot de distroless
@@ -1191,7 +1245,10 @@ services:
       start_period: 10s
     depends_on:
       db: { condition: service_healthy }
-    networks: [internal, proxy]
+    networks: [internal]          # solo para llegar a db; para que nginx la alcance usa el
+                                  # puerto publicado, no una red compartida.
+    ports:
+      - "${API_PORT:-34246}:3000"
 
   worker:                         # River + jobs periódicos (misma imagen)
     <<: [*app-image, *hardening]
@@ -1244,76 +1301,115 @@ services:
     networks: [internal]
 
 networks:
-  internal:                        # bridge sin puertos publicados. db y clamav solo son
-                                   # alcanzables desde aquí; worker y clamav necesitan salida a Internet.
-  proxy:
-    external: true
-    name: ${PROXY_NETWORK}
+  internal:                        # bridge sin puertos publicados propios. db y clamav solo son
+                                   # alcanzables desde aquí; worker y clamav necesitan salida a
+                                   # Internet. api/site/web llegan al exterior por su propio
+                                   # `ports:`, no por una red de proxy compartida.
 
 volumes:
   db_data:
   clamav_db:
 ```
 
-### 8.2 Variables del stack (`.env.example`)
+### 8.1.1 Quién construye las imágenes, y por qué no Portainer
+
+Portainer despliega el stack **desde GitHub**, pero **no construye imágenes**: ningún servicio del compose declara `build:`, todos usan `image:` apuntando a GHCR. Construirlas en el servidor es técnicamente posible y rompe cuatro cosas de este mismo documento:
+
+1. **El escaneo previo a la publicación.** `deploy.yml` construye la imagen sin publicarla, la escanea con Trivy bloqueando en HIGH y CRITICAL, y solo entonces publica **esa misma imagen ya escaneada, sin reconstruir**. Si la construye Portainer no hay ningún momento anterior a producción en el que escanearla: la imagen vulnerable ya está corriendo.
+2. **El SBOM y la atestación de procedencia**, que genera el paso de publicación de CI. Una imagen construida en el servidor no tiene ni una ni otra, y la cadena de suministro deja de ser auditable.
+3. **Las etiquetas inmutables** `sha-<short>` y `v<semver>`. Son las que permiten volver atrás cambiando `TAG` y redesplegando. Construyendo en el servidor solo existe lo último que se compiló.
+4. **La memoria del servidor.** La sección 11 pone base de datos, cola y API en la misma máquina. Un build de Go más otro de Expo compiten por RAM con Postgres, y la imagen de la API pesa menos de 30 MB precisamente porque se construye en varias etapas en CI y solo viaja el binario.
+
+Si en algún momento se decide construir en el servidor, hay que reescribir antes el punto de la puerta de seguridad de 10.1 que exige escaneo bloqueante, porque tal como está redactado no se podría cumplir.
+
+### 8.2 Variables del stack (`env.example`)
 
 Valores en Portainer, nunca en el repositorio.
 
 ```dotenv
 # Copia estas variables en Portainer > Stacks > Environment variables.
-# Generar secretos: openssl rand -base64 32
+#
+# Los valores entre [corchetes] no son literales: son la forma de obtenerlos.
+# Sustituye el corchete entero por el resultado del comando, o por el valor que
+# te dé el panel indicado. Ninguna variable de este fichero debe quedar con el
+# corchete puesto.
+#
+# Dos formatos de secreto, y NO son intercambiables:
+#   - `openssl rand -hex 32`     -> para lo que acaba dentro de una URL.
+#   - `openssl rand -base64 32`  -> para claves de 32 bytes que no viajan en URL.
+# El motivo está explicado junto a las contraseñas de base de datos.
 
 # Dominio y proxy
 APP_ENV=production                            # development | staging | production
 DOMAIN=tudominio.com
-PROXY_NETWORK=nginx-proxy-manager_default   # docker network ls
-PROXY_IP=172.18.0.2                          # IP del contenedor de NPM (docker inspect), para trust proxy
+SITE_PORT=24221                              # puerto publicado en el host para `site`; nginx apunta aquí
+WEB_PORT=38043                               # puerto publicado en el host para `web`; nginx apunta aquí
+API_PORT=34246                               # puerto publicado en el host para `api`; nginx apunta aquí
+# PROXY_IP: dirección que la API observa como origen de la petición de nginx, para
+# `trust proxy`. Con la red docker compartida anterior era la IP fija del contenedor
+# de NPM; ahora nginx llega por el puerto publicado en el host, así que lo que la API
+# ve como origen es la puerta de enlace NAT de docker, no la IP del propio nginx. Este
+# valor SE DEBE CONFIRMAR TRAS EL PRIMER DESPLIEGUE mirando qué dirección reporta la
+# API como origen real; adivinarlo mal no falla de forma ruidosa, rompe en silencio el
+# rate limiting de confianza acotada: o no confía en nadie, o confía en el salto
+# equivocado.
+PROXY_IP=[docker inspect -f '{{range .NetworkSettings.Networks}}{{.Gateway}} {{end}}' $(docker ps -qf name=api) ]
 
 # Imágenes
-REGISTRY=ghcr.io/tu-org
+REGISTRY=[tu organización en GHCR, p. ej. ghcr.io/jorgealonsodev]
 TAG=latest                                   # en producción usar una etiqueta de versión, p. ej. v1.4.2
 
 # Base de datos
 # POSTGRES_* es el superusuario de la imagen: solo lo usa el arranque de roles.
+#
+# IMPORTANTE: estas dos contraseñas se interpolan DENTRO de una URL
+# (`postgres://usuario:CONTRASEÑA@db:5432/base`), así que generarlas en base64 rompe
+# el despliegue: ese alfabeto incluye `/`, `+` y `=`, y un `/` en la contraseña parte
+# la URL por la mitad. Por eso aquí es hexadecimal y no base64.
 POSTGRES_USER=vecingest
-POSTGRES_PASSWORD=
+POSTGRES_PASSWORD=[openssl rand -hex 32]
 POSTGRES_DB=vecingest
 APP_DB_USER=app_rw                           # rol de runtime, sin UPDATE/DELETE/TRUNCATE en tablas append-only
-APP_DB_PASSWORD=
-BOOTSTRAP_DATABASE_URL=                      # URL completa con el superusuario, solo para el arranque de roles
-MIGRATIONS_DATABASE_URL=                     # URL completa con vecingest_owner, para las migraciones de goose
+APP_DB_PASSWORD=[openssl rand -hex 32]
+# Las dos URLs completas. Compón cada una con los valores de arriba; la contraseña de
+# `vecingest_owner` no tiene variable propia porque solo vive dentro de esta URL:
+# genérala también con [openssl rand -hex 32] y guárdala donde guardes el resto.
+BOOTSTRAP_DATABASE_URL=[postgres://vecingest:$POSTGRES_PASSWORD@db:5432/vecingest]
+MIGRATIONS_DATABASE_URL=[postgres://vecingest_owner:CONTRASEÑA_DEL_OWNER@db:5432/vecingest]
 
-# Claves de la aplicación (32 bytes en base64 cada una)
-JWT_SECRET=
+# Claves de la aplicación (32 bytes en base64 cada una; no viajan en ninguna URL)
+JWT_SECRET=[openssl rand -base64 32]
+JWT_REFRESH_SECRET=[openssl rand -base64 32]
 JWT_SECRET_PREVIOUS=                         # vacío salvo durante una rotación
-JWT_REFRESH_SECRET=
-ENCRYPTION_KEY=                              # cifrado de IBAN, DNI y TOTP. Prefijo de versión lo gestiona la app
+ENCRYPTION_KEY=[openssl rand -base64 32]     # cifrado de IBAN, DNI y TOTP. Prefijo de versión lo gestiona la app
 
-# Cloudflare R2
-R2_ACCOUNT_ID=
+# Cloudflare R2  —  panel: Cloudflare > R2 > Manage API Tokens
+R2_ACCOUNT_ID=[Cloudflare > R2 > Overview, "Account ID" a la derecha]
 R2_BUCKET=vecingest
-R2_ACCESS_KEY_ID=
-R2_SECRET_ACCESS_KEY=
+R2_ACCESS_KEY_ID=[token R2 con permiso de lectura y escritura sobre R2_BUCKET]
+R2_SECRET_ACCESS_KEY=[se muestra UNA sola vez al crear el token: cópialo entonces]
 R2_BACKUP_BUCKET=vecingest-backups           # lo usa el cron de backups del host, no la API
-R2_BACKUP_ACCESS_KEY_ID=                     # credenciales de SOLO escritura
-R2_BACKUP_SECRET_ACCESS_KEY=
+R2_BACKUP_ACCESS_KEY_ID=[token DISTINTO, con permiso de SOLO escritura sobre el bucket de backups]
+R2_BACKUP_SECRET_ACCESS_KEY=[se muestra UNA sola vez al crear el token]
 
 # Email y SMS
-SMTP_URL=smtps://usuario:password@smtp.proveedor.com:465
+SMTP_URL=[smtps://usuario:contraseña@smtp.tuproveedor.com:465 — credenciales del proveedor de correo]
 MAIL_FROM="Vecingest <no-reply@mail.vecingest.app>"
 SMS_PROVIDER=twilio
-SMS_API_KEY=
-SMS_FROM=
+SMS_API_KEY=[panel del proveedor de SMS; en Twilio, Console > Account > API keys & tokens]
+SMS_FROM=[el número o alfanumérico remitente dado de alta en el proveedor]
 
 # Servicios externos
-TURNSTILE_SECRET=
+TURNSTILE_SECRET=[Cloudflare > Turnstile > tu widget > "Secret Key"]
 TSA_URL=https://freetsa.org/tsr
-EXPO_ACCESS_TOKEN=
-SENTRY_DSN=
+EXPO_ACCESS_TOKEN=[expo.dev > Account settings > Access tokens > Create token]
+SENTRY_DSN=[Sentry > tu proyecto > Settings > Client Keys (DSN)]
 
 # Superadmin inicial: NO se crea por variables de entorno. Se crea una sola vez con el
 # subcomando idempotente `vecingest bootstrap-superadmin`, pasándole las credenciales en la
 # invocación, para no dejar una contraseña de administrador en las variables del stack. Ver 5.1.
+# La contraseña que le pases debe cumplir la política de 5.1: 15 caracteres si la cuenta no
+# tiene 2FA, 12 si ya tiene TOTP activo. Para generarla: [openssl rand -base64 24]
 ```
 
 ## 9. Convenciones de código y Definition of Done
@@ -1408,7 +1504,7 @@ Formato: cada línea es una comprobación con su evidencia. El hito se cierra cu
 - [ ] DAST (ZAP full) contra staging en el pipeline de release. *Evidencia: workflow.*
 - [ ] Code signing de `expo-updates` con clave fuera de Expo; 2FA en Expo, GitHub, Cloudflare y registrador. *Evidencia: capturas.*
 - [ ] `security.txt`, política de divulgación y runbook de incidentes con simulacro realizado (tabletop de 1 h). *Evidencia: acta del simulacro.*
-- [ ] Host endurecido según 6.1 (ufw, SSH por clave, fail2ban, unattended-upgrades, panel de NPM no expuesto). *Evidencia: salida de `lynis` o checklist.*
+- [ ] Host endurecido según 6.1 (ufw, SSH por clave, fail2ban, unattended-upgrades, panel de NPM no expuesto). Incluye `SITE_PORT`, `WEB_PORT` y `API_PORT` (§8): publicarlos en el host para el proxy inverso manual desplaza el límite de seguridad que antes ponía la red docker compartida al cortafuegos, así que ufw debe cerrarlos explícitamente a Internet o quedan expuestos. *Evidencia: salida de `lynis` o checklist, más regla de `ufw` para esos tres puertos.*
 - [ ] Etiquetas de privacidad de App Store y Data Safety de Google coherentes con la sección 4.4. *Evidencia: capturas.*
 - [ ] Registro de actividades de tratamiento y contrato de encargo firmados con los despachos piloto. *Evidencia: documentos.*
 

@@ -1,0 +1,17 @@
+rules:
+  - id: single-writer-audit-log
+    languages: [go]
+    severity: ERROR
+    message: >-
+      InsertAuditLog is the audit_log hash chain's single writer (design
+      D-O). It must only be called from internal/domain/audit.Append --
+      any other caller can insert a row outside the hash-chain
+      computation, breaking the chain invariant db-access-control's
+      audit_log Hash Chain requirement depends on.
+    patterns:
+      - pattern-either:
+          - pattern: $Q.InsertAuditLog(...)
+          - pattern: $Q.InsertAuditLogContext(...)
+    paths:
+      exclude:
+        - "**/internal/domain/audit/**"
