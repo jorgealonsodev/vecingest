@@ -25,7 +25,7 @@ FROM deps AS build
 COPY site ./site
 RUN pnpm --filter site build
 
-FROM nginxinc/nginx-unprivileged:1.27-alpine
+FROM nginxinc/nginx-unprivileged:1.30-alpine
 COPY --from=build /workspace/site/dist /usr/share/nginx/html
 COPY site/nginx.conf /etc/nginx/conf.d/default.conf
 USER 1000:1000
