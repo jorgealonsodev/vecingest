@@ -27,3 +27,4 @@ deploy/.env
 # CodeGraph index — local to this checkout. Its root path and the indexed bytes
 # are checkout-specific, so every worktree needs its own; never share or copy one.
 .codegraph/
+.playwright-mcp/
