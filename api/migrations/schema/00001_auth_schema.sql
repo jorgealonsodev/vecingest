@@ -3,7 +3,8 @@
 -- vecingest_owner: the bootstrap set's fail-closed default-privilege
 -- baseline (D-B) only grants SELECT, INSERT to app_rw automatically for
 -- objects created by that exact role. A superuser can SET ROLE to any
--- role regardless of membership, which is exactly what MIGRATIONS_DATABASE_URL
+-- role regardless of membership, which is exactly what the schema-set
+-- connection (derived from BOOTSTRAP_DATABASE_URL by migrate.SchemaDSN)
 -- relies on since vecingest_owner itself is NOLOGIN.
 SET ROLE vecingest_owner;
 

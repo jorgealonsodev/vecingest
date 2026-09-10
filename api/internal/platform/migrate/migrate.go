@@ -11,6 +11,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io/fs"
+	"net/url"
 
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/lock"
@@ -18,6 +19,51 @@ import (
 	"github.com/jorgealonsodev/vecingest/migrations/bootstrap"
 	"github.com/jorgealonsodev/vecingest/migrations/schema"
 )
+
+// ownerRoleOption is libpq's startup-parameter form of `SET ROLE
+// vecingest_owner`, pre-percent-encoded (%20 is a space, %3D an `=`) to
+// match exactly what docker-compose.yml already runs in production. It
+// has to be a connection-establishment parameter, not a `SET ROLE`
+// statement this package issues itself, because it must cover every
+// physical connection the schema provider's pool opens -- goose's own
+// session-locked advisory-lock connection, whichever connection ends up
+// creating goose_db_version_schema itself (before any of our own
+// migrations run), and every connection River's own rivermigrate library
+// opens through the *sql.DB it is handed. A `SET ROLE` issued after
+// connecting only affects that one connection; each *.sql migration in
+// migrations/schema additionally issues its own `SET ROLE
+// vecingest_owner;` as defense in depth, but that cannot reach goose's or
+// River's internal statements.
+//
+// This is deliberately NOT built with url.Values.Encode(): that encodes a
+// space as `+`, and pgconn's own DSN query-string parser -- unlike
+// net/url's decoder -- does not translate `+` back to a space in the
+// options value, so a `+`-encoded DSN fails to connect with `unrecognized
+// configuration parameter "+role"`. Percent-encoding (%20) round-trips
+// correctly; that mismatch was caught by hand, running this exact
+// derivation against a real Postgres container.
+const ownerRoleOption = "-c%20role%3Dvecingest_owner"
+
+// SchemaDSN derives the schema-set connection string from the bootstrap
+// (superuser) DSN, appending the options startup parameter above so every
+// connection opened from the result assumes vecingest_owner. This is the
+// only DSN that can ever reach vecingest_owner's privileges:
+// vecingest_owner is provisioned NOLOGIN by the bootstrap set
+// (migrations/bootstrap/00001_roles.go), so no DSN can authenticate as it
+// directly, and a superuser can SET ROLE to it regardless of role
+// membership (migrations/schema/schema.go's own doc comment).
+func SchemaDSN(bootstrapDSN string) (string, error) {
+	u, err := url.Parse(bootstrapDSN)
+	if err != nil {
+		return "", fmt.Errorf("migrate: parse bootstrap dsn: %w", err)
+	}
+	if u.RawQuery == "" {
+		u.RawQuery = "options=" + ownerRoleOption
+	} else {
+		u.RawQuery += "&options=" + ownerRoleOption
+	}
+	return u.String(), nil
+}
 
 // NewLockedProvider builds a goose provider guarded by a PostgreSQL
 // session advisory lock pinned to lockID, tracking its own applied-version
@@ -96,9 +142,10 @@ func RunSchema(ctx context.Context, db *sql.DB) error {
 }
 
 // Run applies the bootstrap set (over superuserDB) and then the schema
-// set (over ownerDB), in that order, matching the Data Flow diagram in
-// design.md: provider A (superuser) completes and releases its lock
-// before provider B (owner) acquires its own.
+// set (over ownerDB, opened against the DSN SchemaDSN derives), in that
+// order, matching the Data Flow diagram in design.md: provider A
+// (superuser) completes and releases its lock before provider B (owner)
+// acquires its own.
 func Run(ctx context.Context, superuserDB, ownerDB *sql.DB) error {
 	if err := RunBootstrap(ctx, superuserDB); err != nil {
 		return err

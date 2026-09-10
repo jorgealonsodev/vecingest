@@ -1104,7 +1104,7 @@ Tres fases con los mismos binarios y el mismo esquema. El paso de fase lo decide
 
 - **Fase A** (la que describe esta sección): servidor propio con Docker Compose desplegado como **stack de Portainer** (Docker standalone). Las fases B y C están en 7.10; Portainer gestiona también Swarm, así que el paso a fase B no cambia de herramienta. Portainer construye las imágenes en el servidor a partir de este repositorio (decisión de 8.1.1, con sus contrapartidas aceptadas). Las variables se definen en Portainer (Environment variables); se sustituyen en `${VAR}` y llegan a los contenedores mediante `env_file: stack.env`, que Portainer genera automáticamente. Actualizar = redesplegar, lo que dispara un rebuild sobre el commit que Portainer tenga en checkout. Servicios: `web` (nginx con el export de Expo), `site` (nginx con la web pública estática, generada con Astro), `api` (binario Go, `vecingest serve`), `worker` (misma imagen, `vecingest worker`), `db` (Postgres 17) y, opcional por perfil, `clamav`. Sin Redis. Ficheros en Cloudflare R2. Imagen de la API `distroless/static` con binario estático (< 30 MB), usuario no root, `HEALTHCHECK` en `api` y `worker`. Consumo objetivo del stack en reposo: api 40 MB + worker 40 MB + Postgres 300 MB + nginx ×2 10 MB ≈ 400 MB; con ClamAV, +1 GB.
 - Proxy inverso existente: nginx corre como **contenedor** en Portainer y hace de proxy inverso de todos los stacks del servidor; se configura **a mano**, apuntando a puertos publicados en el host, no a una red docker compartida. Nuestro stack publica esos puertos para que nginx los use como destino: `DOMAIN → host:SITE_PORT`, `app.DOMAIN → host:WEB_PORT`, `api.DOMAIN → host:API_PORT` (con `client_max_body_size 1m` en el host de la API: la API nunca recibe binarios). **`site` y `web` escuchan en 8080 dentro del contenedor, no en 80**: sus imágenes se construyen sobre `nginxinc/nginx-unprivileged` y corren como usuario no root, porque la imagen oficial de nginx arranca como root y no cumple el punto de contenedores no root de 10.1; por eso el puerto publicado en el host mapea a 8080, no a 80, dentro del contenedor.
-- Variables de entorno (plantilla en `env.example`, valores en Portainer, nunca en el repositorio): `DOMAIN`, `APP_URL`, `APP_ENV` (`development` | `staging` | `production`), `CORS_ORIGINS`, `POSTGRES_*` (superusuario, solo para el arranque de roles), `APP_DB_USER`, `APP_DB_PASSWORD`, `BOOTSTRAP_DATABASE_URL`, `MIGRATIONS_DATABASE_URL`, `JWT_SECRET`, `JWT_SECRET_PREVIOUS`, `JWT_REFRESH_SECRET`, `ENCRYPTION_KEY` (32 bytes en base64; en Portainer va como variable de entorno porque los secretos por fichero no están disponibles en Docker standalone; ver mitigación en 6.1), `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_BACKUP_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `SMTP_URL`, `MAIL_FROM`, `TURNSTILE_SECRET`, `TSA_URL`, `EXPO_ACCESS_TOKEN`, `SENTRY_DSN`, `PROXY_IP` (dirección que la API observa como origen de la petición de nginx, para `trust proxy`), `SITE_PORT`, `WEB_PORT` y `API_PORT` (puertos publicados en el host para que nginx los use como destino). El superadmin inicial no figura aquí: se crea con `vecingest bootstrap-superadmin` y sus credenciales no se guardan como variables del stack (ver 5.1).
+- Variables de entorno (plantilla en `env.example`, valores en Portainer, nunca en el repositorio): `DOMAIN`, `APP_URL`, `APP_ENV` (`development` | `staging` | `production`), `CORS_ORIGINS`, `POSTGRES_*` (superusuario, solo para el arranque de roles), `APP_DB_USER`, `APP_DB_PASSWORD`, `BOOTSTRAP_DATABASE_URL`, `JWT_SECRET`, `JWT_SECRET_PREVIOUS`, `JWT_REFRESH_SECRET`, `ENCRYPTION_KEY` (32 bytes en base64; en Portainer va como variable de entorno porque los secretos por fichero no están disponibles en Docker standalone; ver mitigación en 6.1), `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_BACKUP_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `SMTP_URL`, `MAIL_FROM`, `TURNSTILE_SECRET`, `TSA_URL`, `EXPO_ACCESS_TOKEN`, `SENTRY_DSN`, `PROXY_IP` (dirección que la API observa como origen de la petición de nginx, para `trust proxy`), `SITE_PORT`, `WEB_PORT` y `API_PORT` (puertos publicados en el host para que nginx los use como destino). El superadmin inicial no figura aquí: se crea con `vecingest bootstrap-superadmin` y sus credenciales no se guardan como variables del stack (ver 5.1).
 - Entornos: `development` (local con `docker compose -f docker-compose.dev.yml`, solo db; API con `air` para recarga y app en el host), `staging` (opcional, mismo compose con otro `.env` y subdominios `staging-*`), `production`.
 - Datos de prueba: `vecingest seed` crea un despacho, dos comunidades con viviendas, una empresa verificada y usuarios de cada rol con contraseña conocida (solo si `APP_ENV != production`).
 - Migraciones: `vecingest migrate` se ejecuta en el arranque del contenedor `api` (con bloqueo de aviso en Postgres para que `worker` no arranque a la vez). La creación del rol `app_rw` sin `UPDATE`/`DELETE` en tablas append-only es una migración `goose`, no un script de `docker-entrypoint-initdb.d`, para no depender de bind mounts que Portainer no tiene. Las migraciones corren con el rol propietario; `api` y `worker` se conectan como `app_rw`.
@@ -1206,18 +1206,19 @@ x-app-image: &app-image
     # posee ninguna tabla; `vecingest_owner` posee todos los objetos del esquema. Conectar
     # la API como superusuario haría imposible el punto del rol restringido de 10.1.
     DATABASE_URL: postgres://${APP_DB_USER}:${APP_DB_PASSWORD}@db:5432/${POSTGRES_DB}
-    # Las dos URLs de migración se DERIVAN aquí, no se teclean en el entorno del stack.
-    # Antes eran dos variables escritas a mano y los dos fallos aparecieron en un despliegue
-    # real: nadie puede inventar una contraseña para `vecingest_owner` (se crea NOLOGIN, así
-    # que no existe ninguna), y pegar la URL larga del owner en el editor de variables de
-    # Portainer la partió en dos líneas, tumbando el stack entero con
-    # `unexpected character "?" in variable name`.
+    # BOOTSTRAP_DATABASE_URL se DERIVA aquí, no se teclea en el entorno del stack, y es la
+    # ÚNICA URL de migración que pone este stack. Antes existía una segunda variable escrita
+    # a mano, MIGRATIONS_DATABASE_URL, y los dos fallos que causó en un despliegue real son
+    # el motivo de que se haya quitado en vez de solo arreglado: nadie puede inventar una
+    # contraseña para `vecingest_owner` (se crea NOLOGIN, así que no existe ninguna), y pegar
+    # su URL larga derivada en el editor de variables de Portainer la partió en dos líneas,
+    # tumbando el stack entero con `unexpected character "?" in variable name`. El binario
+    # ahora deriva esa misma conexión él mismo (api/internal/platform/migrate.SchemaDSN) a
+    # partir de BOOTSTRAP_DATABASE_URL, añadiendo el mismo parámetro `options` para que el set
+    # de esquema conecte como superusuario pero asuma inmediatamente `vecingest_owner`: todo
+    # objeto que crea pertenece a ese rol mientras el rol sigue siendo NOLOGIN e inalcanzable
+    # por ninguna URL.
     BOOTSTRAP_DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-    # El set de esquema conecta como superusuario pero asume inmediatamente `vecingest_owner`
-    # mediante el parámetro `options` de libpq, así que todo objeto que crea pertenece a ese
-    # rol mientras el rol sigue siendo NOLOGIN e inalcanzable. %20 es un espacio y %3D un `=`;
-    # deben quedarse codificados o la URL se interpreta mal.
-    MIGRATIONS_DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?options=-c%20role%3Dvecingest_owner
       CLAMAV_HOST: clamav
     S3_ENDPOINT: https://${R2_ACCOUNT_ID}.eu.r2.cloudflarestorage.com
     S3_REGION: auto
@@ -1406,11 +1407,14 @@ POSTGRES_PASSWORD=[openssl rand -hex 32]
 POSTGRES_DB=vecingest
 APP_DB_USER=app_rw                           # rol de runtime, sin UPDATE/DELETE/TRUNCATE en tablas append-only
 APP_DB_PASSWORD=[openssl rand -hex 32]
-# BOOTSTRAP_DATABASE_URL y MIGRATIONS_DATABASE_URL ya NO se ponen aquí ni en Portainer:
-# las construye docker-compose.yml a partir de POSTGRES_USER, POSTGRES_PASSWORD y
-# POSTGRES_DB. Se quitaron tras romper un despliegue real por dos motivos distintos:
-# `vecingest_owner` se crea NOLOGIN y sin contraseña, así que no hay ninguna que teclear,
-# y la URL larga se partió en dos líneas al pegarla en el editor de variables.
+# BOOTSTRAP_DATABASE_URL no se pone aquí ni en Portainer: la construye
+# docker-compose.yml a partir de POSTGRES_USER, POSTGRES_PASSWORD y POSTGRES_DB.
+# MIGRATIONS_DATABASE_URL ya no existe como variable en ningún sitio: el propio
+# binario deriva esa conexión a partir de BOOTSTRAP_DATABASE_URL
+# (api/internal/platform/migrate.SchemaDSN). Se quitó tras romper un despliegue
+# real por dos motivos distintos: `vecingest_owner` se crea NOLOGIN y sin
+# contraseña, así que no hay ninguna que teclear, y la URL larga se partió en
+# dos líneas al pegarla en el editor de variables.
 
 # Claves de la aplicación (32 bytes en base64 cada una; no viajan en ninguna URL)
 JWT_SECRET=[openssl rand -base64 32]

@@ -109,20 +109,21 @@ x-app-image: &app-image
     # object. Connecting the API as the superuser would make the
     # restricted-role gate in PRD §10.1 unachievable.
     DATABASE_URL: postgres://${APP_DB_USER}:${APP_DB_PASSWORD}@db:5432/${POSTGRES_DB}
-    # Both migration DSNs are DERIVED here, never typed into the stack
-    # environment. They used to be two hand-written variables, and both
-    # failure modes showed up in a real deploy: an operator cannot invent a
-    # password for `vecingest_owner` (it is created NOLOGIN, so no password
-    # exists), and pasting the long owner URL into Portainer's variable
-    # editor wrapped it across two lines, which failed the whole stack with
-    # `unexpected character "?" in variable name`.
+    # BOOTSTRAP_DATABASE_URL is DERIVED here, never typed into the stack
+    # environment, and it is the ONLY migration DSN this stack sets. There
+    # used to be a second hand-written variable, MIGRATIONS_DATABASE_URL,
+    # and both failure modes it caused in a real deploy are why it is gone
+    # now instead of just fixed: an operator cannot invent a password for
+    # `vecingest_owner` (it is created NOLOGIN, so no password exists), and
+    # pasting its long derived URL into Portainer's variable editor wrapped
+    # it across two lines, which failed the whole stack with `unexpected
+    # character "?" in variable name`. The binary now derives that same
+    # connection itself (api/internal/platform/migrate.SchemaDSN) from
+    # BOOTSTRAP_DATABASE_URL, adding the identical `options` startup
+    # parameter so the schema set connects as the superuser but immediately
+    # assumes `vecingest_owner`: every object it creates is owned by that
+    # role while the role itself stays NOLOGIN and unreachable by any DSN.
     BOOTSTRAP_DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-    # The schema set connects as the superuser but immediately assumes
-    # `vecingest_owner` through libpq's `options` startup parameter, so every
-    # object it creates is owned by that role while the role itself stays
-    # NOLOGIN and unreachable. %20 is a space and %3D an `=`; both must stay
-    # percent-encoded or the DSN is parsed wrong.
-    MIGRATIONS_DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?options=-c%20role%3Dvecingest_owner
     # `.eu.` is NOT decorative: a bucket created under the EU
     # jurisdictional restriction (PRD 348 requires it -- the data is
     # DNI, IBAN and minutes of owners' meetings) is only reachable at

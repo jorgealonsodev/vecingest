@@ -46,26 +46,25 @@ const (
 )
 
 const (
-	envDomain                = "DOMAIN"
-	envAppEnv                = "APP_ENV"
-	envPort                  = "PORT"
-	envProxyIP               = "PROXY_IP"
-	envCorsOrigins           = "CORS_ORIGINS"
-	envMailFrom              = "MAIL_FROM"
-	envSMTPURL               = "SMTP_URL"
-	envDatabaseURL           = "DATABASE_URL"
-	envDatabaseURLRead       = "DATABASE_URL_READ"
-	envDatabaseURLWorker     = "DATABASE_URL_WORKER"
-	envBootstrapDatabaseURL  = "BOOTSTRAP_DATABASE_URL"
-	envMigrationsDatabaseURL = "MIGRATIONS_DATABASE_URL"
-	envAppDBUser             = "APP_DB_USER"
-	envAppDBPassword         = "APP_DB_PASSWORD"
-	envJWTSecret             = "JWT_SECRET"
-	envJWTSecretPrevious     = "JWT_SECRET_PREVIOUS" //nolint:gosec // G101: an environment variable NAME, not a credential value
-	envJWTRefreshSecret      = "JWT_REFRESH_SECRET"  //nolint:gosec // G101: an environment variable NAME, not a credential value
-	envEncryptionKey         = "ENCRYPTION_KEY"
-	envSentryDSN             = "SENTRY_DSN"
-	envTurnstileSecret       = "TURNSTILE_SECRET"
+	envDomain               = "DOMAIN"
+	envAppEnv               = "APP_ENV"
+	envPort                 = "PORT"
+	envProxyIP              = "PROXY_IP"
+	envCorsOrigins          = "CORS_ORIGINS"
+	envMailFrom             = "MAIL_FROM"
+	envSMTPURL              = "SMTP_URL"
+	envDatabaseURL          = "DATABASE_URL"
+	envDatabaseURLRead      = "DATABASE_URL_READ"
+	envDatabaseURLWorker    = "DATABASE_URL_WORKER"
+	envBootstrapDatabaseURL = "BOOTSTRAP_DATABASE_URL"
+	envAppDBUser            = "APP_DB_USER"
+	envAppDBPassword        = "APP_DB_PASSWORD"
+	envJWTSecret            = "JWT_SECRET"
+	envJWTSecretPrevious    = "JWT_SECRET_PREVIOUS" //nolint:gosec // G101: an environment variable NAME, not a credential value
+	envJWTRefreshSecret     = "JWT_REFRESH_SECRET"  //nolint:gosec // G101: an environment variable NAME, not a credential value
+	envEncryptionKey        = "ENCRYPTION_KEY"
+	envSentryDSN            = "SENTRY_DSN"
+	envTurnstileSecret      = "TURNSTILE_SECRET"
 )
 
 // Config is the exported, log-safe object. It holds no secret: every
@@ -159,12 +158,11 @@ func requirementSet(cmd Command) map[string]requiredFunc {
 	case CommandServe:
 		return serveVars
 	case CommandMigrate:
-		out := make(map[string]requiredFunc, len(serveVars)+4)
+		out := make(map[string]requiredFunc, len(serveVars)+3)
 		for k, v := range serveVars {
 			out[k] = v
 		}
 		out[envBootstrapDatabaseURL] = always
-		out[envMigrationsDatabaseURL] = always
 		out[envAppDBUser] = always
 		out[envAppDBPassword] = always
 		return out
@@ -277,19 +275,18 @@ func Load(_ context.Context, lookup LookupEnv, cmd Command) (Config, *secrets.Ho
 	}
 
 	holder := secrets.NewHolder(secrets.Values{
-		JWTSecret:             values[envJWTSecret],
-		JWTSecretPrevious:     values[envJWTSecretPrevious],
-		JWTRefreshSecret:      values[envJWTRefreshSecret],
-		EncryptionKey:         encKey,
-		DatabaseURL:           values[envDatabaseURL],
-		DatabaseURLRead:       dbURLRead,
-		DatabaseURLWorker:     dbURLWorker,
-		BootstrapDatabaseURL:  values[envBootstrapDatabaseURL],
-		MigrationsDatabaseURL: values[envMigrationsDatabaseURL],
-		AppDBPassword:         values[envAppDBPassword],
-		SMTPURL:               values[envSMTPURL],
-		SentryDSN:             values[envSentryDSN],
-		TurnstileSecret:       values[envTurnstileSecret],
+		JWTSecret:            values[envJWTSecret],
+		JWTSecretPrevious:    values[envJWTSecretPrevious],
+		JWTRefreshSecret:     values[envJWTRefreshSecret],
+		EncryptionKey:        encKey,
+		DatabaseURL:          values[envDatabaseURL],
+		DatabaseURLRead:      dbURLRead,
+		DatabaseURLWorker:    dbURLWorker,
+		BootstrapDatabaseURL: values[envBootstrapDatabaseURL],
+		AppDBPassword:        values[envAppDBPassword],
+		SMTPURL:              values[envSMTPURL],
+		SentryDSN:            values[envSentryDSN],
+		TurnstileSecret:      values[envTurnstileSecret],
 	})
 
 	// platform-bootstrap: ENCRYPTION_KEY Isolation -- once validation

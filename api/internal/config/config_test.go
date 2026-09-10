@@ -20,21 +20,20 @@ func validEncryptionKey() string {
 // removes exactly the variable under test.
 func fullValidEnv() map[string]string {
 	return map[string]string{ //nolint:gosec // G101: fake fixture DSNs/passwords for a test-only local environment map, never real credentials
-		"JWT_SECRET":              "test-jwt-secret",
-		"JWT_REFRESH_SECRET":      "test-jwt-refresh-secret",
-		"DOMAIN":                  "example.com",
-		"DATABASE_URL":            "postgres://app_rw:pw@localhost:5432/vecingest",
-		"PROXY_IP":                "172.18.0.2",
-		"CORS_ORIGINS":            "https://app.example.com",
-		"ENCRYPTION_KEY":          validEncryptionKey(),
-		"SMTP_URL":                "smtps://user:pw@smtp.example.com:465",
-		"MAIL_FROM":               "Vecingest <no-reply@example.com>",
-		"APP_ENV":                 "production",
-		"PORT":                    "3000",
-		"BOOTSTRAP_DATABASE_URL":  "postgres://postgres:pw@localhost:5432/vecingest",
-		"MIGRATIONS_DATABASE_URL": "postgres://vecingest_owner:pw@localhost:5432/vecingest",
-		"APP_DB_USER":             "app_rw",
-		"APP_DB_PASSWORD":         "pw",
+		"JWT_SECRET":             "test-jwt-secret",
+		"JWT_REFRESH_SECRET":     "test-jwt-refresh-secret",
+		"DOMAIN":                 "example.com",
+		"DATABASE_URL":           "postgres://app_rw:pw@localhost:5432/vecingest",
+		"PROXY_IP":               "172.18.0.2",
+		"CORS_ORIGINS":           "https://app.example.com",
+		"ENCRYPTION_KEY":         validEncryptionKey(),
+		"SMTP_URL":               "smtps://user:pw@smtp.example.com:465",
+		"MAIL_FROM":              "Vecingest <no-reply@example.com>",
+		"APP_ENV":                "production",
+		"PORT":                   "3000",
+		"BOOTSTRAP_DATABASE_URL": "postgres://postgres:pw@localhost:5432/vecingest",
+		"APP_DB_USER":            "app_rw",
+		"APP_DB_PASSWORD":        "pw",
 	}
 }
 
