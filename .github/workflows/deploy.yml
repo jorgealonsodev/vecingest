@@ -125,10 +125,30 @@ jobs:
     needs: [build-and-scan]
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Job-level `env` is one of the few scopes where the `secrets` context
+    # resolves; a job-level `if:` is NOT (same restriction that made the
+    # matrix build-arg fail at startup). Reading it here lets the step below
+    # decide whether it has anything to POST.
+    env:
+      PORTAINER_WEBHOOK_URL: ${{ secrets.PORTAINER_WEBHOOK_URL }}
     steps:
       # Portainer's stack has `build:` in docker-compose.yml now, so this
       # webhook no longer triggers a pull -- it triggers a full rebuild on
       # the server from whatever commit is checked out there (PRD §8.1.1).
+      #
+      # The secret is OPTIONAL: deploys can equally be triggered by hand from
+      # Portainer's UI. When it is unset this step is skipped rather than
+      # failing, because `curl -X POST ""` exits 3 and painted every single
+      # push red -- and a pipeline that is always red stops reporting
+      # anything. The skip is visible in the run summary, so an absent
+      # webhook stays discoverable instead of silently passing.
       - name: POST Portainer stack webhook (now triggers a server-side rebuild, not a pull)
+        if: env.PORTAINER_WEBHOOK_URL != ''
         run: |
-          curl --fail-with-body -sS -X POST "${{ secrets.PORTAINER_WEBHOOK_URL }}"
+          curl --fail-with-body -sS -X POST "$PORTAINER_WEBHOOK_URL"
+
+      - name: no webhook configured
+        if: env.PORTAINER_WEBHOOK_URL == ''
+        run: |
+          echo "PORTAINER_WEBHOOK_URL is not set -- skipping the redeploy trigger."
+          echo "Redeploy by hand from Portainer, or add the secret to enable this step."
