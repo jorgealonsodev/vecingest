@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Platform, StyleSheet, View } from "react-native";
-import { Button, HelperText, Text, TextInput } from "react-native-paper";
+import { Button, HelperText, Text, TextInput, useTheme } from "react-native-paper";
 import { schemas } from "@vecingest/shared/schemas";
 import type { ApiErrorBody } from "@vecingest/shared/errors";
 import type { z } from "zod";
@@ -28,6 +28,7 @@ function nativePlatform(): LoginFormValues["platform"] {
  * never a field the user fills in.
  */
 export function LoginScreen() {
+  const theme = useTheme();
   const [serverError, setServerError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -75,7 +76,7 @@ export function LoginScreen() {
   });
 
   return (
-    <View style={styles.container}>
+    <View testID="login-screen" style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <Text variant="headlineLarge" style={styles.title}>
         Iniciar sesión
       </Text>

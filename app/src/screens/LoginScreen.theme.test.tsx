@@ -27,6 +27,12 @@ describe("LoginScreen — light mode", () => {
     expect(submit).toHaveStyle({ backgroundColor: ACCENT_LIGHT });
     expect(submit).not.toHaveStyle({ backgroundColor: ACCENT_DARK });
 
+    // The screen paints the theme's own background — not left transparent
+    // for the browser/OS default grey to show through.
+    expect(screen.getByTestId("login-screen")).toHaveStyle({
+      backgroundColor: lightTheme.colors.background,
+    });
+
     expect(screen.getByTestId("login-email")).toBeTruthy();
     expect(screen.getByTestId("login-password")).toBeTruthy();
     expect(MIN_TOUCH_TARGET).toBe(44);
@@ -46,6 +52,15 @@ describe("LoginScreen — dark mode", () => {
     // The dark system's own accent — never the light system's.
     expect(submit).toHaveStyle({ backgroundColor: ACCENT_DARK });
     expect(submit).not.toHaveStyle({ backgroundColor: ACCENT_LIGHT });
+
+    // The screen paints the dark theme's own background, not the light
+    // theme's surface leaking through.
+    expect(screen.getByTestId("login-screen")).toHaveStyle({
+      backgroundColor: darkTheme.colors.background,
+    });
+    expect(screen.getByTestId("login-screen")).not.toHaveStyle({
+      backgroundColor: lightTheme.colors.background,
+    });
 
     // WCAG contrast: on-background text against the dark background, and
     // the accent's own text pairing, both clear the 4.5:1 AA floor for
