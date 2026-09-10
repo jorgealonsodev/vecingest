@@ -25,4 +25,14 @@ describe("pickTheme", () => {
   it("keeps light and dark as two distinct accents — no other blue in the interface", () => {
     expect(lightTheme.colors.primary).not.toBe(darkTheme.colors.primary);
   });
+
+  it("pins background/surface to the exact docs/design frontmatter hex values", () => {
+    // docs/design/vecingest-light.md `colors:` frontmatter.
+    expect(lightTheme.colors.background).toBe("#fbf9f2");
+    expect(lightTheme.colors.surface).toBe("#fbf9f2");
+
+    // docs/design/vecingest-dark.md `colors:` frontmatter.
+    expect(darkTheme.colors.background).toBe("#131312");
+    expect(darkTheme.colors.surface).toBe("#131312");
+  });
 });
