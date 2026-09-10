@@ -147,34 +147,79 @@ toca.
 
 ## Deuda técnica
 
-### 8. Quitar `MIGRATIONS_DATABASE_URL` del contrato de configuración
+### 8. ~~Quitar `MIGRATIONS_DATABASE_URL` del contrato de configuración~~ — HECHO (2026-09-10)
 
-Hoy funciona porque el compose la deriva conectándose como superusuario y
-asumiendo el rol (`?options=-c%20role%3Dvecingest_owner`), lo cual está
-verificado: las 24 tablas del esquema quedan a nombre de `vecingest_owner` y el
-rol sigue siendo `NOLOGIN`. Pero sigue siendo una variable en el conjunto de
-requisitos de `CommandMigrate` que ningún operador debería tener que conocer.
+La variable ya no existe en ningún sitio: ni en `config.go` (ni la constante
+`envMigrationsDatabaseURL` ni la entrada en el conjunto de requisitos de
+`CommandMigrate`), ni en `docker-compose.yml`, ni en `env.example`, ni en
+`PRD_go.md` (§8.1, §8.2, §1107). El binario deriva la conexión del esquema en
+tiempo de ejecución a partir de `BOOTSTRAP_DATABASE_URL`
+(`api/internal/platform/migrate.SchemaDSN`), añadiendo el mismo parámetro de
+arranque de libpq que antes ponía el compose (`options=-c%20role%3Dvecingest_owner`,
+ahora construido dentro del binario en vez de tecleado en el YAML) para que
+**toda** conexión que abre el pool del set de esquema asuma `vecingest_owner`
+desde el momento de conectar, no solo la primera.
 
-Lo limpio es derivar la conexión del esquema desde `BOOTSTRAP_DATABASE_URL`
-dentro del código y borrar la variable de `config.go` y del `Holder`.
+Esa distinción importó de verdad: una primera versión de `SchemaDSN` montaba el
+parámetro con `url.Values.Encode()`, que codifica el espacio como `+`, y pgconn
+no traduce `+` de vuelta a espacio en `options` (a diferencia de `net/url` al
+decodificar) — el intento de migrar fallaba con
+`unrecognized configuration parameter "+role"`. El arreglo fue construir el
+parámetro ya porcentaje-codificado (`%20`, `%3D`), igual que el literal que ya
+funcionaba en `docker-compose.yml`.
 
-### 9. Arreglar el falso verde de `migrate_test.go`
+`env.example` y `PRD_go.md` §8.2 se comprobaron idénticos byte a byte con
+`diff` tras el cambio.
 
-`api/cmd/vecingest/migrate_test.go:50-51` apunta `BOOTSTRAP_DATABASE_URL` y
-`MIGRATIONS_DATABASE_URL` **al mismo DSN de superusuario**. Por eso el test
-nunca se conecta como el owner y pasaba en verde mientras producción se caía
-con `password authentication failed for user "vecingest_owner"`.
+Único punto que no se pudo tocar en esta sesión: el campo `MigrationsDatabaseURL`
+y su accessor en `api/internal/config/secrets/holder.go` siguen declarados
+(ya no los rellena nadie, así que quedan siempre vacíos y sin uso real). El
+sandbox del agente que hizo este cambio deniega lectura y escritura de
+cualquier ruta bajo `**/secrets/*`, así que ese borrado concreto lo tiene que
+hacer una persona con acceso directo al fichero.
 
-El test que hay que añadir no es "que migre sin error", sino que consulte el
-catálogo y compruebe que:
+Verificado de punta a punta contra un Postgres 17 real levantado solo para
+esta comprobación: `go run ./cmd/vecingest migrate` con únicamente las
+variables que hoy declara `CommandMigrate` (sin `MIGRATIONS_DATABASE_URL` en
+ningún sitio) termina con `migrate: applied`, y el catálogo confirma las 24
+tablas del esquema a nombre de `vecingest_owner`, `goose_db_version_bootstrap`
+a nombre del superusuario, y `vecingest_owner` con `rolcanlogin = f`.
+
+### 9. ~~Arreglar el falso verde de `migrate_test.go`~~ — HECHO (2026-09-10)
+
+`TestRunMigrate_AppliesBootstrapAndSchemaSets` ya no fija
+`MIGRATIONS_DATABASE_URL` en absoluto (la variable no existe); solo pone
+`BOOTSTRAP_DATABASE_URL`, y `runMigrate` deriva la conexión del esquema él
+mismo, exactamente como en producción.
+
+Se añadió `TestRunMigrate_SchemaSetOwnershipIsRestricted`, que hace lo que
+pedía este punto: tras un `runMigrate` real contra un contenedor
+Testcontainers, consulta el catálogo y comprueba que:
 
 - `vecingest_owner` conserva `rolcanlogin = false`, y
-- las tablas creadas por el set de esquema pertenecen a `vecingest_owner`
-  (`pg_class.relowner` contra `pg_roles`), no al superusuario.
+- toda tabla de `public` (`pg_class.relowner` contra `pg_roles`) pertenece a
+  `vecingest_owner`, **salvo** `goose_db_version_bootstrap`, para la que se
+  afirma explícitamente que su dueño es el superusuario — no se excluye en
+  silencio, se comprueba el valor exacto.
 
-Sin la segunda comprobación, cualquier arreglo futuro puede degradar en
-silencio a "las migraciones corren como superusuario y todo es suyo", que
-rompe la puerta del rol restringido de §10.1 sin que nadie se entere.
+Prueba de que el test realmente detecta la regresión, no solo que pasa: se
+rompió `SchemaDSN` a mano (devolviendo el DSN del superusuario sin el
+parámetro `options`, simulando "las migraciones corren como superusuario y
+todo es suyo") y se ejecutó el test. Falló señalando exactamente
+`goose_db_version_schema`, `river_job`, `river_leader`, `river_queue`,
+`river_migration` y `river_notification` como propiedad de `postgres` en vez
+de `vecingest_owner` — las tablas creadas por los ficheros `.sql` del set de
+esquema (`users`, `audit_log`, etc.) no aparecieron en el fallo porque cada
+uno de esos ficheros ya emite su propio `SET ROLE vecingest_owner;`, pero ni
+la tabla de versión que crea `goose` internamente ni las migraciones de River
+(vía `rivermigrate`, que no emite ese `SET ROLE`) tienen esa protección — de
+ahí que la comprobación 2 de este punto sea imprescindible y no baste con la
+del punto 8. Se restauró `SchemaDSN` y se confirmó que ambos tests vuelven a
+pasar.
+
+`assertAppRwNotOwnerMember` (`api/migrations/bootstrap/00001_roles.go`) sigue
+en verde: comprueba membresía de rol, no propiedad de tabla, y por eso no
+habría detectado esta regresión por sí sola.
 
 ### 10. Un test que ejecute el contenedor, no solo el binario
 
