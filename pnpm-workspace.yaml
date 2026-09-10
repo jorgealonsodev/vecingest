@@ -12,6 +12,16 @@ auditConfig:
     - CVE-2025-71330
     - CVE-2025-71329
 
+# GHSA-2883-xcg3-v3hh (js-yaml < 4.3.2, CPU exhaustion on empty merge
+# sources). It arrives transitively as
+# packages/shared > openapi-typescript > @redocly/openapi-core > js-yaml,
+# so it is build-time only and never reaches a shipped artifact -- but it IS
+# fixable upstream, and the ignoreCves list above is reserved for CVEs with
+# no published fix. Pinned inside 4.x on purpose: js-yaml 5.x is a major
+# release that @redocly/openapi-core does not declare support for.
+overrides:
+  js-yaml@>=4.0.0 <4.3.2: "^4.3.2"
+
 # Supply-chain hardening (PRD_go.md 6.1, "Cadena de suministro"; semgrep
 # package_managers.pnpm rules, wired blocking in security.yml).
 blockExoticSubdeps: true
