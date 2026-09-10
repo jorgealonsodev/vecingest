@@ -248,6 +248,31 @@ El punto anterior es detectable estáticamente: ningún servicio que use el ancl
 advierte en un comentario, que es exactamente la clase de protección que se
 pierde en el siguiente cambio.
 
+### 12. El linting de TypeScript no analiza nada
+
+`turbo run lint` informa **4/4 correcto** sin revisar una sola línea de
+TypeScript. Los tres paquetes de frontend tienen el mismo script:
+
+```
+app             lint = echo 'app: lint not yet configured (Phase 11)' && exit 0
+packages/shared lint = echo 'packages/shared: lint not yet configured (Phase 11)' && exit 0
+site            lint = echo 'site: lint not yet configured' && exit 0
+```
+
+El `(Phase 11)` de esos mensajes es una promesa que nunca llegó a ser tarea:
+la fase 11 de `tasks.md` solo cablea los trabajos de Go y los escáneres de
+seguridad, y no hay ninguna tarea que pida ESLint, Biome ni equivalente. Así
+que no es una tarea cerrada en falso, es una que no existe.
+
+El lado Go sí se analiza de verdad (`golangci-lint` desde `api/`). El lado
+TypeScript, que es todo el frontend y el cliente generado, no tiene ninguna
+comprobación estática más allá de `tsc --noEmit`.
+
+Mismo patrón que los demás falsos verdes de este proyecto: una comprobación
+que informa de éxito sin haber mirado nada. Encontrado al arreglar los colores
+del tema, cuando la verificación decía "lint 4/4 correcto" sobre un cambio que
+tocaba precisamente TypeScript.
+
 ## Sin implementar todavía (no son fallos)
 
 Estas variables están declaradas en el PRD y previstas en la configuración,
