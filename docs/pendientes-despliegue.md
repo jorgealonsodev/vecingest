@@ -297,7 +297,35 @@ existe, los cinco contenedores están sanos y 13.2, 14.1, 14.2 y 14.6 quedan
 cerrados con evidencia real (`docs/security/evidence/checkpoint-b/2026-09-08-server-verification.md`).
 Lo que sigue **no lo puede cerrar un agente**: necesita a una persona.
 
-### 1. Crear la cuenta de superadmin (bloquea 14.3, 14.4 y 14.5)
+### 1. ~~Crear la cuenta de superadmin~~ — HECHO (2026-09-10)
+
+Ya no bloquea nada. La base pasó de cero usuarios a dos:
+
+- `admin@vecingest.xdev.es` — superadmin.
+- `test@vecingest.xdev.es` — usuario normal, creado con el mismo subcomando
+  (para pasar por la validación contra HIBP y el hasheo Argon2id) y degradado
+  después con `UPDATE users SET is_superadmin = false`. Su campo `name` dice
+  "Superadmin"; es solo cosmético.
+
+Hizo falta un usuario normal porque **un superadmin no puede entrar por
+`/v1/auth/login`**: `api/internal/http/handlers/auth_login.go:52` rechaza esas
+cuentas a propósito y devuelve el mismo `AUTH_INVALID_CREDENTIALS` que una
+contraseña equivocada, para no revelar que la cuenta existe y es privilegiada.
+Los superadmins entran por `/v1/auth/superadmin/login`, con TOTP obligatorio.
+
+Tampoco se usó `seed`: se niega a correr fuera de `development`/`staging`, y su
+contraseña `vecingest-dev-2024` es una constante pública del repositorio, así
+que sembrar un despliegue accesible desde internet habría publicado tres
+accesos válidos.
+
+Las dos contraseñas se escribieron en una conversación, así que son
+desechables y hay que cambiarlas antes de que el despliegue contenga algo real.
+
+Verificado de punta a punta contra el dominio público: `POST /v1/auth/login`
+con `platform: "web"` devuelve 200 con `access_token`, `expires_in: 900` y
+`csrf_token`; `GET /v1/me` con ese portador devuelve 200 e `is_superadmin: false`.
+
+### 1b. Lo que sigue haciendo falta para cerrar 14.3 y 14.4
 
 Todavía no existe ningún usuario en el despliegue: nadie ha ejecutado
 `vecingest bootstrap-superadmin`. Sin esa cuenta no hay con qué iniciar
