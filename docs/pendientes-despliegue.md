@@ -221,7 +221,7 @@ pasar.
 en verde: comprueba membresía de rol, no propiedad de tabla, y por eso no
 habría detectado esta regresión por sí sola.
 
-### 10. Un test que ejecute el contenedor, no solo el binario
+### 10. ~~Un test que ejecute el contenedor, no solo el binario~~ — HECHO (2026-09-10)
 
 Los tres primeros fallos del despliegue comparten una única causa: **la imagen
 nunca se había ejecutado**. La batería de tests corre el binario Go
@@ -241,12 +241,86 @@ Un test que levante el contenedor y compruebe que responde habría cazado los
 tres. Es la misma familia que el hallazgo anterior de que `serve` no tenía
 tarea de implementación entre 170 tareas.
 
-### 11. Regla de `lintcompose` contra el `environment` machacado
+Se añadió `TestDockerImage_EntrypointAndArchitectureRunOnHost`
+(`api/test/docker_container_entrypoint_test.go`), con la misma forma que el
+test ya existente para el embed de `tzdata`
+(`api/test/docker_tzcheck_test.go`): guarda de `testing.Short()`, comprobación
+de que `docker` está en el `PATH`, `context.WithTimeout` y limpieza de la
+imagen en `t.Cleanup`. Construye la imagen de producción (el stage final, sin
+nombre, de `api/Dockerfile` -- el mismo que arrancan `api` y `worker`) y la
+**ejecuta de verdad**, nunca se limita a inspeccionar metadatos: la
+arquitectura reportada por `docker image inspect` puede mentir (la base
+distroless es multiarquitectura y su manifiesto resuelve al host aunque el
+binario de dentro sea el equivocado), así que solo correr el contenedor
+detecta el problema. Los argumentos con los que se ejecuta (`serve`,
+`--migrate`) se leen del propio `docker-compose.yml` en tiempo de test, no de
+una copia fijada a mano, para que un cambio futuro en el `command:` real de
+`api` quede cubierto automáticamente.
+
+El contenedor arranca sin ninguna variable de entorno, así que nunca llega a
+servir tráfico -- eso es la señal de **éxito**, no de fallo: `config
+validation failed: ...` solo puede imprimirlo el propio `config.Load` de
+vecingest, y solo se llega ahí si el dispatcher de `main.go` recibió `serve`
+como subcomando (arquitectura correcta + `ENTRYPOINT`/`command` sin duplicar
+`/vecingest`) y `runServe` procesó `--migrate`. El test falla explícitamente
+si ve `unknown subcommand` (regresión del `ENTRYPOINT`/`command`) o `exec
+format error` (regresión de arquitectura), y también si el contenedor
+terminara con código 0 (serviría sin base de datos, peor que cualquiera de
+los dos fallos anteriores).
+
+Verificado plantando y restaurando las dos regresiones que este test puede
+alcanzar sin tocar hardware ajeno (la tercera, el `environment:` machacado,
+es del punto 11, no de este):
+
+- `GOARCH=arm64` a mano en `api/Dockerfile` (este host es `x86_64`) → el test
+  falla con `exec /vecingest: exec format error`; restaurado a
+  `GOARCH=${TARGETARCH}` → vuelve a pasar.
+- `command: ["/vecingest", "serve", "--migrate"]` en `docker-compose.yml` →
+  el test falla con `vecingest: unknown subcommand "/vecingest"`; restaurado
+  a `command: ["serve", "--migrate"]` → vuelve a pasar.
+
+`go test -race -count=1 ./...` pasa completo (incluye este test, con Docker
+disponible). Bajo `-short` el test se salta explícitamente (guarda
+`testing.Short()`), igual que el resto de la familia Testcontainers/Docker de
+`api/test`; sigue corriendo de verdad en CI porque `make test-e2e` (el job
+`e2e` de `ci.yml`) ejecuta `go test -race -count=1 ./test/...` sin `-short` y
+con el daemon de Docker disponible -- el job `go` (que sí pasa `-short`) para
+el daemon a propósito, así que este test nunca corre ahí, pero tampoco hacía
+falta que lo hiciera.
+
+### 11. ~~Regla de `lintcompose` contra el `environment` machacado~~ — HECHO (2026-09-10)
 
 El punto anterior es detectable estáticamente: ningún servicio que use el ancla
 `x-app-image` debe declarar su propia clave `environment:`. Hoy el fichero lo
 advierte en un comentario, que es exactamente la clase de protección que se
 pierde en el siguiente cambio.
+
+`api/cmd/lintcompose/main.go` gana `checkShallowMergeTrap`, que trabaja sobre
+el árbol `*yaml.Node` crudo (no sobre el `map[string]interface{}` que ya usa
+el resto del linter) porque `gopkg.in/yaml.v3` resuelve el merge key `<<` al
+decodificar a un mapa genérico -- para cuando se llega a ese mapa, el
+`environment:` local ya sustituyó al del ancla y ambos casos son
+indistinguibles. Sobre el árbol sin resolver, la regla es genérica a
+propósito: no menciona `x-app-image`, `api` ni `worker` en ningún sitio,
+solo pregunta, para cada servicio, "¿lo que este servicio fusiona por `<<:`
+aporta una clave `environment:`, y este servicio declara también la suya
+propia?" -- la forma exacta de la trampa, para cualquier ancla y cualquier
+servicio, presentes o futuros. Cubre tanto `<<: *ancla` como la forma en
+secuencia que usa hoy `docker-compose.yml`, `<<: [*app-image, *hardening]`.
+
+Cuatro tests nuevos en `api/cmd/lintcompose/main_test.go` prueban la regla
+directamente contra fixtures con nombres de ancla y de servicio inventados
+(nunca `x-app-image`/`api`/`worker`), incluida la forma en secuencia, y dos
+casos negativos (sin `environment:` local, o sin colisión porque el ancla
+fusionada no define `environment:`) para descartar falsos positivos.
+
+Verificado plantando y restaurando la regresión real sobre el propio
+`docker-compose.yml`: añadir `environment: {GOMEMLIMIT: 200MiB}` al servicio
+`api` (que ya fusiona `x-app-image` vía `<<: [*app-image, *hardening]`) hace
+fallar `make lint-compose` señalando exactamente ese servicio y esa clave;
+quitarlo lo devuelve a `lintcompose: OK`. `make lint` (con
+`golangci-lint` corrido desde `api/`, nunca desde la raíz) y
+`docker compose --env-file /dev/null config -q` siguen en verde.
 
 ### 12. El linting de TypeScript no analiza nada
 

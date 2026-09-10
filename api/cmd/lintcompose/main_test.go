@@ -107,3 +107,94 @@ services:
 		t.Fatalf("expected db's documented exception to pass without full hardening, got: %v", failures)
 	}
 }
+
+// TestCheckShallowMergeTrap_DetectsGenericAnchorClobber proves the rule is
+// not hardcoded to `x-app-image`, `api` or `worker`: a made-up anchor name
+// and a made-up service name must still be caught, because the trap is
+// structural (a local `environment:` shadowing a merged one), not a list of
+// known names.
+func TestCheckShallowMergeTrap_DetectsGenericAnchorClobber(t *testing.T) {
+	contents := `
+x-shared: &shared
+  environment:
+    FOO: bar
+
+services:
+  something:
+    <<: *shared
+    environment:
+      BAZ: qux
+`
+	failures := checkShallowMergeTrap("fixture.yml", []byte(contents))
+	if len(failures) != 1 {
+		t.Fatalf("expected exactly one shallow-merge-trap failure, got: %v", failures)
+	}
+	if !strings.Contains(failures[0], `service "something"`) || !strings.Contains(failures[0], "environment") {
+		t.Errorf("expected a failure naming the service and `environment:`, got: %s", failures[0])
+	}
+}
+
+// TestCheckShallowMergeTrap_DetectsSequenceMergeForm proves the sequence
+// merge form (`<<: [*a, *b]`, exactly what docker-compose.yml's `api` and
+// `worker` use) is checked too, not just the single-alias form.
+func TestCheckShallowMergeTrap_DetectsSequenceMergeForm(t *testing.T) {
+	contents := `
+x-env: &env
+  environment:
+    FOO: bar
+
+x-other: &other
+  restart: unless-stopped
+
+services:
+  something:
+    <<: [*env, *other]
+    environment:
+      BAZ: qux
+`
+	failures := checkShallowMergeTrap("fixture.yml", []byte(contents))
+	if len(failures) != 1 {
+		t.Fatalf("expected exactly one shallow-merge-trap failure, got: %v", failures)
+	}
+}
+
+// TestCheckShallowMergeTrap_NoFailureWithoutLocalEnvironment proves a
+// service that merges an anchor's `environment:` and does NOT declare its
+// own is fine -- there is nothing to clobber it.
+func TestCheckShallowMergeTrap_NoFailureWithoutLocalEnvironment(t *testing.T) {
+	contents := `
+x-shared: &shared
+  environment:
+    FOO: bar
+
+services:
+  something:
+    <<: *shared
+    restart: unless-stopped
+`
+	failures := checkShallowMergeTrap("fixture.yml", []byte(contents))
+	if len(failures) != 0 {
+		t.Fatalf("expected no failures when nothing shadows the merged environment, got: %v", failures)
+	}
+}
+
+// TestCheckShallowMergeTrap_NoFailureWhenMergedAnchorHasNoEnvironment
+// proves a service is free to declare its own `environment:` as long as
+// nothing it merges also defines one -- there is no trap without a
+// collision.
+func TestCheckShallowMergeTrap_NoFailureWhenMergedAnchorHasNoEnvironment(t *testing.T) {
+	contents := `
+x-hardening: &hardening
+  read_only: true
+
+services:
+  something:
+    <<: *hardening
+    environment:
+      FOO: bar
+`
+	failures := checkShallowMergeTrap("fixture.yml", []byte(contents))
+	if len(failures) != 0 {
+		t.Fatalf("expected no failures when the merged anchor has no `environment:` key, got: %v", failures)
+	}
+}

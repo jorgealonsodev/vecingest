@@ -134,6 +134,8 @@ func lintFile(path string) []string {
 		failures = append(failures, checkService(path, name, svc, exp)...)
 	}
 
+	failures = append(failures, checkShallowMergeTrap(path, data)...)
+
 	return failures
 }
 
@@ -243,4 +245,159 @@ func isEmptyNetworks(v interface{}) bool {
 	default:
 		return true
 	}
+}
+
+// checkShallowMergeTrap catches the regression this repo actually shipped:
+// `<<:` is a YAML *merge key*, and the merge is SHALLOW. A service that
+// merges an anchor (`<<: *app-image`, or `<<: [*app-image, *hardening]`)
+// AND declares its own `environment:` key does not get the anchor's
+// environment plus its own -- its own `environment:` REPLACES the merged
+// one entirely, because a key a mapping declares locally always wins over
+// the same key contributed by a merge. That is exactly how `api` and
+// `worker` once booted with only `GOMEMLIMIT` set and nothing else.
+//
+// This has to be checked against the raw (pre-merge) YAML node tree, not
+// against the `map[string]interface{}` decoded above: by the time `<<` is
+// resolved into a plain map, the merge has already happened and the
+// service's own `environment:` value is indistinguishable from one that
+// was never overridden. gopkg.in/yaml.v3 resolves merge keys automatically
+// when decoding into `interface{}`, but leaves them untouched (as `<<`
+// mapping pairs with alias values) when decoding into `*yaml.Node`.
+//
+// The check is deliberately generic: it does not hardcode "x-app-image",
+// "api" or "worker" anywhere. It asks, for every service, "does merging
+// what this service merges bring in an `environment:` key, AND does this
+// service also declare its own `environment:` key?" -- which is the shape
+// of the trap itself, for any anchor and any service, present or future.
+func checkShallowMergeTrap(path string, data []byte) []string {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		// The interface{} decode above already reported invalid YAML.
+		return nil
+	}
+	if len(doc.Content) == 0 {
+		return nil
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil
+	}
+	servicesNode := mappingValue(root, "services")
+	if servicesNode == nil || servicesNode.Kind != yaml.MappingNode {
+		return nil
+	}
+
+	var failures []string
+	for i := 0; i+1 < len(servicesNode.Content); i += 2 {
+		name := servicesNode.Content[i].Value
+		svcNode := resolveAlias(servicesNode.Content[i+1])
+		if svcNode == nil || svcNode.Kind != yaml.MappingNode {
+			continue
+		}
+
+		if !mappingOwnKeys(svcNode)["environment"] {
+			continue // nothing declared locally -- no local key to clobber the merge
+		}
+
+		for _, src := range mergeSources(svcNode) {
+			if resolvedKeySet(src, map[*yaml.Node]bool{})["environment"] {
+				failures = append(failures, fmt.Sprintf(
+					"%s: service %q: declares its own `environment:` key while also merging an anchor via `<<:` that defines `environment:` -- YAML's `<<:` merge is SHALLOW, so this service's local `environment:` REPLACES the merged one entirely instead of adding to it; move these variables into the merged anchor or drop the local `environment:` key",
+					path, name))
+				break
+			}
+		}
+	}
+	return failures
+}
+
+// mappingValue returns the value node for a scalar key directly declared
+// in a mapping node, ignoring merge keys (`<<`).
+func mappingValue(node *yaml.Node, key string) *yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// mappingOwnKeys returns the set of keys a mapping node declares directly
+// (never following `<<` merges), excluding the merge key itself.
+func mappingOwnKeys(node *yaml.Node) map[string]bool {
+	keys := map[string]bool{}
+	if node == nil || node.Kind != yaml.MappingNode {
+		return keys
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		k := node.Content[i].Value
+		if k == "<<" {
+			continue
+		}
+		keys[k] = true
+	}
+	return keys
+}
+
+// mergeSources returns the anchor node(s) a mapping merges via `<<:`,
+// supporting both `<<: *anchor` and `<<: [*anchor1, *anchor2]`. Returned
+// nodes may themselves be alias nodes; callers resolve them.
+func mergeSources(node *yaml.Node) []*yaml.Node {
+	if node == nil || node.Kind != yaml.MappingNode {
+		return nil
+	}
+	var sources []*yaml.Node
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value != "<<" {
+			continue
+		}
+		v := node.Content[i+1]
+		switch v.Kind {
+		case yaml.SequenceNode:
+			sources = append(sources, v.Content...)
+		default:
+			sources = append(sources, v)
+		}
+	}
+	return sources
+}
+
+// resolveAlias follows an AliasNode to the node it points to, or returns
+// the node unchanged if it is not an alias.
+func resolveAlias(node *yaml.Node) *yaml.Node {
+	if node != nil && node.Kind == yaml.AliasNode {
+		return node.Alias
+	}
+	return node
+}
+
+// resolvedKeySet computes the effective set of top-level keys a mapping
+// node would carry once every `<<:` merge it participates in (including
+// merges nested inside anchors it merges) is applied, respecting the same
+// shallow-merge precedence Compose/YAML use: a node's own keys always win
+// over a key contributed only by something it merges. `visited` guards
+// against alias cycles.
+func resolvedKeySet(node *yaml.Node, visited map[*yaml.Node]bool) map[string]bool {
+	node = resolveAlias(node)
+	if node == nil || node.Kind != yaml.MappingNode {
+		return map[string]bool{}
+	}
+	if visited[node] {
+		return map[string]bool{}
+	}
+	visited[node] = true
+
+	result := map[string]bool{}
+	for _, src := range mergeSources(node) {
+		for k := range resolvedKeySet(src, visited) {
+			result[k] = true
+		}
+	}
+	for k := range mappingOwnKeys(node) {
+		result[k] = true
+	}
+	return result
 }
