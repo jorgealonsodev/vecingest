@@ -17,6 +17,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
 
+	"github.com/jorgealonsodev/vecingest/internal/authz"
 	"github.com/jorgealonsodev/vecingest/internal/health"
 	"github.com/jorgealonsodev/vecingest/internal/http/handlers"
 	"github.com/jorgealonsodev/vecingest/internal/http/router"
@@ -42,6 +43,13 @@ func New(cfg Config) (chi.Router, huma.API, error) {
 	var hapi huma.API
 	r, err := router.New(cfg.Router, func(chiRouter chi.Router) {
 		humaConfig := huma.DefaultConfig(cfg.Title, cfg.Version)
+		// D-2 rung 2's additive eager trigger (V4): panics at the
+		// registration instant for the earliest possible error site.
+		// AssertScopedRegistration (called by serve, after New returns)
+		// remains the authoritative, non-panic, fail-closed check --
+		// this hook can never see a Hidden operation (V7) and is never
+		// the only line of defense.
+		humaConfig.OnAddOperation = append(humaConfig.OnAddOperation, authz.EagerCheck)
 		hapi = humachi.New(chiRouter, humaConfig)
 		Register(hapi, cfg.Deps, cfg.Registry)
 	})

@@ -29,6 +29,70 @@ type AuditLog struct {
 	CreatedAt   time.Time   `json:"created_at"`
 }
 
+type Community struct {
+	ID                      uuid.UUID          `json:"id"`
+	OfficeID                uuid.UUID          `json:"office_id"`
+	ParentCommunityID       pgtype.UUID        `json:"parent_community_id"`
+	Name                    string             `json:"name"`
+	Cif                     pgtype.Text        `json:"cif"`
+	Address                 pgtype.Text        `json:"address"`
+	City                    pgtype.Text        `json:"city"`
+	Province                pgtype.Text        `json:"province"`
+	PostalCode              pgtype.Text        `json:"postal_code"`
+	Settings                json.RawMessage    `json:"settings"`
+	AnnualBudget            pgtype.Numeric     `json:"annual_budget"`
+	ReserveFund             pgtype.Numeric     `json:"reserve_fund"`
+	SecretaryIsOffice       bool               `json:"secretary_is_office"`
+	LastOrdinaryMeetingAt   pgtype.Timestamptz `json:"last_ordinary_meeting_at"`
+	DpaSignedAt             pgtype.Timestamptz `json:"dpa_signed_at"`
+	TransferredFromOfficeID pgtype.UUID        `json:"transferred_from_office_id"`
+	TransferredAt           pgtype.Timestamptz `json:"transferred_at"`
+	DeletedAt               pgtype.Timestamptz `json:"deleted_at"`
+	CreatedAt               time.Time          `json:"created_at"`
+	UpdatedAt               time.Time          `json:"updated_at"`
+}
+
+type Invitation struct {
+	ID             uuid.UUID          `json:"id"`
+	CommunityID    uuid.UUID          `json:"community_id"`
+	UnitID         pgtype.UUID        `json:"unit_id"`
+	Email          pgtype.Text        `json:"email"`
+	Role           string             `json:"role"`
+	TokenHash      []byte             `json:"token_hash"`
+	ShortCodeHash  []byte             `json:"short_code_hash"`
+	Status         string             `json:"status"`
+	ExpiresAt      time.Time          `json:"expires_at"`
+	AcceptedAt     pgtype.Timestamptz `json:"accepted_at"`
+	SentCount      int32              `json:"sent_count"`
+	FailedAttempts int32              `json:"failed_attempts"`
+	CreatedAt      time.Time          `json:"created_at"`
+	UpdatedAt      time.Time          `json:"updated_at"`
+}
+
+type Office struct {
+	ID               uuid.UUID          `json:"id"`
+	Name             string             `json:"name"`
+	Cif              string             `json:"cif"`
+	Email            pgtype.Text        `json:"email"`
+	Phone            pgtype.Text        `json:"phone"`
+	Address          pgtype.Text        `json:"address"`
+	LogoKey          pgtype.Text        `json:"logo_key"`
+	CollegiateNumber pgtype.Text        `json:"collegiate_number"`
+	DeletedAt        pgtype.Timestamptz `json:"deleted_at"`
+	CreatedAt        time.Time          `json:"created_at"`
+	UpdatedAt        time.Time          `json:"updated_at"`
+}
+
+type OfficeMember struct {
+	ID        uuid.UUID          `json:"id"`
+	OfficeID  uuid.UUID          `json:"office_id"`
+	UserID    uuid.UUID          `json:"user_id"`
+	Role      string             `json:"role"`
+	DeletedAt pgtype.Timestamptz `json:"deleted_at"`
+	CreatedAt time.Time          `json:"created_at"`
+	UpdatedAt time.Time          `json:"updated_at"`
+}
+
 type OtpChallenge struct {
 	ID         uuid.UUID          `json:"id"`
 	UserID     uuid.UUID          `json:"user_id"`
@@ -66,6 +130,40 @@ type Session struct {
 	RevokedAt        pgtype.Timestamptz `json:"revoked_at"`
 	CreatedAt        time.Time          `json:"created_at"`
 	UpdatedAt        time.Time          `json:"updated_at"`
+}
+
+type Unit struct {
+	ID                       uuid.UUID          `json:"id"`
+	CommunityID              uuid.UUID          `json:"community_id"`
+	Block                    pgtype.Text        `json:"block"`
+	Floor                    pgtype.Text        `json:"floor"`
+	Door                     pgtype.Text        `json:"door"`
+	Type                     string             `json:"type"`
+	ParticipationCoefficient pgtype.Numeric     `json:"participation_coefficient"`
+	CadastralRef             pgtype.Text        `json:"cadastral_ref"`
+	DeletedAt                pgtype.Timestamptz `json:"deleted_at"`
+	CreatedAt                time.Time          `json:"created_at"`
+	UpdatedAt                time.Time          `json:"updated_at"`
+}
+
+type UnitMember struct {
+	ID                               uuid.UUID          `json:"id"`
+	UnitID                           uuid.UUID          `json:"unit_id"`
+	CommunityID                      uuid.UUID          `json:"community_id"`
+	UserID                           uuid.UUID          `json:"user_id"`
+	Role                             string             `json:"role"`
+	Tenure                           string             `json:"tenure"`
+	BoardRole                        pgtype.Text        `json:"board_role"`
+	BoardFrom                        pgtype.Timestamptz `json:"board_from"`
+	BoardTo                          pgtype.Timestamptz `json:"board_to"`
+	NotificationAddress              pgtype.Text        `json:"notification_address"`
+	ElectronicNotificationsConsentAt pgtype.Timestamptz `json:"electronic_notifications_consent_at"`
+	ConsentTextVersion               pgtype.Text        `json:"consent_text_version"`
+	ValidFrom                        pgtype.Timestamptz `json:"valid_from"`
+	ValidTo                          pgtype.Timestamptz `json:"valid_to"`
+	DeletedAt                        pgtype.Timestamptz `json:"deleted_at"`
+	CreatedAt                        time.Time          `json:"created_at"`
+	UpdatedAt                        time.Time          `json:"updated_at"`
 }
 
 type User struct {

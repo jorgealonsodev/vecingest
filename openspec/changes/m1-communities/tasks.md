@@ -46,31 +46,31 @@ through PR1/PR2.
 
 ## Phase 1: Schema + `authz` Foundation (WU-1, PR1 — TDD, D-1/D-2/D-3/D-4/D-5)
 
-- [ ] 1.1 Scaffold `api/internal/authz/{authz.go,resolve.go,assert.go,allowlist.go,scoped/register.go,testdata/negative_register/}` (non-TDD setup, package does not exist yet)
-- [ ] 1.2 RED (Testcontainers): `00007_m1_tenant_schema.sql` up→down→up idempotent; `offices`, `office_members`, `communities`, `units`, `unit_members` created with explicit `GRANT UPDATE, DELETE` and the indexes/uniques of D-5
-- [ ] 1.3 GREEN: implement `api/migrations/schema/00007_m1_tenant_schema.sql` (`SET ROLE vecingest_owner;` … `RESET ROLE;`), five tables, grants, `unit_members_one_president_idx` partial unique, `down` drops in FK order
-- [ ] 1.4 RED (Testcontainers): `00008_invitations.sql` creates `invitations` with the `status` CHECK, unique `token_hash`/`short_code_hash`, `invitations_community_id_status_idx`, explicit grants
-- [ ] 1.5 GREEN: implement `api/migrations/schema/00008_invitations.sql`
-- [ ] 1.6 RED: `sqlc generate` over new `api/internal/db/queries/*.sql` compiles with `decimal.Decimal`/`uuid.UUID`/`time.Time`, no `float64`, every query taking its tenant column as a bound parameter
-- [ ] 1.7 GREEN: write `queries/{offices,office_members,communities,units,unit_members,invitations}.sql`; run `sqlc generate`, commit `internal/db/*.sql.go`
-- [ ] 1.8 RED (compile, `go vet`-clean package): `api/internal/authz/testdata/negative_register/` — a handler `func(ctx, PI, authz.Membership) (*O, error)` fails to compile against plain `huma.Register` (authz-membership: Scoped handler signature does not compile against huma.Register)
-- [ ] 1.9 GREEN: implement `authz.go` — `Membership` (unexported fields, no exported constructor), `Memberships`, `Scope`, `Role`, `CommunityScoped`/`OfficeScoped`, `MetadataKey` (D-1)
-- [ ] 1.10 RED: zero-value `Membership{}` fails every validity accessor (Zero-value membership rejected); an input type missing `authz.CommunityScoped` fails to compile as `scoped.Community`'s type parameter (Input missing its scope interface fails to compile)
-- [ ] 1.11 GREEN: implement panicking accessors on invalid state; implement `scoped/register.go` — `Community[I,O,PI]`, `Office[I,O,PI]`, `Self[I,O]`, each stamping `op.Metadata[authz.MetadataKey]` (D-1/D-2)
-- [ ] 1.12 RED: a scoped constructor resolves membership before invoking the handler and passes it as the final argument (A scoped constructor resolves membership before invoking the handler)
-- [ ] 1.13 GREEN: implement `resolve.go` — four resolvers by route shape (D-4): community via `office_members`∪`unit_members`, unit/invitation via owning `community_id`, office via `(office_id,user_id)`, `Self` via the full membership set
-- [ ] 1.14 RED: a caller with no membership row for the path community resolves to nothing (Foreign resource id resolves to no membership); a request with a valid path resource but a differing `X-Community-Id`-style header still resolves from the path only (Header-supplied tenant id is ignored)
-- [ ] 1.15 GREEN: enforce path-only resolution in `resolve.go`
-- [ ] 1.16 RED: a `tenant` membership on their own unit is rejected 403 against an `owner`-only operation (Wrong role on own resource rejected); admin scope resolves via `communities.office_id` matching an `office_members` row, never a client-supplied office id (office-management: Admin scope derived from office_members)
-- [ ] 1.17 GREEN: implement the role check in `scoped.Community`/`scoped.Office` and admin-scope resolution per §3
-- [ ] 1.18 RED (in-memory humachi API): A1 fails naming the operation when a scoped-prefix route is registered via plain `huma.Register` with no marker (Unregistered scoped operation blocks boot); A2 fails when a marked operation's scope kind has no registered resolver (Marker without a registered resolver blocks boot)
-- [ ] 1.19 RED (in-memory humachi API): A3 fails when a `Hidden: true` operation under a scoped prefix is routed by chi but absent from `Paths` and not allowlisted (Hidden scoped operation blocks boot); A3 passes when the route is present in the allowlist with a stated reason (Allowlisted public route boots normally)
-- [ ] 1.20 RED: the marker survives `huma.NewGroup` prefixing and is still readable from `Paths` (V8 marker-survives-groups)
-- [ ] 1.21 GREEN: implement `assert.go` — `AssertScopedRegistration(oapi, chiRouter, allow)`: A1 walks `Paths`×eight method fields, A2 checks the resolver/role table, A3 diffs `chi.Walk` against `Paths`; register `OnAddOperation` as an additive eager trigger, never the sole check (D-2)
-- [ ] 1.22 RED: every allowlist entry has a non-empty `Reason`; no entry's path begins with `/v1/communities/`, `/v1/units/`, or `/v1/offices/` (Allowlist hygiene, D-3)
-- [ ] 1.23 GREEN: implement `allowlist.go` — `PublicOperations` seeded with M0's existing public routes
-- [ ] 1.24 Modify `api/internal/http/api/api.go` and `api/cmd/vecingest/serve.go` — call `authz.AssertScopedRegistration` after `api.New(...)` and before `ListenAndServe`; a non-nil error returns up to `main` (no `panic` outside `main`)
-- [ ] 1.25 Run `cd api && go build ./... && go test -race ./internal/authz/...`; verify by inspection that a deliberately-unmarked test route fails boot
+- [x] 1.1 Scaffold `api/internal/authz/{authz.go,resolve.go,assert.go,allowlist.go,scoped/register.go,testdata/negative_register/}` (non-TDD setup, package does not exist yet)
+- [x] 1.2 RED (Testcontainers): `00007_m1_tenant_schema.sql` up→down→up idempotent; `offices`, `office_members`, `communities`, `units`, `unit_members` created with explicit `GRANT UPDATE, DELETE` and the indexes/uniques of D-5
+- [x] 1.3 GREEN: implement `api/migrations/schema/00007_m1_tenant_schema.sql` (`SET ROLE vecingest_owner;` … `RESET ROLE;`), five tables, grants, `unit_members_one_president_idx` partial unique, `down` drops in FK order
+- [x] 1.4 RED (Testcontainers): `00008_invitations.sql` creates `invitations` with the `status` CHECK, unique `token_hash`/`short_code_hash`, `invitations_community_id_status_idx`, explicit grants
+- [x] 1.5 GREEN: implement `api/migrations/schema/00008_invitations.sql`
+- [x] 1.6 RED: `sqlc generate` over new `api/internal/db/queries/*.sql` compiles with `decimal.Decimal`/`uuid.UUID`/`time.Time`, no `float64`, every query taking its tenant column as a bound parameter
+- [x] 1.7 GREEN: write `queries/{offices,office_members,communities,units,unit_members,invitations}.sql`; run `sqlc generate`, commit `internal/db/*.sql.go`
+- [x] 1.8 RED (compile, `go vet`-clean package): `api/internal/authz/testdata/negative_register/` — a handler `func(ctx, PI, authz.Membership) (*O, error)` fails to compile against plain `huma.Register` (authz-membership: Scoped handler signature does not compile against huma.Register)
+- [x] 1.9 GREEN: implement `authz.go` — `Membership` (unexported fields, no exported constructor), `Memberships`, `Scope`, `Role`, `CommunityScoped`/`OfficeScoped`, `MetadataKey` (D-1)
+- [x] 1.10 RED: zero-value `Membership{}` fails every validity accessor (Zero-value membership rejected); an input type missing `authz.CommunityScoped` fails to compile as `scoped.Community`'s type parameter (Input missing its scope interface fails to compile)
+- [x] 1.11 GREEN: implement panicking accessors on invalid state; implement `scoped/register.go` — `Community[I,O,PI]`, `Office[I,O,PI]`, `Self[I,O]`, each stamping `op.Metadata[authz.MetadataKey]` (D-1/D-2)
+- [x] 1.12 RED: a scoped constructor resolves membership before invoking the handler and passes it as the final argument (A scoped constructor resolves membership before invoking the handler)
+- [x] 1.13 GREEN: implement `resolve.go` — four resolvers by route shape (D-4): community via `office_members`∪`unit_members`, unit/invitation via owning `community_id`, office via `(office_id,user_id)`, `Self` via the full membership set
+- [x] 1.14 RED: a caller with no membership row for the path community resolves to nothing (Foreign resource id resolves to no membership); a request with a valid path resource but a differing `X-Community-Id`-style header still resolves from the path only (Header-supplied tenant id is ignored)
+- [x] 1.15 GREEN: enforce path-only resolution in `resolve.go`
+- [x] 1.16 RED: a `tenant` membership on their own unit is rejected 403 against an `owner`-only operation (Wrong role on own resource rejected); admin scope resolves via `communities.office_id` matching an `office_members` row, never a client-supplied office id (office-management: Admin scope derived from office_members)
+- [x] 1.17 GREEN: implement the role check in `scoped.Community`/`scoped.Office` and admin-scope resolution per §3
+- [x] 1.18 RED (in-memory humachi API): A1 fails naming the operation when a scoped-prefix route is registered via plain `huma.Register` with no marker (Unregistered scoped operation blocks boot); A2 fails when a marked operation's scope kind has no registered resolver (Marker without a registered resolver blocks boot)
+- [x] 1.19 RED (in-memory humachi API): A3 fails when a `Hidden: true` operation under a scoped prefix is routed by chi but absent from `Paths` and not allowlisted (Hidden scoped operation blocks boot); A3 passes when the route is present in the allowlist with a stated reason (Allowlisted public route boots normally)
+- [x] 1.20 RED: the marker survives `huma.NewGroup` prefixing and is still readable from `Paths` (V8 marker-survives-groups)
+- [x] 1.21 GREEN: implement `assert.go` — `AssertScopedRegistration(oapi, chiRouter, allow)`: A1 walks `Paths`×eight method fields, A2 checks the resolver/role table, A3 diffs `chi.Walk` against `Paths`; register `OnAddOperation` as an additive eager trigger, never the sole check (D-2)
+- [x] 1.22 RED: every allowlist entry has a non-empty `Reason`; no entry's path begins with `/v1/communities/`, `/v1/units/`, or `/v1/offices/` (Allowlist hygiene, D-3)
+- [x] 1.23 GREEN: implement `allowlist.go` — `PublicOperations` seeded with M0's existing public routes
+- [x] 1.24 Modify `api/internal/http/api/api.go` and `api/cmd/vecingest/serve.go` — call `authz.AssertScopedRegistration` after `api.New(...)` and before `ListenAndServe`; a non-nil error returns up to `main` (no `panic` outside `main`)
+- [x] 1.25 Run `cd api && go build ./... && go test -race ./internal/authz/...`; verify by inspection that a deliberately-unmarked test route fails boot
 
 ## Phase 2: Office Management (WU-2, PR2 — TDD)
 
