@@ -1,4 +1,9 @@
-import { fireEvent, render, screen } from "@testing-library/react-native";
+import {
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react-native";
 import { StyleSheet } from "react-native";
 import { PaperProvider } from "react-native-paper";
 import {
@@ -9,6 +14,7 @@ import {
   INSTITUTIONAL_PANEL_FOREGROUND,
   lightTheme,
   MIN_TOUCH_TARGET,
+  WEB_SURFACE,
 } from "../theme";
 import { LoginScreen } from "./LoginScreen";
 
@@ -232,10 +238,14 @@ describe("LoginScreen — institutional panel (WEB design system, no dark mode)"
           </PaperProvider>,
         );
 
-        const panelBackground = flatStyle(
-          screen.getByTestId("login-institutional-panel"),
-        ).backgroundColor;
-        const headingColor = flatStyle(screen.getByText("Vecingest")).color;
+        const panel = screen.getByTestId("login-institutional-panel");
+        const panelBackground = flatStyle(panel).backgroundColor;
+        // Scoped to the panel itself: the desktop split also renders the
+        // "Vecingest" wordmark in `AuthHeader` (the WEB system's 64px
+        // header), so an unscoped query would match both.
+        const headingColor = flatStyle(
+          within(panel).getByText("Vecingest"),
+        ).color;
 
         // The panel is the WEB design system's institutional brand surface
         // (docs/design/vecingest-web.md), which has no dark mode at all. It
@@ -251,6 +261,40 @@ describe("LoginScreen — institutional panel (WEB design system, no dark mode)"
         // `onPrimary` (dark blue) — the exact tokens the regression used.
         expect(panelBackground).not.toBe(darkTheme.colors.onBackground);
         expect(headingColor).not.toBe(darkTheme.colors.onPrimary);
+      } finally {
+        setWindowWidth(750);
+      }
+    },
+  );
+});
+
+describe("LoginScreen — desktop card containment (WEB design system, no dark mode)", () => {
+  it.each([
+    ["light", lightTheme],
+    ["dark", darkTheme],
+  ] as const)(
+    "renders the 64px header and the contained white card surface in %s mode, never the device theme's surface",
+    async (_label, theme) => {
+      setWindowWidth(1280);
+
+      try {
+        await render(
+          <PaperProvider theme={theme}>
+            <LoginScreen />
+          </PaperProvider>,
+        );
+
+        // The header the previous flattened layout was missing entirely.
+        expect(screen.getByTestId("auth-header")).toBeTruthy();
+
+        // The card is a genuine containing surface, not a full-bleed panel:
+        // it stays the WEB system's fixed white regardless of device theme
+        // (never `darkTheme.colors.surface`, which is near-black).
+        const cardBackground = flatStyle(
+          screen.getByTestId("login-desktop-card"),
+        ).backgroundColor;
+        expect(cardBackground).toBe(WEB_SURFACE);
+        expect(cardBackground).not.toBe(darkTheme.colors.surface);
       } finally {
         setWindowWidth(750);
       }

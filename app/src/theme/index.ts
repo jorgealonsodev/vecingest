@@ -170,6 +170,27 @@ export const darkTheme: MD3Theme = {
 export const INSTITUTIONAL_PANEL_BACKGROUND = "#0f2a4a";
 export const INSTITUTIONAL_PANEL_FOREGROUND = "#ffffff";
 
+/**
+ * Web-console light-only surface tokens — the desktop split of the auth
+ * screens (login, forgot password, reset password) is part of the "VecinGest
+ * WEB" design system (`docs/design/vecingest-web.md`, Stitch project
+ * `projects/14138416730329310203`), which has NO dark mode at all (zero
+ * mentions of "dark" in that document — see `docs/design/README.md`'s
+ * project table). These are therefore fixed BRAND values, exactly like
+ * `INSTITUTIONAL_PANEL_BACKGROUND`/`FOREGROUND` above — never
+ * `theme.colors.background` / `theme.colors.surface`, which invert with the
+ * device color scheme and, in dark mode, both resolve to `#131312`,
+ * rendering the card invisible against the page. Mobile keeps using
+ * `pickTheme()` / `useColorScheme()` against `docs/design/vecingest-dark.md`,
+ * which DOES define a dark palette — do not apply these tokens there.
+ */
+export const WEB_PAGE_BACKGROUND = "#f4f5f2"; // background
+export const WEB_SURFACE = "#ffffff"; // surface (header + card chrome)
+export const WEB_BORDER = "#d6dad5"; // outline-variant
+export const WEB_TEXT_PRIMARY = "#0f2a4a"; // on-background (same literal as INSTITUTIONAL_PANEL_BACKGROUND, used as text here instead of a fill)
+export const WEB_HEADER_HEIGHT = 64; // header-height
+export const WEB_CONTENT_MAX = 1120; // content-max
+
 /** Minimum type size and touch target from `docs/design/README.md`. */
 export const MIN_FONT_SIZE = 11;
 export const MIN_TOUCH_TARGET = 44;
