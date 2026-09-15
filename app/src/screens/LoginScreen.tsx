@@ -2,7 +2,7 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { zodResolver } from "@hookform/resolvers/zod";
 import type { ApiErrorBody } from "@vecingest/shared/errors";
 import { schemas } from "@vecingest/shared/schemas";
-import { Link } from "expo-router";
+import { Link, useRouter } from "expo-router";
 import { useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import {
@@ -44,8 +44,6 @@ import { loginErrorMessage } from "./errorMessages";
 
 type LoginFormValues = z.infer<typeof schemas.LoginRequest>;
 
-const PROFILE_OPTIONS = ["Vecino", "Administrador", "Empresa"] as const;
-
 function nativePlatform(): LoginFormValues["platform"] {
   if (Platform.OS === "ios" || Platform.OS === "android") {
     return Platform.OS;
@@ -66,9 +64,14 @@ function nativePlatform(): LoginFormValues["platform"] {
  * `5f83c21f55d9493da67cc330fa8528d4`): a 64px header, then a `content-max`
  * (1120px) rounded card containing the institutional left panel and the
  * capped-width form column, vertically centered on the page — not two
- * full-bleed, top-aligned halves. The profile selector and the
- * invitation-code entry point are visually faithful to the desktop design
- * but have no backend at M0 — see `docs/pendientes-funcionalidad.md`.
+ * full-bleed, top-aligned halves. The invitation-code entry point is
+ * visually faithful to the desktop design but has no backend at M0 — see
+ * `docs/pendientes-funcionalidad.md`. The design's three-segment profile
+ * selector ("Vecino / Administrador / Empresa") was removed entirely
+ * (2026-09-15, same doc): `POST /v1/auth/login` takes no role parameter, so
+ * a disabled control that visually implied one read as broken rather than
+ * as an honest "not yet" state. Choosing a real context happens on
+ * `PortalScreen`, the screen a successful login now navigates to.
  *
  * The desktop split is forced into the WEB system's light palette via
  * `activeTheme` (see below) regardless of device color scheme, because that
@@ -76,6 +79,7 @@ function nativePlatform(): LoginFormValues["platform"] {
  */
 export function LoginScreen() {
   const theme = useTheme();
+  const router = useRouter();
   const { width } = useWindowDimensions();
   const isDesktop = width >= BREAKPOINT_DESKTOP;
   const [serverError, setServerError] = useState<string | null>(null);
@@ -125,6 +129,7 @@ export function LoginScreen() {
         if (data.refresh_token) {
           await persistRefreshToken(data.refresh_token);
         }
+        router.replace("/portal");
       }
     } finally {
       setSubmitting(false);
@@ -204,7 +209,7 @@ export function LoginScreen() {
             variant="bodySmall"
             style={{ color: activeTheme.colors.onSurfaceVariant }}
           >
-            Seleccione su rol de acceso a la demarcación
+            Introduzca sus credenciales autorizadas
           </Text>
         </View>
       ) : (
@@ -246,41 +251,6 @@ export function LoginScreen() {
             </Text>
           </>
         )}
-
-        {isDesktop ? (
-          <View style={styles.field}>
-            <View
-              testID="login-profile-selector"
-              accessibilityRole="radiogroup"
-              accessibilityState={{ disabled: true }}
-              accessibilityHint="Selector de perfil no disponible: el inicio de sesión no distingue todavía entre roles"
-              style={[
-                styles.segmentedControl,
-                { backgroundColor: activeTheme.colors.surfaceVariant },
-              ]}
-            >
-              {PROFILE_OPTIONS.map((label) => (
-                <View key={label} style={styles.segment}>
-                  <Text
-                    variant="labelMedium"
-                    style={{ color: activeTheme.colors.onSurfaceVariant }}
-                  >
-                    {label}
-                  </Text>
-                </View>
-              ))}
-            </View>
-            <Text
-              variant="labelSmall"
-              style={[
-                styles.mutedCaption,
-                { color: activeTheme.colors.onSurfaceVariant },
-              ]}
-            >
-              No disponible en esta versión.
-            </Text>
-          </View>
-        ) : null}
 
         <Controller
           control={control}
@@ -689,19 +659,6 @@ const styles = StyleSheet.create({
   },
   mutedCaption: {
     marginBottom: spacing.space8,
-  },
-  segmentedControl: {
-    borderRadius: 8,
-    flexDirection: "row",
-    padding: 4,
-    marginBottom: spacing.space8,
-  },
-  segment: {
-    alignItems: "center",
-    flex: 1,
-    minHeight: MIN_TOUCH_TARGET,
-    justifyContent: "center",
-    paddingVertical: spacing.space8,
   },
   forgotRow: {
     alignItems: "flex-end",

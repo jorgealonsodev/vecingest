@@ -146,12 +146,11 @@ describe("LoginScreen — mobile layout content", () => {
     expect(screen.getByTestId("login-forgot-password-link")).toBeTruthy();
     expect(screen.getByText("Conexión cifrada de alta seguridad")).toBeTruthy();
 
-    // Desktop-only institutional copy and profile selector are absent below
-    // the desktop breakpoint (the default test-environment window width).
+    // Desktop-only institutional copy is absent below the desktop breakpoint
+    // (the default test-environment window width).
     expect(
       screen.queryByText("La comunidad de propietarios, en orden"),
     ).toBeNull();
-    expect(screen.queryByTestId("login-profile-selector")).toBeNull();
   });
 
   it("flips the password field's secureTextEntry and its accessibility label when the toggle is pressed", async () => {
@@ -183,7 +182,7 @@ describe("LoginScreen — mobile layout content", () => {
 });
 
 describe("LoginScreen — desktop split layout", () => {
-  it("renders the institutional left panel and the profile selector at and above the desktop breakpoint", async () => {
+  it("renders the institutional left panel at and above the desktop breakpoint", async () => {
     setWindowWidth(1280);
 
     try {
@@ -196,7 +195,6 @@ describe("LoginScreen — desktop split layout", () => {
       expect(
         screen.getByText("La comunidad de propietarios, en orden"),
       ).toBeTruthy();
-      expect(screen.getByTestId("login-profile-selector")).toBeTruthy();
     } finally {
       setWindowWidth(750);
     }
@@ -215,7 +213,6 @@ describe("LoginScreen — desktop split layout", () => {
       expect(
         screen.queryByText("La comunidad de propietarios, en orden"),
       ).toBeNull();
-      expect(screen.queryByTestId("login-profile-selector")).toBeNull();
     } finally {
       setWindowWidth(750);
     }

@@ -23,6 +23,12 @@ jest.mock("../auth/api", () => ({
   apiClient: { POST: jest.fn() },
 }));
 
+const mockReplace = jest.fn();
+jest.mock("expo-router", () => ({
+  ...jest.requireActual("expo-router"),
+  useRouter: () => ({ replace: mockReplace }),
+}));
+
 function renderLoginScreen() {
   return render(
     <PaperProvider theme={lightTheme}>
@@ -52,6 +58,7 @@ describe("LoginScreen — generated-schema validation (app-login-ui: Generated-S
     });
 
     expect(apiClient.POST).not.toHaveBeenCalled();
+    expect(mockReplace).not.toHaveBeenCalled();
   });
 
   it("declares no hand-written validation schema — it resolves against schemas.LoginRequest", () => {
@@ -67,6 +74,7 @@ describe("LoginScreen — generated-schema validation (app-login-ui: Generated-S
 describe("LoginScreen — secure token storage (app-login-ui: Secure Token Storage)", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockReplace.mockClear();
     clearSession();
   });
 
@@ -111,6 +119,10 @@ describe("LoginScreen — secure token storage (app-login-ui: Secure Token Stora
       accessToken: "access-token-value",
       csrfToken: "csrf-token-value",
     });
+
+    // A successful login navigates to the portal screen — it must not
+    // leave the user staring at the login form.
+    expect(mockReplace).toHaveBeenCalledWith("/portal");
 
     // The app never depends on AsyncStorage for token persistence.
     expect(() =>
