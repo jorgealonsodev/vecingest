@@ -30,3 +30,34 @@ function minLength(error: ApiErrorBody): string {
   const value = error.details?.min_length;
   return typeof value === "number" ? String(value) : "";
 }
+
+/**
+ * `POST /v1/auth/forgot-password` never reveals whether the email exists
+ * (`ForgotPasswordResponse` is just `{accepted: boolean}`), so the only
+ * errors this ever maps are transport/abuse failures, never "not found".
+ */
+export function forgotPasswordErrorMessage(error: ApiErrorBody): string {
+  switch (error.code) {
+    case ErrorCode.AuthTooManyAttempts:
+      return "Se ha bloqueado el acceso temporalmente por demasiados intentos.";
+    default:
+      return "No se ha podido procesar la solicitud. Inténtalo de nuevo.";
+  }
+}
+
+export function resetPasswordErrorMessage(error: ApiErrorBody): string {
+  switch (error.code) {
+    case ErrorCode.AuthResetTokenInvalid:
+      return "El enlace no es válido o ha caducado. Solicita uno nuevo.";
+    case ErrorCode.AuthPasswordBreached:
+      return "Esta contraseña aparece en filtraciones conocidas. Elige otra.";
+    case ErrorCode.AuthPasswordTooShortNoMFA:
+      return `La contraseña debe tener al menos ${minLength(error)} caracteres.`;
+    case ErrorCode.AuthPasswordTooShortWithMFA:
+      return `La contraseña debe tener al menos ${minLength(error)} caracteres al tener la verificación en dos pasos activada.`;
+    case ErrorCode.AuthTooManyAttempts:
+      return "Se ha bloqueado el acceso temporalmente por demasiados intentos.";
+    default:
+      return "No se ha podido restablecer la contraseña. Inténtalo de nuevo.";
+  }
+}
