@@ -322,30 +322,77 @@ quitarlo lo devuelve a `lintcompose: OK`. `make lint` (con
 `golangci-lint` corrido desde `api/`, nunca desde la raíz) y
 `docker compose --env-file /dev/null config -q` siguen en verde.
 
-### 12. El linting de TypeScript no analiza nada
+### 12. ~~El linting de TypeScript no analiza nada~~ — HECHO (2026-09-15)
 
-`turbo run lint` informa **4/4 correcto** sin revisar una sola línea de
-TypeScript. Los tres paquetes de frontend tienen el mismo script:
+Los tres scripts `lint` de `app`, `packages/shared` y `site` eran un `echo ...
+&& exit 0`: `turbo run lint` informaba **4/4 correcto** sin revisar una sola
+línea de TypeScript. Sustituidos por invocaciones reales de **Biome**
+(`@biomejs/biome`, fijado en exacto `2.5.12`, sin rango — única dependencia
+nueva, sin ESLint ni ecosistema de plugins, conforme a la política de cadena
+de suministro de `pnpm-workspace.yaml`), como linter y formateador para todo
+el workspace TypeScript/JavaScript, configurado en un `biome.jsonc` en la
+raíz.
 
-```
-app             lint = echo 'app: lint not yet configured (Phase 11)' && exit 0
-packages/shared lint = echo 'packages/shared: lint not yet configured (Phase 11)' && exit 0
-site            lint = echo 'site: lint not yet configured' && exit 0
-```
+Cada paquete corre `biome check --error-on-warnings .` desde su propio
+directorio. El `--error-on-warnings` es imprescindible: por defecto Biome
+sale con código 0 aunque encuentre avisos (`noExplicitAny`,
+`noUnusedVariables`, etc. son "warn" en el preset `recommended`, no "error"),
+así que sin ese flag el propio linter nuevo habría sido otro falso verde, más
+disimulado que el `echo` anterior. Verificado plantando un `any` explícito en
+`packages/shared/src/errors.ts` y una variable sin usar en
+`app/src/theme/pickTheme.test.ts`: `turbo run lint` falla señalando
+exactamente el fichero, la línea y la regla (`lint/suspicious/noExplicitAny`,
+`lint/correctness/noUnusedVariables`); quitando ambas plantas vuelve a pasar
+4/4. Ficheros comprobados de verdad, no cero: `app` 19, `packages/shared` 4,
+`site` 1 — evidencia de que el linter mira contenido real, no solo el árbol
+de directorios.
 
-El `(Phase 11)` de esos mensajes es una promesa que nunca llegó a ser tarea:
-la fase 11 de `tasks.md` solo cablea los trabajos de Go y los escáneres de
-seguridad, y no hay ninguna tarea que pida ESLint, Biome ni equivalente. Así
-que no es una tarea cerrada en falso, es una que no existe.
+`packages/shared/src/client/` y `packages/shared/src/schemas/` quedan
+excluidos en `biome.jsonc` porque los regenera `make gen`
+(`packages/shared/scripts/generate.mjs`, cadena
+`api/openapi/openapi.yaml` → `openapi-typescript`/`openapi-zod-client`) y CI
+tiene una puerta de diff sucio sobre esa regeneración: si Biome los
+reformateara, cada `make gen` dejaría el árbol sucio contra su propio
+generador. Al revisar `generate.mjs` para la exclusión se encontró que
+**`packages/shared/src/index.ts` también es generado** (lo escribe
+`generateBarrel()`, con su propia cabecera `GENERATED FILE — DO NOT EDIT`,
+en el mismo `pnpm --filter @vecingest/shared build`) aunque no hay ninguna
+mención de esto en las tareas ni en `PRD_go.md`; se añadió a la misma
+exclusión por la misma razón — el `assist/source/organizeImports` de Biome
+reordena sus tres `export *` a orden alfabético, que no es el orden fijo que
+escribe el generador. Único fichero realmente escrito a mano en
+`packages/shared/src` y cubierto por lint/formato: `src/errors.ts`.
 
-El lado Go sí se analiza de verdad (`golangci-lint` desde `api/`). El lado
-TypeScript, que es todo el frontend y el cliente generado, no tiene ninguna
-comprobación estática más allá de `tsc --noEmit`.
+`site` no tiene ni un `.ts`/`.js` hoy (cero fichero de código fuente en todo
+el paquete, solo `Dockerfile`, `nginx.conf` y `package.json`), así que su
+`biome check --error-on-warnings .` comprueba exactamente 1 fichero
+(`package.json`) y no encuentra nada que analizar en TypeScript. La
+diferencia con el placeholder anterior no es el resultado de hoy — los dos
+informan éxito con 0 líneas de TS miradas — sino el comportamiento futuro: el
+`echo` pasaba siempre, para siempre, sin importar lo que se añadiera; este
+`biome check` empezará a fallar o pasar de verdad en cuanto aterrice el
+primer fichero. Sobre `.astro` en concreto (el sitio está documentado como
+Astro pero sin fase de contenido en `m0-foundation` y sin `astro` instalado
+todavía): Biome 2.5 solo ofrece soporte **experimental** para Vue, Svelte y
+Astro (parseo, formato y lint de sus fragmentos HTML/CSS/JS), apagado por
+defecto; hace falta activar explícitamente
+`html.experimentalFullSupportEnabled` en la configuración, cosa que este
+cambio no ha hecho. Sin esa activación, Biome no analizaría contenido
+`.astro` aunque existiera hoy.
 
-Mismo patrón que los demás falsos verdes de este proyecto: una comprobación
-que informa de éxito sin haber mirado nada. Encontrado al arreglar los colores
-del tema, cuando la verificación decía "lint 4/4 correcto" sobre un cambio que
-tocaba precisamente TypeScript.
+El formateador se configuró a 2 espacios (`formatter.indentStyle: "space"`,
+`indentWidth: 2`) en vez del tab por defecto de Biome, porque es la
+indentación que ya usaba todo `app/` y `packages/shared/` — con el default se
+habría reformateado cada fichero existente a un estilo que el proyecto nunca
+usó, mezclando ruido de formato con hallazgos reales. No se desactivó ninguna
+categoría de reglas para conseguir una pasada silenciosa: los hallazgos
+genuinos que planteó la primera pasada (import sin ordenar, un `require("fs")`
+sin el prefijo `node:`, un `any` explícito en un tipo ambiental de test) se
+corrigieron en el código, no en la configuración.
+
+El lado Go sigue analizado de verdad (`golangci-lint` desde `api/`,
+confirmado con `PATH="$HOME/go/bin:$PATH" make lint` informando `0 issues.`
+tras un análisis real, no tras saltarse el typecheck).
 
 ## Sin implementar todavía (no son fallos)
 
