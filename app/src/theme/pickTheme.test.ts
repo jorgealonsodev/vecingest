@@ -32,13 +32,21 @@ describe("pickTheme", () => {
     expect(lightTheme.colors.primary).not.toBe(darkTheme.colors.primary);
   });
 
-  it("pins background/surface to the exact docs/design frontmatter hex values", () => {
-    // docs/design/vecingest-light.md `colors:` frontmatter.
-    expect(lightTheme.colors.background).toBe("#fbf9f2");
-    expect(lightTheme.colors.surface).toBe("#fbf9f2");
-
-    // docs/design/vecingest-dark.md `colors:` frontmatter.
-    expect(darkTheme.colors.background).toBe("#131312");
-    expect(darkTheme.colors.surface).toBe("#131312");
+  /**
+   * Pins the brand tokens against the PROSE of docs/design/vecingest-light.md,
+   * corroborated by the "vecingest WEB" system (docs/design/vecingest-web.md),
+   * whose frontmatter and prose agree on all four.
+   *
+   * These exact values were once "corrected" to the frontmatter's competing
+   * MD3 palette (#1b1c18, #727782, #c1c6d2, #ba1a1a) on the belief that they
+   * had been invented. They had not. This test exists so the same mistake
+   * fails here instead of reaching a screen.
+   */
+  it("keeps the brand tokens the prose specifies, not the frontmatter's MD3 palette", () => {
+    expect(lightTheme.colors.onBackground).toBe("#0f2a4a");
+    expect(lightTheme.colors.onSurface).toBe("#0f2a4a");
+    expect(lightTheme.colors.onSurfaceVariant).toBe("#5f6b7a");
+    expect(lightTheme.colors.outline).toBe("#d6dad5");
+    expect(lightTheme.colors.error).toBe("#a32d2d");
   });
 });

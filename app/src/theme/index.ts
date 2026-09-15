@@ -1,9 +1,23 @@
 import { MD3DarkTheme, MD3LightTheme, type MD3Theme } from "react-native-paper";
 
 /**
- * Theme tokens for the Expo app, built from the machine-readable `colors`
- * frontmatter blocks of `docs/design/vecingest-light.md` and
- * `vecingest-dark.md` (design.md "Expo login screen" section).
+ * Theme tokens for the Expo app, following the BRAND values in the PROSE of
+ * `docs/design/vecingest-light.md` and `vecingest-dark.md` — NOT their YAML
+ * frontmatter.
+ *
+ * Read that distinction before changing anything here, because it has already
+ * cost one wrong change. Those two documents contradict themselves: the
+ * frontmatter carries `on-background: '#1b1c18'` and `outline: '#727782'`,
+ * while the prose of the very same file specifies `#0F2A4A`, `#5F6B7A`,
+ * `#D6DAD5` and `#A32D2D`. The frontmatter is Stitch's auto-generated MD3
+ * palette; the prose is the brand.
+ *
+ * The prose wins, and the "vecingest WEB" Stitch project
+ * (`projects/14138416730329310203`, mirrored in `docs/design/vecingest-web.md`)
+ * settles it: its frontmatter AND its prose both carry `on-background:
+ * '#0F2A4A'`, `outline: '#5F6B7A'`, `outline-variant: '#D6DAD5'` and
+ * `error-text: '#A32D2D'`, with no internal disagreement. That project governs
+ * `app.vecingest.app`, which is this app's own web export.
  *
  * Deliberate override: `docs/design/README.md`'s non-negotiable rule is a
  * SINGLE interactive accent per theme (`#185FA5` light, `#85B7EB` dark) with
@@ -14,7 +28,7 @@ import { MD3DarkTheme, MD3LightTheme, type MD3Theme } from "react-native-paper";
  * (default button color, focus rings, active tab, etc.). We therefore
  * override `primary`/`onPrimary`/`primaryContainer`/`onPrimaryContainer` to
  * the accent pairing instead of the frontmatter's `primary`/`on-primary`
- * pair, and keep every other MD3 token as the frontmatter defines it.
+ * pair, and keep every other MD3 token as the PROSE defines it.
  */
 
 export const ACCENT_LIGHT = "#185FA5";
@@ -30,18 +44,18 @@ const lightColors = {
   onSecondary: "#ffffff",
   secondaryContainer: "#d4e1f3",
   onSecondaryContainer: "#586473",
-  error: "#ba1a1a",
+  error: "#a32d2d",
   onError: "#ffffff",
-  errorContainer: "#ffdad6",
-  onErrorContainer: "#93000a",
-  background: "#fbf9f2",
-  onBackground: "#1b1c18",
-  surface: "#fbf9f2",
-  onSurface: "#1b1c18",
+  errorContainer: "#fcebeb",
+  onErrorContainer: "#a32d2d",
+  background: "#f1efe8",
+  onBackground: "#0f2a4a",
+  surface: "#ffffff",
+  onSurface: "#0f2a4a",
   surfaceVariant: "#e4e2dc",
-  onSurfaceVariant: "#424751",
-  outline: "#727782",
-  outlineVariant: "#c1c6d2",
+  onSurfaceVariant: "#5f6b7a",
+  outline: "#d6dad5",
+  outlineVariant: "#d6dad5",
 };
 
 const darkColors = {
@@ -60,11 +74,11 @@ const darkColors = {
   onErrorContainer: "#ffdad6",
   background: "#131312",
   onBackground: "#e5e2df",
-  surface: "#131312",
+  surface: "#1b1c1a",
   onSurface: "#e5e2df",
   surfaceVariant: "#353533",
   onSurfaceVariant: "#c1c7d0",
-  outline: "#8b919a",
+  outline: "#41474f",
   outlineVariant: "#41474f",
 };
 
