@@ -140,6 +140,14 @@ x-app-image: &app-image
 services:
   site: # public static web (Astro) -> DOMAIN, manually proxied by nginx
     image: vecingest-site:local
+    # `pull_policy: build` makes `docker compose pull` SKIP this service instead
+    # of trying to fetch it. Verified: without it the pull says `Pulling` and dies
+    # with `pull access denied`; with it, `Skipped`. This matters because
+    # Portainer's stack dialog carries a "re-pull image" toggle that runs a pull
+    # before redeploying, and `vecingest-*:local` exists in no registry -- it is
+    # built here, on the server. That toggle has broken the deploy twice; this
+    # makes the file immune to it instead of relying on someone remembering.
+    pull_policy: build
     build:
       context: . # site/Dockerfile COPYs pnpm-workspace.yaml, site/, app/ and
       # packages/shared from the workspace root -- it needs the whole repo,
@@ -165,6 +173,14 @@ services:
 
   web: # exported Expo app -> app.DOMAIN, manually proxied by nginx
     image: vecingest-web:local
+    # `pull_policy: build` makes `docker compose pull` SKIP this service instead
+    # of trying to fetch it. Verified: without it the pull says `Pulling` and dies
+    # with `pull access denied`; with it, `Skipped`. This matters because
+    # Portainer's stack dialog carries a "re-pull image" toggle that runs a pull
+    # before redeploying, and `vecingest-*:local` exists in no registry -- it is
+    # built here, on the server. That toggle has broken the deploy twice; this
+    # makes the file immune to it instead of relying on someone remembering.
+    pull_policy: build
     build:
       context: . # app/Dockerfile.web COPYs pnpm-workspace.yaml, app/,
       # packages/shared, site/package.json and api/openapi from the
@@ -193,6 +209,14 @@ services:
 
   api: # Go binary -> api.DOMAIN, manually proxied by nginx
     <<: [*app-image, *hardening]
+    # `pull_policy: build` makes `docker compose pull` SKIP this service instead
+    # of trying to fetch it. Verified: without it the pull says `Pulling` and dies
+    # with `pull access denied`; with it, `Skipped`. This matters because
+    # Portainer's stack dialog carries a "re-pull image" toggle that runs a pull
+    # before redeploying, and `vecingest-*:local` exists in no registry -- it is
+    # built here, on the server. That toggle has broken the deploy twice; this
+    # makes the file immune to it instead of relying on someone remembering.
+    pull_policy: build
     build:
       context: . # api/Dockerfile COPYs api/go.mod, api/go.sum and api/
       # from the workspace root -- context has to be the repo root, not api/.
@@ -221,6 +245,10 @@ services:
 
   worker: # River + periodic jobs (same image), never exposed to the proxy
     <<: [*app-image, *hardening]
+    # `never`, not `build`: worker has no `build:` of its own, it reuses the image
+    # `api` builds. Same purpose as `pull_policy: build` above -- make
+    # `docker compose pull` skip it. Verified as `Skipped`.
+    pull_policy: never
     restart: unless-stopped
     user: "65532:65532"
     mem_limit: 256m

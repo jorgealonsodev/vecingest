@@ -1230,6 +1230,15 @@ x-app-image: &app-image
 services:
   site:                           # web pública estática (Astro) → DOMAIN, proxiada a mano por nginx
     image: vecingest-site:local
+    # `pull_policy: build` hace que `docker compose pull` OMITA este servicio en
+    # vez de intentar descargarlo. Comprobado: sin él la descarga dice `Pulling` y
+    # muere con `pull access denied`; con él, `Skipped`. Importa porque el diálogo
+    # de stacks de Portainer trae un interruptor de "volver a descargar la imagen"
+    # que ejecuta un pull antes de redesplegar, y `vecingest-*:local` no existe en
+    # ningún registro: se construye aquí, en el servidor. Ese interruptor ha roto
+    # el despliegue dos veces; esto inmuniza al fichero en vez de depender de que
+    # alguien se acuerde.
+    pull_policy: build
     build:
       context: .                  # site/Dockerfile hace COPY desde la raíz del workspace
       dockerfile: site/Dockerfile
@@ -1247,6 +1256,15 @@ services:
 
   web:                            # app Expo exportada → app.DOMAIN, proxiada a mano por nginx
     image: vecingest-web:local
+    # `pull_policy: build` hace que `docker compose pull` OMITA este servicio en
+    # vez de intentar descargarlo. Comprobado: sin él la descarga dice `Pulling` y
+    # muere con `pull access denied`; con él, `Skipped`. Importa porque el diálogo
+    # de stacks de Portainer trae un interruptor de "volver a descargar la imagen"
+    # que ejecuta un pull antes de redesplegar, y `vecingest-*:local` no existe en
+    # ningún registro: se construye aquí, en el servidor. Ese interruptor ha roto
+    # el despliegue dos veces; esto inmuniza al fichero en vez de depender de que
+    # alguien se acuerde.
+    pull_policy: build
     build:
       context: .                  # app/Dockerfile.web hace COPY desde la raíz del workspace
       dockerfile: app/Dockerfile.web
@@ -1263,6 +1281,15 @@ services:
 
   api:                            # binario Go → api.DOMAIN, proxiada a mano por nginx
     <<: [*app-image, *hardening]
+    # `pull_policy: build` hace que `docker compose pull` OMITA este servicio en
+    # vez de intentar descargarlo. Comprobado: sin él la descarga dice `Pulling` y
+    # muere con `pull access denied`; con él, `Skipped`. Importa porque el diálogo
+    # de stacks de Portainer trae un interruptor de "volver a descargar la imagen"
+    # que ejecuta un pull antes de redesplegar, y `vecingest-*:local` no existe en
+    # ningún registro: se construye aquí, en el servidor. Ese interruptor ha roto
+    # el despliegue dos veces; esto inmuniza al fichero en vez de depender de que
+    # alguien se acuerde.
+    pull_policy: build
     build:
       context: .                  # api/Dockerfile hace COPY desde la raíz del workspace
       dockerfile: api/Dockerfile
@@ -1285,6 +1312,10 @@ services:
 
   worker:                         # River + jobs periódicos (misma imagen)
     <<: [*app-image, *hardening]
+    # `never`, no `build`: worker no tiene `build:` propio, reutiliza la imagen que
+    # construye `api`. Mismo propósito que el `pull_policy: build` de arriba: que
+    # `docker compose pull` lo omita. Comprobado como `Skipped`.
+    pull_policy: never
     restart: unless-stopped
     user: "65532:65532"
     mem_limit: 256m
