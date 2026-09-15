@@ -5,15 +5,11 @@ import { Link } from "expo-router";
 import { useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { ScrollView, StyleSheet, View } from "react-native";
-import {
-  Button,
-  HelperText,
-  Text,
-  TextInput,
-  useTheme,
-} from "react-native-paper";
+import { Button, HelperText, Text, useTheme } from "react-native-paper";
 import type { z } from "zod";
 import { apiClient } from "../auth/api";
+import { FormTextInput } from "../components/FormTextInput";
+import { PrimaryButton } from "../components/PrimaryButton";
 import { MIN_TOUCH_TARGET, spacing } from "../theme";
 import { forgotPasswordErrorMessage } from "./errorMessages";
 
@@ -125,9 +121,8 @@ export function ForgotPasswordScreen() {
                   name="email"
                   render={({ field: { onChange, onBlur, value } }) => (
                     <View style={styles.field}>
-                      <TextInput
+                      <FormTextInput
                         testID="forgot-password-email"
-                        mode="outlined"
                         label="Correo electrónico"
                         autoCapitalize="none"
                         keyboardType="email-address"
@@ -160,9 +155,8 @@ export function ForgotPasswordScreen() {
                   </HelperText>
                 ) : null}
 
-                <Button
+                <PrimaryButton
                   testID="forgot-password-submit"
-                  mode="contained"
                   accessibilityLabel="Enviar enlace"
                   onPress={submit}
                   loading={submitting}
@@ -170,7 +164,7 @@ export function ForgotPasswordScreen() {
                   style={styles.submit}
                 >
                   Enviar enlace
-                </Button>
+                </PrimaryButton>
               </>
             )}
           </View>

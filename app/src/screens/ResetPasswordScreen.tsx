@@ -5,15 +5,11 @@ import { Link } from "expo-router";
 import { useState } from "react";
 import { Controller, type Resolver, useForm } from "react-hook-form";
 import { ScrollView, StyleSheet, View } from "react-native";
-import {
-  Button,
-  HelperText,
-  Text,
-  TextInput,
-  useTheme,
-} from "react-native-paper";
+import { HelperText, Text, TextInput, useTheme } from "react-native-paper";
 import type { z } from "zod";
 import { apiClient } from "../auth/api";
+import { FormTextInput } from "../components/FormTextInput";
+import { PrimaryButton } from "../components/PrimaryButton";
 import { MIN_TOUCH_TARGET, spacing } from "../theme";
 import { resetPasswordErrorMessage } from "./errorMessages";
 
@@ -199,9 +195,8 @@ export function ResetPasswordScreen({ token }: ResetPasswordScreenProps) {
                   name="new_password"
                   render={({ field: { onChange, onBlur, value } }) => (
                     <View style={styles.field}>
-                      <TextInput
+                      <FormTextInput
                         testID="reset-password-new-password"
-                        mode="outlined"
                         label="Nueva contraseña"
                         secureTextEntry={!newPasswordVisible}
                         value={value}
@@ -246,9 +241,8 @@ export function ResetPasswordScreen({ token }: ResetPasswordScreenProps) {
                   name="confirm_password"
                   render={({ field: { onChange, onBlur, value } }) => (
                     <View style={styles.field}>
-                      <TextInput
+                      <FormTextInput
                         testID="reset-password-confirm-password"
-                        mode="outlined"
                         label="Confirmar nueva contraseña"
                         secureTextEntry={!confirmPasswordVisible}
                         value={value}
@@ -295,9 +289,8 @@ export function ResetPasswordScreen({ token }: ResetPasswordScreenProps) {
                   </HelperText>
                 ) : null}
 
-                <Button
+                <PrimaryButton
                   testID="reset-password-submit"
-                  mode="contained"
                   accessibilityLabel="Guardar contraseña"
                   onPress={submit}
                   loading={submitting}
@@ -305,7 +298,7 @@ export function ResetPasswordScreen({ token }: ResetPasswordScreenProps) {
                   style={styles.submit}
                 >
                   Guardar contraseña
-                </Button>
+                </PrimaryButton>
               </>
             )}
           </View>

@@ -13,17 +13,13 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import {
-  Button,
-  HelperText,
-  Text,
-  TextInput,
-  useTheme,
-} from "react-native-paper";
+import { HelperText, Text, TextInput, useTheme } from "react-native-paper";
 import type { z } from "zod";
 import { apiClient } from "../auth/api";
 import { persistRefreshToken } from "../auth/secureTokens";
 import { setSession } from "../auth/session";
+import { FormTextInput } from "../components/FormTextInput";
+import { PrimaryButton } from "../components/PrimaryButton";
 import { BREAKPOINT_DESKTOP, MIN_TOUCH_TARGET, spacing } from "../theme";
 import { loginErrorMessage } from "./errorMessages";
 
@@ -233,9 +229,8 @@ export function LoginScreen() {
           name="email"
           render={({ field: { onChange, onBlur, value } }) => (
             <View style={styles.field}>
-              <TextInput
+              <FormTextInput
                 testID="login-email"
-                mode="outlined"
                 label="Correo electrónico"
                 autoCapitalize="none"
                 keyboardType="email-address"
@@ -258,9 +253,8 @@ export function LoginScreen() {
           name="password"
           render={({ field: { onChange, onBlur, value } }) => (
             <View style={styles.field}>
-              <TextInput
+              <FormTextInput
                 testID="login-password"
-                mode="outlined"
                 label="Contraseña"
                 secureTextEntry={!passwordVisible}
                 value={value}
@@ -311,9 +305,8 @@ export function LoginScreen() {
           </HelperText>
         ) : null}
 
-        <Button
+        <PrimaryButton
           testID="login-submit"
-          mode="contained"
           accessibilityLabel="Entrar"
           onPress={onSubmit}
           loading={submitting}
@@ -321,7 +314,7 @@ export function LoginScreen() {
           style={styles.submit}
         >
           Entrar
-        </Button>
+        </PrimaryButton>
       </View>
 
       <View style={styles.footer}>
