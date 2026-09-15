@@ -12,5 +12,5 @@ import Login from "./login";
 it("renders the login route with its primary action", async () => {
   await render(<Login />);
 
-  expect(screen.getByRole("button", { name: "Iniciar sesión" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Entrar" })).toBeTruthy();
 });

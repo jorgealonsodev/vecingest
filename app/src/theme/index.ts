@@ -150,6 +150,29 @@ export const MIN_FONT_SIZE = 11;
 export const MIN_TOUCH_TARGET = 44;
 
 /**
+ * Spacing scale, from `docs/design/vecingest-web.md`'s `## Layout & Spacing`
+ * section / frontmatter `spacing:` block (Vecingest Institutional Engine
+ * design system, the WEB Stitch project `projects/14138416730329310203`,
+ * which governs this app's web export — see that document's own header).
+ */
+export const spacing = {
+  space4: 4,
+  space8: 8,
+  space12: 12,
+  space16: 16,
+  space24: 24,
+  space32: 32,
+  space40: 40,
+  space48: 48,
+} as const;
+
+/**
+ * Desktop breakpoint, from `docs/design/vecingest-web.md`'s breakpoint table
+ * (`Desktop (> 1024px)`) — the Stitch design system's `lg` breakpoint.
+ */
+export const BREAKPOINT_DESKTOP = 1024;
+
+/**
  * Picks the theme for the device's color scheme. `login.tsx` wires this to
  * `useColorScheme()`; extracted as a pure function so the light/dark
  * selection is unit-testable without mocking the native `Appearance` module.
