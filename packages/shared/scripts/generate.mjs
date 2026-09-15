@@ -12,9 +12,9 @@
 // Invoked by `make gen` via `pnpm --filter @vecingest/shared build`.
 
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import path from "node:path";
 import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pkgRoot = path.resolve(here, "..");
@@ -47,7 +47,10 @@ function generateClientTypes() {
     stdio: "inherit",
   });
   const generated = fs.readFileSync(outFile, "utf8");
-  fs.writeFileSync(outFile, generatedHeader("api/openapi/openapi.yaml") + generated);
+  fs.writeFileSync(
+    outFile,
+    generatedHeader("api/openapi/openapi.yaml") + generated,
+  );
 }
 
 // 2. A deterministic, generated one-line wrapper around openapi-fetch's
@@ -94,7 +97,10 @@ function generateZodSchemas() {
     { stdio: "inherit" },
   );
   const generated = fs.readFileSync(outFile, "utf8");
-  fs.writeFileSync(outFile, generatedHeader("api/openapi/openapi.yaml") + generated);
+  fs.writeFileSync(
+    outFile,
+    generatedHeader("api/openapi/openapi.yaml") + generated,
+  );
 }
 
 // 4. Deterministic barrel re-exporting the client, schemas and the

@@ -9,6 +9,7 @@
     "build": "turbo run build"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.12",
     "turbo": "^2.5.0"
   }
 }

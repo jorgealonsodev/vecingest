@@ -1,7 +1,7 @@
 import { useColorScheme } from "react-native";
 import { PaperProvider } from "react-native-paper";
-import { pickTheme } from "../../src/theme";
 import { LoginScreen } from "../../src/screens/LoginScreen";
+import { pickTheme } from "../../src/theme";
 
 /**
  * Login route. PaperProvider theme wiring lives here, switched by

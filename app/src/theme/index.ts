@@ -100,9 +100,15 @@ export const lightTheme: MD3Theme = {
   colors: lightColors,
   fonts: {
     ...MD3LightTheme.fonts,
-    headlineLarge: { ...MD3LightTheme.fonts.headlineLarge, ...fontConfig.headlineLarge },
+    headlineLarge: {
+      ...MD3LightTheme.fonts.headlineLarge,
+      ...fontConfig.headlineLarge,
+    },
     bodyMedium: { ...MD3LightTheme.fonts.bodyMedium, ...fontConfig.bodyMedium },
-    labelMedium: { ...MD3LightTheme.fonts.labelMedium, ...fontConfig.labelMedium },
+    labelMedium: {
+      ...MD3LightTheme.fonts.labelMedium,
+      ...fontConfig.labelMedium,
+    },
     labelSmall: { ...MD3LightTheme.fonts.labelSmall, ...fontConfig.labelSmall },
   },
 };
@@ -112,9 +118,15 @@ export const darkTheme: MD3Theme = {
   colors: darkColors,
   fonts: {
     ...MD3DarkTheme.fonts,
-    headlineLarge: { ...MD3DarkTheme.fonts.headlineLarge, ...fontConfig.headlineLarge },
+    headlineLarge: {
+      ...MD3DarkTheme.fonts.headlineLarge,
+      ...fontConfig.headlineLarge,
+    },
     bodyMedium: { ...MD3DarkTheme.fonts.bodyMedium, ...fontConfig.bodyMedium },
-    labelMedium: { ...MD3DarkTheme.fonts.labelMedium, ...fontConfig.labelMedium },
+    labelMedium: {
+      ...MD3DarkTheme.fonts.labelMedium,
+      ...fontConfig.labelMedium,
+    },
     labelSmall: { ...MD3DarkTheme.fonts.labelSmall, ...fontConfig.labelSmall },
   },
 };

@@ -8,7 +8,7 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "echo 'app: lint not yet configured (Phase 11)' && exit 0",
+    "lint": "biome check --error-on-warnings .",
     "typecheck": "tsc --noEmit",
     "test": "jest",
     "build": "expo export -p web"

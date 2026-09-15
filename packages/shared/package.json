@@ -15,7 +15,7 @@
   "scripts": {
     "generate": "node scripts/generate.mjs",
     "build": "pnpm run generate && tsc --noEmit",
-    "lint": "echo 'packages/shared: lint not yet configured (Phase 11)' && exit 0",
+    "lint": "biome check --error-on-warnings .",
     "typecheck": "tsc --noEmit",
     "test": "echo 'packages/shared: no test command (generated-only package, config.yaml test_command: null)' && exit 0"
   },

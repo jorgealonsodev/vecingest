@@ -1,16 +1,22 @@
+import { zodResolver } from "@hookform/resolvers/zod";
+import type { ApiErrorBody } from "@vecingest/shared/errors";
+import { schemas } from "@vecingest/shared/schemas";
 import { useState } from "react";
 import { Controller, useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
 import { Platform, StyleSheet, View } from "react-native";
-import { Button, HelperText, Text, TextInput, useTheme } from "react-native-paper";
-import { schemas } from "@vecingest/shared/schemas";
-import type { ApiErrorBody } from "@vecingest/shared/errors";
+import {
+  Button,
+  HelperText,
+  Text,
+  TextInput,
+  useTheme,
+} from "react-native-paper";
 import type { z } from "zod";
 import { apiClient } from "../auth/api";
-import { setSession } from "../auth/session";
 import { persistRefreshToken } from "../auth/secureTokens";
-import { loginErrorMessage } from "./errorMessages";
+import { setSession } from "../auth/session";
 import { MIN_TOUCH_TARGET } from "../theme";
+import { loginErrorMessage } from "./errorMessages";
 
 type LoginFormValues = z.infer<typeof schemas.LoginRequest>;
 
@@ -76,7 +82,10 @@ export function LoginScreen() {
   });
 
   return (
-    <View testID="login-screen" style={[styles.container, { backgroundColor: theme.colors.background }]}>
+    <View
+      testID="login-screen"
+      style={[styles.container, { backgroundColor: theme.colors.background }]}
+    >
       <Text variant="headlineLarge" style={styles.title}>
         Iniciar sesión
       </Text>
@@ -131,7 +140,12 @@ export function LoginScreen() {
       />
 
       {serverError ? (
-        <HelperText type="error" visible testID="login-server-error" style={styles.serverError}>
+        <HelperText
+          type="error"
+          visible
+          testID="login-server-error"
+          style={styles.serverError}
+        >
           {serverError}
         </HelperText>
       ) : null}

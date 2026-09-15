@@ -1,16 +1,23 @@
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react-native";
 import * as SecureStore from "expo-secure-store";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react-native";
 import { PaperProvider } from "react-native-paper";
-import { LoginScreen } from "./LoginScreen";
-import { lightTheme } from "../theme";
 import { apiClient } from "../auth/api";
-import { getSession, clearSession } from "../auth/session";
+import { clearSession, getSession } from "../auth/session";
+import { lightTheme } from "../theme";
+import { LoginScreen } from "./LoginScreen";
 
 // `require` here is Jest's real Node CommonJS global; the app has no
 // `@types/node` dependency (React Native's own ambient types are enough for
-// shipped code), so it is typed loosely for these two structural checks only.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-declare const require: { resolve: (id: string) => string } & ((id: string) => any);
+// shipped code), so it is typed loosely, narrowed to only the members these
+// two structural checks actually call.
+declare const require: { resolve: (id: string) => string } & ((id: string) => {
+  readFileSync: (path: string, encoding: string) => string;
+});
 
 jest.mock("../auth/api", () => ({
   apiClient: { POST: jest.fn() },
@@ -33,7 +40,10 @@ describe("LoginScreen — generated-schema validation (app-login-ui: Generated-S
   it("blocks submission on an empty password, using the generated schema, before any network call", async () => {
     await renderLoginScreen();
 
-    await fireEvent.changeText(screen.getByTestId("login-email"), "vecino@example.com");
+    await fireEvent.changeText(
+      screen.getByTestId("login-email"),
+      "vecino@example.com",
+    );
     // password left empty — schemas.LoginRequest requires password.min(12)
     await fireEvent.press(screen.getByTestId("login-submit"));
 
@@ -45,8 +55,7 @@ describe("LoginScreen — generated-schema validation (app-login-ui: Generated-S
   });
 
   it("declares no hand-written validation schema — it resolves against schemas.LoginRequest", () => {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const source: string = require("fs").readFileSync(
+    const source: string = require("node:fs").readFileSync(
       require.resolve("./LoginScreen.tsx"),
       "utf8",
     );
@@ -74,8 +83,14 @@ describe("LoginScreen — secure token storage (app-login-ui: Secure Token Stora
 
     await renderLoginScreen();
 
-    await fireEvent.changeText(screen.getByTestId("login-email"), "vecino@example.com");
-    await fireEvent.changeText(screen.getByTestId("login-password"), "a-strong-password");
+    await fireEvent.changeText(
+      screen.getByTestId("login-email"),
+      "vecino@example.com",
+    );
+    await fireEvent.changeText(
+      screen.getByTestId("login-password"),
+      "a-strong-password",
+    );
 
     await fireEvent.press(screen.getByTestId("login-submit"));
 
@@ -98,6 +113,8 @@ describe("LoginScreen — secure token storage (app-login-ui: Secure Token Stora
     });
 
     // The app never depends on AsyncStorage for token persistence.
-    expect(() => require.resolve("@react-native-async-storage/async-storage")).toThrow();
+    expect(() =>
+      require.resolve("@react-native-async-storage/async-storage"),
+    ).toThrow();
   });
 });

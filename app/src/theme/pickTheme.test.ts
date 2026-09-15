@@ -1,4 +1,10 @@
-import { ACCENT_DARK, ACCENT_LIGHT, darkTheme, lightTheme, pickTheme } from "./index";
+import {
+  ACCENT_DARK,
+  ACCENT_LIGHT,
+  darkTheme,
+  lightTheme,
+  pickTheme,
+} from "./index";
 
 /**
  * Pure unit coverage for the `useColorScheme()`-driven theme switch used by

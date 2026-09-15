@@ -1,7 +1,13 @@
 import { render, screen } from "@testing-library/react-native";
 import { PaperProvider } from "react-native-paper";
+import {
+  ACCENT_DARK,
+  ACCENT_LIGHT,
+  darkTheme,
+  lightTheme,
+  MIN_TOUCH_TARGET,
+} from "../theme";
 import { LoginScreen } from "./LoginScreen";
-import { ACCENT_DARK, ACCENT_LIGHT, MIN_TOUCH_TARGET, darkTheme, lightTheme } from "../theme";
 
 /**
  * app-login-ui: Login Screen Light and Dark Mode.
@@ -65,8 +71,12 @@ describe("LoginScreen — dark mode", () => {
     // WCAG contrast: on-background text against the dark background, and
     // the accent's own text pairing, both clear the 4.5:1 AA floor for
     // normal text.
-    expect(contrastRatio(darkTheme.colors.onBackground, darkTheme.colors.background)).toBeGreaterThanOrEqual(4.5);
-    expect(contrastRatio(darkTheme.colors.onPrimary, darkTheme.colors.primary)).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrastRatio(darkTheme.colors.onBackground, darkTheme.colors.background),
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrastRatio(darkTheme.colors.onPrimary, darkTheme.colors.primary),
+    ).toBeGreaterThanOrEqual(4.5);
 
     expect(screen.getByRole("button", { name: "Iniciar sesión" })).toBeTruthy();
   });

@@ -1,4 +1,4 @@
-import { ErrorCode, type ApiErrorBody } from "@vecingest/shared/errors";
+import { type ApiErrorBody, ErrorCode } from "@vecingest/shared/errors";
 
 /**
  * Maps the server's stable error codes to Spanish, sentence-case UI copy.

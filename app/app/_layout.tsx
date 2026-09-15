@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import {
   BricolageGrotesque_600SemiBold,
   useFonts as useBricolageFonts,
@@ -8,8 +7,9 @@ import {
   IBMPlexSans_500Medium,
   useFonts as useIBMPlexFonts,
 } from "@expo-google-fonts/ibm-plex-sans";
-import * as SplashScreen from "expo-splash-screen";
 import { Stack } from "expo-router";
+import * as SplashScreen from "expo-splash-screen";
+import { useEffect } from "react";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -18,7 +18,9 @@ SplashScreen.preventAutoHideAsync();
  * for headings, IBM Plex Sans for body/labels) before rendering any screen.
  */
 export default function RootLayout() {
-  const [bricolageLoaded] = useBricolageFonts({ BricolageGrotesque_600SemiBold });
+  const [bricolageLoaded] = useBricolageFonts({
+    BricolageGrotesque_600SemiBold,
+  });
   const [ibmPlexLoaded] = useIBMPlexFonts({
     IBMPlexSans_400Regular,
     IBMPlexSans_500Medium,
