@@ -1,21 +1,27 @@
 # Funcionalidad de la consola web (Stitch) — inventario por hito
 
-Estado a 2026-09-15. Auditoría de las 46 pantallas reales del proyecto Stitch
-`14138416730329310203` ("VecinGest WEB", desktop, 1280 px), cuyo índice está en
-`docs/design/stitch-screens-web.md`. De las 48 filas de ese índice se excluyen
+Estado a 2026-09-15. Auditoría de las 48 pantallas reales del proyecto Stitch
+`14138416730329310203` ("VecinGest WEB", desktop), cuyo índice está en
+`docs/design/stitch-screens-web.md`. De las 50 filas de ese índice se excluyen
 `DESIGN.md` (copia embebida del design system) y "Logotipo Vecingest Pro"
 (un asset), que no son pantallas.
 
 Método: se descargó el HTML de cada pantalla (`htmlCode.downloadUrl` de
 `mcp__stitch__get_screen`) y se procesó con un script que extrae título,
 cabeceras de tabla, botones, enlaces, inputs, selects y chips de estado —
-nunca se pegó el HTML completo en el contexto de trabajo. Dos pantallas,
+nunca se pegó el HTML completo en el contexto de trabajo.
+
+**Nota histórica (auditoría original de esta mañana):** dos pantallas,
 "Deudores y certificados" (`04bd2f25a67f40f6b0bad9b65ddd618a`) y "Recibos"
-(`7e89804d2e3d45e180ab448e9e7b43d5`), no devolvieron un `downloadUrl` sino un
-`data:` URI embebido de 1280×1024 — la mitad de resolución del resto — con
-sidebar y cabecera completos pero un `<main>` vacío: Stitch no llegó a generar
-tabla ni tarjetas para ninguna de las dos. Su título y la pestaña de navegación
-activa dan el alcance, pero no hay campos que extraer.
+(`7e89804d2e3d45e180ab448e9e7b43d5`), habían devuelto un `<main>` vacío —
+sidebar y cabecera completos pero sin tabla ni tarjetas. **Esos dos ids
+siguen vacíos y no se han regenerado**; siguen apareciendo en
+`docs/design/stitch-screens-web.md` marcados `(vacía)` para que nadie vuelva
+a auditarlos esperando contenido. El 2026-09-15 se crearon dos pantallas
+**nuevas** con los mismos títulos — `10faad887d6b4a69bb0975315a2a1a83`
+("Recibos") y `32a42ad688cf4843a1bf70fd8f7d4eae` ("Deudores y
+certificados") — y esas sí traen contenido completo; son las que se
+documentan en M5 más abajo, con sus ids nuevos.
 
 El objetivo es agrupar por hito del `PRD_go.md` (tabla de la sección 10, línea
 ~1493) qué endpoints y tablas nuevas implica cada pantalla, evitando listar
@@ -216,38 +222,158 @@ todo.
 
 ## M5 — Recibos y saldo, morosidad
 
-Pantallas: Recibos (`7e89804d2e3d45e180ab448e9e7b43d5`) y Deudores y
-certificados (`04bd2f25a67f40f6b0bad9b65ddd618a`) — **ambas con `<main>`
-vacío**, ver nota de método al principio: sólo se puede documentar que
-existen (por su título y su entrada de navegación activa "Recibos" / "Fiscal
-y Deudores"), no qué columnas o acciones tienen. Además, Nueva convocatoria:
-Paso 5 Deudores (`4b362c2b0d184bdfaa76f2f4f86c5bf4`), que sí trae contenido y
-es la que realmente documenta el dominio de morosidad.
+Pantallas: Recibos (`10faad887d6b4a69bb0975315a2a1a83`, creada 2026-09-15) y
+Deudores y certificados (`32a42ad688cf4843a1bf70fd8f7d4eae`, creada
+2026-09-15). Ambas sustituyen en contenido a los ids de la auditoría
+original con el mismo título (`7e89804d2e3d45e180ab448e9e7b43d5` y
+`04bd2f25a67f40f6b0bad9b65ddd618a`), que siguen en el proyecto pero con
+`<main>` vacío — ver nota histórica al principio del documento. También
+Nueva convocatoria: Paso 5 Deudores (`4b362c2b0d184bdfaa76f2f4f86c5bf4`), ya
+documentada antes, cuya tabla Vivienda | Titular registral | Deuda vencida |
+Recibos pendientes | Estado de voto coincide con la de "Deudores y
+certificados" (ahora con más detalle: coeficiente de participación, canal de
+notificación, emisión de certificado).
 
-**Datos que sí se pudieron extraer** (de la pantalla de convocatoria, Paso 5):
-tabla Vivienda | Titular registral | Deuda vencida | Recibos pendientes |
-Estado de voto.
+### Recibos (`10faad887d6b4a69bb0975315a2a1a83`)
+
+Propósito: panel de administración contable de cuotas y recibos por
+comunidad — emisión, cobro domiciliado (SEPA) y gestión de devoluciones.
+Cabecera: "Administración Contable · Remesas SEPA ISO 20022", ejercicio
+fiscal 2026.
+
+Datos mostrados — tarjetas de métrica: Emitido este mes (2.028,00 €, 24
+recibos ordinarios), Cobrado (1.690,00 €, 83,3 % cobrado puntualmente),
+Pendiente (338,00 €, 2 fincas, 16,7 % saldo sin conciliar), Devueltos (2,
+"recibos rebotados bancariamente"). Filtros: comunidad, período de
+liquidación (mes), estado del recibo (todos / solo devueltos / cobrados /
+pendientes de emisión), búsqueda rápida, interruptor "Solo con deuda".
+
+Tabla — columnas: **Vivienda | Titular | Concepto | Fecha emisión | Importe |
+Estado | Acciones**. Estados vistos en la captura: "Devuelto (Adeudo
+bancario rechazado)", "Cobrado", "Cobrado (SEPA B2B)". Acciones por fila:
+"Marcar pagado" y "Reclamar" en filas devueltas; "Ver detalle" en filas
+cobradas.
+
+Acciones ofrecidas (cabecera): "Importar CSV remesa" y "Emitir recibos /
+Exportar SEPA". Pie de pantalla: aviso normativo — "las devoluciones
+bancarias conllevan notificación fehaciente previa a la privación de
+derecho de voto en junta (art. 15.2 LPH)" — y una insignia "Certificado
+eIDAS".
+
+Pestañas hermanas visibles en la cabecera de esta sección (sin pantalla
+propia detrás en esta auditoría): "Recibos y remesas" (activa), "Deudores y
+certificados" (badge "2"), "Modelo 347 (Hacienda)" — esta última es un
+hueco de diseño igual que "Reservas" en M6: hay enlace, no hay pantalla que
+auditar.
+
+### Deudores y certificados (`32a42ad688cf4843a1bf70fd8f7d4eae`)
+
+Propósito: consola de morosidad y emisión de certificados de deuda por
+comunidad, con cómputo de privación de voto (art. 15.2 LPH). Cabecera:
+"Sincronización bancaria CSB 19/58 al día", chip "Régimen Especial LPH
+49/1960". Selector de finca por CIF: C/ Mayor 12 Irun, C.P. Gran Vía 42
+Bilbao, Paseo Salamanca 12 Donostia.
+
+Datos mostrados — tarjetas de métrica: Deuda Total Comunidad (1.352,00 €, 2
+viviendas con liquidación vencida), Propietarios Privados de Voto (2 / 24,
+"Art. 15.2 LPH aplicable en junta"), Solicitudes de Certificado (1 en curso,
+"vence en 2 días — Art. 9.1.e LPH"). Filtros: búsqueda, importe ("todos los
+importes" / "> 500,00 € (crítico)"), botón "Exportar LPH".
+
+Tabla — columnas: **Vivienda | Titular Registral | Deuda vencida | Recibos |
+Notificación / Acción**. Cada fila lleva el coeficiente de participación del
+titular (p. ej. "Coef. 4,16 %"), el chip "Sin derecho a voto", canal y fecha
+de la última notificación ("Burofax entregado, hace 14 días" / "App / Email
+leído, hace 3 días") y una acción "Certificado". Bajo la tabla: resumen "22
+fincas al corriente de pago — 100 % de cuotas ordinarias y extraordinarias
+liquidadas al día" (91,6 % solvencia) y un bloque "Quórum y derecho a voto
+(LPH art. 15.2)" con dos barras — propietarios con derecho a voto (91,6 %,
+22/24) y cuotas de participación habilitadas (91,68 %) — más un enlace
+"Cómputo en Juntas".
+
+Acción principal — panel de emisión de certificado (expediente de ejemplo
+`#CERT-2026-089`): selector de finalidad jurídica con dos opciones:
+
+- **"Para reclamación judicial (art. 21.3 LPH)"**: liquidación detallada,
+  desglose mensual de recibos y constancia de notificación previa al deudor,
+  para el procedimiento monitorio.
+- **"Para venta de la vivienda (art. 9.1.e LPH)"** (seleccionada en la
+  captura): certificación del estado de deudas para escritura pública
+  notarial, con plazo de expedición de 7 días naturales y contador visible
+  ("Solicitado el 18 sep 2026 · Vence el 25 sep 2026 · quedan 2 días").
+
+Ambas opciones citan "Acreditación obligatoria con firma de la
+secretaria-administradora y V.º B.º de la presidenta". Desglose de deuda en
+la captura: cuotas ordinarias (8 recibos, 676,00 €) + derrama ascensor (2
+recibos, 169,00 €) = 845,00 € total computable. Firmante: "Ane Larrañaga
+(Col. 4.192), firma digital certificada por FNMT". Acción final: "Generar
+PDF y firmar digitalmente", con nota de que el documento se archiva en el
+libro de actas digital y se envía copia con CSV al notario solicitante.
 
 **Endpoints:**
-- `GET /v1/communities/{id}/receipts?unit_id=&status=`
+- `GET /v1/communities/{id}/receipts?unit_id=&period=&status=` (estados:
+  pendiente/cobrado/devuelto; "pendiente de emisión" en la UI parece un
+  filtro, no necesariamente un cuarto estado de tabla)
+- `POST /v1/communities/{id}/receipts/import` (CSV de remesa)
+- `PATCH /v1/receipts/{id}` (marcar pagado, con motivo/canal)
+- `POST /v1/receipts/{id}/claim` (acción "Reclamar" sobre fila devuelta)
 - `GET /v1/units/{id}/balance`
-- `GET /v1/communities/{id}/debtors`
-- `POST /v1/communities/{id}/debt-certificates`
+- `GET /v1/communities/{id}/debtors?min_amount=`
+- `POST /v1/communities/{id}/debt-certificates` (`purpose`:
+  `judicial_claim` art. 21.3 / `unit_sale` art. 9.1.e)
+- `GET /v1/debt-certificates/{id}` (descarga del PDF)
 
-**Tablas:** `receipt` (`community_id`, `unit_id`, periodo, importe, estado),
-vista o flag de deudor por `unit`, `debt_certificate` (emitido por, emitido
-en — con "acceso registrado" según la puerta de seguridad de M5).
+**Conflicto/ambigüedad con el PRD — "Emitir recibos / Exportar SEPA":** la
+§5.9 del PRD (línea 321) dice "los recibos se generan fuera (software del
+despacho) y se importan; la plataforma no calcula cuotas en esta fase". El
+botón "Emitir recibos / Exportar SEPA" de la pantalla es ambiguo: si
+"emitir" significa generar el fichero de remesa SEPA a partir de recibos ya
+importados, es compatible (solo exporta lo que ya existe); si significa que
+la plataforma calcula y crea recibos nuevos, contradice esa frase
+directamente. La sincronización bancaria CSB 19/58 (conciliación automática
+de cobros/devoluciones) tampoco está descrita en el PRD, que solo prevé
+import CSV o alta manual — es alcance nuevo, no confirmado. Por esta
+ambigüedad no se ha modelado un endpoint de "generar recibo": el único
+endpoint de escritura de recibo listado arriba es `import`, sobre datos que
+ya existen.
+
+**Sin botón de pago en esta pantalla:** a diferencia de la pantalla
+"Recibos" del móvil (ver README, contradicción 2, que sí tiene un botón de
+pagar), esta pantalla de escritorio **no ofrece cobrar dentro de la
+plataforma**. "Marcar pagado" es una anotación manual de estado — coherente
+con "el cobro se gestiona fuera de la plataforma, se anota en recibos"
+(PRD, línea 296) — no un endpoint de pago; no se ha inventado ninguno.
+
+**Tablas:** `receipt` (`community_id`, `unit_id`, período, concepto,
+importe, fecha de emisión, estado, canal de devolución), vista o flag de
+deudor por `unit` con coeficiente de participación, `debt_certificate`
+(`unit_id`, `purpose`: `judicial_claim`/`unit_sale`, emitido por, V.º B.º
+de, fecha de solicitud, plazo legal, fecha de emisión, desglose de
+liquidación — con "acceso registrado" según la puerta de seguridad de M5).
 
 **Carga legal:** el estado de deudor calculado aquí es el que bloquea el
 derecho a voto bajo LPH Art. 15.2 en las pantallas de M7 (Paso 5, Abrir
 junta, Punto cerrado) — Recibos/Deudores es la fuente de verdad de la que
-depende esa regla, no un módulo aislado.
+depende esa regla, no un módulo aislado. Los dos tipos de certificado que
+ofrece la pantalla coinciden exactamente con los dos que exige la §5.9 del
+PRD: liquidación de deuda para el monitorio (art. 21.3) y estado de deudas
+para la venta de la vivienda (art. 9.1.e, plazo perentorio de 7 días
+naturales desde la solicitud) — este segundo es, literalmente, el
+certificado que exige el art. 9.1.e LPH para poder otorgar la escritura de
+compraventa: su ausencia o su retraso bloquea una operación inmobiliaria
+real, no es solo un trámite interno. La exclusión de voto del art. 15.2 LPH
+admite las excepciones ya señaladas en M7 (impugnación judicial, deuda
+consignada); esta pantalla calcula "Sin derecho a voto" a partir de la
+deuda vencida pero no muestra, en la captura auditada, un control por fila
+para marcar impugnación o consignación — ese control sí existe en "Abrir
+junta" (M7). Queda sin confirmar si el estado de excepción se comparte
+entre ambas pantallas o si se calcula por separado en cada una.
 
 ---
 
 ## M6 — Reservas de zonas comunes
 
-Ninguna de las 46 pantallas documenta esta función en detalle. El enlace
+Ninguna de las 48 pantallas documenta esta función en detalle. El enlace
 "Reservas" aparece en el menú lateral de prácticamente todas las pantallas de
 administrador, pero no hay una pantalla propia de calendario/reserva en este
 proyecto de Stitch — es un hueco del diseño, no del backend: no se puede
@@ -362,8 +488,12 @@ de forzarla.
 
 ## Pantallas cuyo propósito no se pudo determinar
 
-Ninguna. Las 46 pantallas tienen un título y una posición de navegación que
-identifican su propósito sin ambigüedad. La única limitación real es de
-**contenido**, no de propósito: "Recibos" y "Deudores y certificados"
-(sección M5) devolvieron un `<main>` vacío en Stitch, así que se sabe qué son
-pero no qué campos o acciones tendrían.
+Ninguna. Las 48 pantallas reales tienen un título y una posición de
+navegación que identifican su propósito sin ambigüedad. Dos ids concretos
+(`7e89804d2e3d45e180ab448e9e7b43d5` "Recibos" y
+`04bd2f25a67f40f6b0bad9b65ddd618a` "Deudores y certificados") siguen con
+`<main>` vacío en Stitch — se sabe qué son por su título y su navegación
+activa, pero no qué campos o acciones tendrían, y no se han regenerado. El
+contenido real de esas dos pantallas quedó documentado en M5 a través de dos
+ids **nuevos** creados el 2026-09-15 con los mismos títulos
+(`10faad887d6b4a69bb0975315a2a1a83` y `32a42ad688cf4843a1bf70fd8f7d4eae`).

@@ -20,9 +20,12 @@ lo que interesa es qué cuesta M1, no qué hace la pantalla 47.
 | [`app-movil-2.md`](./app-movil-2.md) | *Delegar mi voto* → *Informe mensual* | 20 |
 | [`app-movil-3.md`](./app-movil-3.md) | *Iniciar sesión* → pista de pádel | 18 |
 | [`app-movil-4.md`](./app-movil-4.md) | *Proponer un punto* → *Zonas comunes* | 18 |
-| [`consola-web.md`](./consola-web.md) | Los 46 diseños de escritorio | 46 |
+| [`consola-web.md`](./consola-web.md) | Los 48 diseños de escritorio | 48 |
 
-**121 pantallas reales.** Las seis restantes de las 127 del índice son
+**123 pantallas reales** (46 de escritorio con contenido + 2 ids de
+escritorio vacíos que Stitch nunca rellenó + 75 de móvil — ver
+`consola-web.md` para el detalle de los dos ids vacíos y los dos que los
+sustituyen). Las seis restantes de las 129 filas del índice combinado son
 fotografías de banco, logotipos y la copia que Stitch guarda del propio
 `design.md`.
 
@@ -69,9 +72,28 @@ No son fallos del inventario: son decisiones pendientes.
    dos valores del enum `company_members.role` del PRD ("Técnico Campo",
    "Responsable Oficina").
 
-6. **Dos pantallas de escritorio llegaron vacías** desde Stitch ("Recibos" y
-   "Deudores y certificados"): su `<main>` no tiene contenido. Quedan
-   documentadas como tales en vez de rellenarlas a ojo.
+6. **Dos pantallas de escritorio llegaron vacías** desde Stitch ("Recibos",
+   `7e89804d2e3d45e180ab448e9e7b43d5`, y "Deudores y certificados",
+   `04bd2f25a67f40f6b0bad9b65ddd618a`): su `<main>` no tiene contenido.
+   **Actualización 2026-09-15:** esos dos ids siguen vacíos — no se
+   regeneraron — pero se crearon dos pantallas *nuevas* con los mismos
+   títulos (`10faad887d6b4a69bb0975315a2a1a83` y
+   `32a42ad688cf4843a1bf70fd8f7d4eae`) que sí traen contenido completo. El
+   contenido de M5 en `consola-web.md` ya usa los ids nuevos; los ids vacíos
+   se dejan anotados en `stitch-screens-web.md` para que nadie los vuelva a
+   auditar esperando encontrar algo.
+
+7. **"Emitir recibos / Exportar SEPA" es ambiguo frente al PRD.** La nueva
+   pantalla "Recibos" (`10faad887d6b4a69bb0975315a2a1a83`) ofrece ese botón
+   más una sincronización bancaria CSB 19/58, pero el PRD (§5.9, línea 321)
+   dice que "los recibos se generan fuera (software del despacho) y se
+   importan; la plataforma no calcula cuotas en esta fase". Si "emitir"
+   solo exporta a SEPA lo ya importado, no hay conflicto; si genera recibos
+   nuevos, sí lo hay. No se resolvió la ambigüedad ni se inventó el
+   endpoint que faltaría para el segundo caso. La propia pantalla, en
+   cambio, **no** tiene botón de cobrar — "Marcar pagado" es una anotación
+   manual, coherente con la línea 296 del PRD — así que el problema de la
+   contradicción 2 (móvil) no se repite en el escritorio.
 
 ## Reasignaciones de hito
 

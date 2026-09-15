@@ -1,9 +1,12 @@
 # Stitch screen index — web
 
 Source: Stitch project `projects/14138416730329310203` (title returned by the API: "VecinGest WEB").
-Screens: 48. Regenerate with `mcp__stitch__list_screens` / fetch one with `mcp__stitch__get_screen`.
+Screens: 50 rows (48 real screens + `DESIGN.md` + logo). Regenerate with
+`mcp__stitch__list_screens` / fetch one with `mcp__stitch__get_screen`.
 
-Two rows are not UI screens: `DESIGN.md` is Stitch's own embedded copy of the design-system markdown, and "Logotipo Vecingest Pro" is a standalone logo asset. Both are kept here because the API returns them alongside the 46 real screens, matching how `stitch-screens.md` also lists the mobile project's logo and stock-photo entries.
+Two rows are not UI screens: `DESIGN.md` is Stitch's own embedded copy of the design-system markdown, and "Logotipo Vecingest Pro" is a standalone logo asset. Both are kept here because the API returns them alongside the 48 real screens, matching how `stitch-screens.md` also lists the mobile project's logo and stock-photo entries.
+
+**Two titles now appear twice.** On 2026-09-15, `mcp__stitch__get_project` returned two ids not present in the morning's audit: `10faad887d6b4a69bb0975315a2a1a83` ("Recibos - Vecingest") and `32a42ad688cf4843a1bf70fd8f7d4eae` ("Deudores y certificados - Vecingest"). These are **new screens with the same titles** as two pre-existing ids (`7e89804d2e3d45e180ab448e9e7b43d5` and `04bd2f25a67f40f6b0bad9b65ddd618a`) that came back with an empty `<main>` earlier that day and were never regenerated. Both old and new ids remain in the project — the table below marks the old ones `(vacía)` and the new ones `(2026-09-15)` so id, not title, is what disambiguates them. Full audit of the new content is in `docs/funcionalidad/consola-web.md` (M5).
 
 | Screen | ID | Size |
 |---|---|---|
@@ -24,7 +27,8 @@ Two rows are not UI screens: `DESIGN.md` is Stitch's own embedded copy of the de
 | Despacho, datos y miembros - Vecingest | `3290e51c371f4307b3460c95d451e5b1` | 2732x2820 |
 | Despachos - Superadmin Vecingest | `10fef61a258f4848b778da27efc4201e` | 2560x2934 |
 | Detalle de incidencia - Vecingest | `7a58d879f3f040aab1930b994dbd0303` | 2560x3228 |
-| Deudores y certificados - Vecingest | `04bd2f25a67f40f6b0bad9b65ddd618a` | 1280x1024 |
+| Deudores y certificados - Vecingest (vacía) | `04bd2f25a67f40f6b0bad9b65ddd618a` | 1280x1024 |
+| Deudores y certificados - Vecingest (2026-09-15) | `32a42ad688cf4843a1bf70fd8f7d4eae` | 2560x3566 |
 | Documentos C/ Mayor 12 - Vecingest | `b0a8ac80aa2842a3a286a2d9ebe94e2c` | 2560x2454 |
 | Empresas pendientes de verificación - Superadmin Vecingest | `b7bb87206a25489292380475ba47d7a7` | 2560x2644 |
 | Error de carga en incidencias - Vecingest | `941a6d9fca804e3099c555360fb9e733` | 2560x2048 |
@@ -47,7 +51,8 @@ Two rows are not UI screens: `DESIGN.md` is Stitch's own embedded copy of the de
 | Punto cerrado y cómputo de ausentes - Vecingest | `80bc21936ac443cd9049d0b73ac14617` | 2560x3604 |
 | Punto en votación en directo - Vecingest | `854933893a1c4835840693df751e0019` | 2560x4156 |
 | Rechazar incidencia - Vecingest | `54c259325e194082bfffd2a49a50dae5` | 2560x2048 |
-| Recibos - Vecingest | `7e89804d2e3d45e180ab448e9e7b43d5` | 1280x1024 |
+| Recibos - Vecingest (vacía) | `7e89804d2e3d45e180ab448e9e7b43d5` | 1280x1024 |
+| Recibos - Vecingest (2026-09-15) | `10faad887d6b4a69bb0975315a2a1a83` | 2560x2212 |
 | Reglas legales - Superadmin Vecingest | `d190292747af4cb6b20dc08d6f05e535` | 2560x2980 |
 | Resumen C/ Mayor 12 - Vecingest | `1ad4966541b74637975b2e33c8fd59f7` | 2560x2628 |
 | Seguridad - Vecingest | `1f721fb92f31499bbf97fa0ae9434626` | 2732x2988 |
