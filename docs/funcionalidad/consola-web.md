@@ -1,8 +1,8 @@
 # Funcionalidad de la consola web (Stitch) — inventario por hito
 
-Estado a 2026-09-15. Auditoría de las 48 pantallas reales del proyecto Stitch
+Estado a 2026-09-15. Auditoría de las 46 pantallas reales del proyecto Stitch
 `14138416730329310203` ("VecinGest WEB", desktop), cuyo índice está en
-`docs/design/stitch-screens-web.md`. De las 50 filas de ese índice se excluyen
+`docs/design/stitch-screens-web.md`. De las 48 filas de ese índice se excluyen
 `DESIGN.md` (copia embebida del design system) y "Logotipo Vecingest Pro"
 (un asset), que no son pantallas.
 
@@ -11,17 +11,17 @@ Método: se descargó el HTML de cada pantalla (`htmlCode.downloadUrl` de
 cabeceras de tabla, botones, enlaces, inputs, selects y chips de estado —
 nunca se pegó el HTML completo en el contexto de trabajo.
 
-**Nota histórica (auditoría original de esta mañana):** dos pantallas,
-"Deudores y certificados" (`04bd2f25a67f40f6b0bad9b65ddd618a`) y "Recibos"
-(`7e89804d2e3d45e180ab448e9e7b43d5`), habían devuelto un `<main>` vacío —
-sidebar y cabecera completos pero sin tabla ni tarjetas. **Esos dos ids
-siguen vacíos y no se han regenerado**; siguen apareciendo en
-`docs/design/stitch-screens-web.md` marcados `(vacía)` para que nadie vuelva
-a auditarlos esperando contenido. El 2026-09-15 se crearon dos pantallas
-**nuevas** con los mismos títulos — `10faad887d6b4a69bb0975315a2a1a83`
-("Recibos") y `32a42ad688cf4843a1bf70fd8f7d4eae` ("Deudores y
-certificados") — y esas sí traen contenido completo; son las que se
-documentan en M5 más abajo, con sus ids nuevos.
+**Nota histórica:** "Deudores y certificados" y "Recibos" tuvieron primero
+un id (`04bd2f25a67f40f6b0bad9b65ddd618a` y `7e89804d2e3d45e180ab448e9e7b43d5`)
+cuyo `<main>` volvía vacío — sidebar y cabecera completos pero sin tabla ni
+tarjetas. El 2026-09-15 se generaron dos ids nuevos con los mismos títulos y
+contenido completo — `10faad887d6b4a69bb0975315a2a1a83` ("Recibos") y
+`32a42ad688cf4843a1bf70fd8f7d4eae` ("Deudores y certificados"), documentados
+en M5 más abajo —, y ese mismo día el usuario borró los dos ids vacíos desde
+la interfaz de Stitch, por lo que ya no aparecen en
+`docs/design/stitch-screens-web.md`. La API los sigue devolviendo (Stitch
+marca un borrado de UI como `"hidden": true` en vez de eliminar la entrada),
+pero eso ya no es relevante para esta auditoría.
 
 El objetivo es agrupar por hito del `PRD_go.md` (tabla de la sección 10, línea
 ~1493) qué endpoints y tablas nuevas implica cada pantalla, evitando listar
@@ -224,10 +224,9 @@ todo.
 
 Pantallas: Recibos (`10faad887d6b4a69bb0975315a2a1a83`, creada 2026-09-15) y
 Deudores y certificados (`32a42ad688cf4843a1bf70fd8f7d4eae`, creada
-2026-09-15). Ambas sustituyen en contenido a los ids de la auditoría
-original con el mismo título (`7e89804d2e3d45e180ab448e9e7b43d5` y
-`04bd2f25a67f40f6b0bad9b65ddd618a`), que siguen en el proyecto pero con
-`<main>` vacío — ver nota histórica al principio del documento. También
+2026-09-15). Ambas sustituyen en contenido a los ids vacíos originales con
+el mismo título, borrados de la interfaz de Stitch el 2026-09-15 — ver nota
+histórica al principio del documento. También
 Nueva convocatoria: Paso 5 Deudores (`4b362c2b0d184bdfaa76f2f4f86c5bf4`), ya
 documentada antes, cuya tabla Vivienda | Titular registral | Deuda vencida |
 Recibos pendientes | Estado de voto coincide con la de "Deudores y
@@ -373,7 +372,7 @@ entre ambas pantallas o si se calcula por separado en cada una.
 
 ## M6 — Reservas de zonas comunes
 
-Ninguna de las 48 pantallas documenta esta función en detalle. El enlace
+Ninguna de las 46 pantallas documenta esta función en detalle. El enlace
 "Reservas" aparece en el menú lateral de prácticamente todas las pantallas de
 administrador, pero no hay una pantalla propia de calendario/reserva en este
 proyecto de Stitch — es un hueco del diseño, no del backend: no se puede
@@ -488,12 +487,9 @@ de forzarla.
 
 ## Pantallas cuyo propósito no se pudo determinar
 
-Ninguna. Las 48 pantallas reales tienen un título y una posición de
-navegación que identifican su propósito sin ambigüedad. Dos ids concretos
-(`7e89804d2e3d45e180ab448e9e7b43d5` "Recibos" y
-`04bd2f25a67f40f6b0bad9b65ddd618a` "Deudores y certificados") siguen con
-`<main>` vacío en Stitch — se sabe qué son por su título y su navegación
-activa, pero no qué campos o acciones tendrían, y no se han regenerado. El
-contenido real de esas dos pantallas quedó documentado en M5 a través de dos
-ids **nuevos** creados el 2026-09-15 con los mismos títulos
-(`10faad887d6b4a69bb0975315a2a1a83` y `32a42ad688cf4843a1bf70fd8f7d4eae`).
+Ninguna. Las 46 pantallas reales tienen un título y una posición de
+navegación que identifican su propósito sin ambigüedad. "Recibos" y
+"Deudores y certificados" tuvieron primero un id vacío, borrado de la
+interfaz de Stitch el 2026-09-15; su contenido real quedó documentado en M5
+a través de los ids nuevos (`10faad887d6b4a69bb0975315a2a1a83` y
+`32a42ad688cf4843a1bf70fd8f7d4eae`).

@@ -20,14 +20,23 @@ lo que interesa es qué cuesta M1, no qué hace la pantalla 47.
 | [`app-movil-2.md`](./app-movil-2.md) | *Delegar mi voto* → *Informe mensual* | 20 |
 | [`app-movil-3.md`](./app-movil-3.md) | *Iniciar sesión* → pista de pádel | 18 |
 | [`app-movil-4.md`](./app-movil-4.md) | *Proponer un punto* → *Zonas comunes* | 18 |
-| [`consola-web.md`](./consola-web.md) | Los 48 diseños de escritorio | 48 |
+| [`consola-web.md`](./consola-web.md) | Los 46 diseños de escritorio | 46 |
 
-**123 pantallas reales** (46 de escritorio con contenido + 2 ids de
-escritorio vacíos que Stitch nunca rellenó + 75 de móvil — ver
-`consola-web.md` para el detalle de los dos ids vacíos y los dos que los
-sustituyen). Las seis restantes de las 129 filas del índice combinado son
-fotografías de banco, logotipos y la copia que Stitch guarda del propio
-`design.md`.
+**121 pantallas reales** (46 de escritorio + 75 de móvil), contando **filas
+del índice** de `stitch-screens-web.md` y `stitch-screens.md` (lo que
+devuelve `mcp__stitch__list_screens`). Las seis restantes de las 127 filas
+combinadas de esos dos índices son fotografías de banco, logotipos y la
+copia que Stitch guarda del propio `design.md`.
+
+Estas cifras no van a coincidir con lo que devuelva `mcp__stitch__get_project`
+para el proyecto de escritorio: esa llamada trabaja con `screenInstances`, no
+con el índice de pantallas, y ahora mismo devuelve 51 entradas en vez de 48.
+La diferencia es que Stitch representa un borrado hecho desde su interfaz
+poniendo `"hidden": true` en la entrada existente, no eliminándola — así
+siguen apareciendo los dos ids vacíos que el usuario borró el 2026-09-15
+("Recibos" y "Deudores y certificados" originales), y también una entrada de
+canvas del propio design system que no es una fila del índice. Ver
+`consola-web.md` para el detalle de esos dos ids y los que los sustituyen.
 
 Los proyectos de origen están documentados en
 [`../design/README.md`](../design/README.md): "Vecingest APP" para móvil,
@@ -72,18 +81,7 @@ No son fallos del inventario: son decisiones pendientes.
    dos valores del enum `company_members.role` del PRD ("Técnico Campo",
    "Responsable Oficina").
 
-6. **Dos pantallas de escritorio llegaron vacías** desde Stitch ("Recibos",
-   `7e89804d2e3d45e180ab448e9e7b43d5`, y "Deudores y certificados",
-   `04bd2f25a67f40f6b0bad9b65ddd618a`): su `<main>` no tiene contenido.
-   **Actualización 2026-09-15:** esos dos ids siguen vacíos — no se
-   regeneraron — pero se crearon dos pantallas *nuevas* con los mismos
-   títulos (`10faad887d6b4a69bb0975315a2a1a83` y
-   `32a42ad688cf4843a1bf70fd8f7d4eae`) que sí traen contenido completo. El
-   contenido de M5 en `consola-web.md` ya usa los ids nuevos; los ids vacíos
-   se dejan anotados en `stitch-screens-web.md` para que nadie los vuelva a
-   auditar esperando encontrar algo.
-
-7. **"Emitir recibos / Exportar SEPA" es ambiguo frente al PRD.** La nueva
+6. **"Emitir recibos / Exportar SEPA" es ambiguo frente al PRD.** La nueva
    pantalla "Recibos" (`10faad887d6b4a69bb0975315a2a1a83`) ofrece ese botón
    más una sincronización bancaria CSB 19/58, pero el PRD (§5.9, línea 321)
    dice que "los recibos se generan fuera (software del despacho) y se
@@ -94,6 +92,12 @@ No son fallos del inventario: son decisiones pendientes.
    cambio, **no** tiene botón de cobrar — "Marcar pagado" es una anotación
    manual, coherente con la línea 296 del PRD — así que el problema de la
    contradicción 2 (móvil) no se repite en el escritorio.
+
+**Nota resuelta:** "Recibos" y "Deudores y certificados" llegaron vacías
+desde Stitch; el 2026-09-15 se generaron ids nuevos con contenido completo y
+el usuario borró los vacíos desde la interfaz de Stitch. Ya no es una
+contradicción ni un hueco — detalle en `consola-web.md` (M5) y
+`docs/design/stitch-screens-web.md`.
 
 ## Reasignaciones de hito
 
