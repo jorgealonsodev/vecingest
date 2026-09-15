@@ -103,12 +103,38 @@ The ordering is the answer, not the list.
 
 ## Gaps and cautions
 
-- The exact API for enumerating `api.OpenAPI()`'s operations at runtime was not
-  confirmed against v2.39.1.
-- Whether `Operation.Middlewares` is reachable through any exported
-  introspection hook other than the OpenAPI model is unknown.
 - The "registration-time wrapper" option has no found prior art for huma; its
   shape and cost are inference, not attested practice.
 - huma v2 is under active development. Any field name or behaviour relied on
   here must be re-checked against the pinned version before the design commits
   to it.
+
+## Resolved after the fact
+
+The two open questions above about the introspection surface were answered by
+reading v2.39.1 in the module cache during `sdd-design`. They are recorded here
+so nobody re-investigates them, and because one of the answers **invalidates a
+claim this document helped put into the proposal**.
+
+- **Enumerating operations**: there is no `Operations()` method on `*OpenAPI`.
+  The only mutator is `AddOperation` (`openapi.go:1509`); enumeration means
+  walking `Paths map[string]*PathItem` (`openapi.go:1463`) across the eight
+  per-method `*Operation` fields, as huma's own duplicate-id check does at
+  `openapi.go:1519-1528`.
+- **`Operation.Middlewares`**: reachable, and still useless for an assertion.
+  It is exported at `openapi.go:901`, but `type Middlewares []func(ctx Context,
+  next func(Context))` (`chain.go:5`) holds func values, which Go cannot
+  compare, and group middleware never lands there — `Register` composes it from
+  `api.Middlewares()` at `huma.go:881`.
+- **C8 is too strong, and the correction matters.** `api.OpenAPI()` is huma's
+  single source of truth for *documented* operations, not for *registered
+  routes*. `Hidden` appears exactly once in `huma.go`, at line 816, guarding
+  only `AddOperation`; routing at `huma.go:881` and `humachi.go:167-170` is
+  unconditional. So `Hidden: true` yields a served route absent from `Paths`,
+  and a boot assertion reading only the OpenAPI model is defeated by one struct
+  field. The design closes this by asserting over two surfaces — see D-2's A3,
+  which diffs the `chi.Walk` route set against the documented set.
+- **C7 still stands.** A3's use of `chi.Walk` is not a reversal: C7 rejected it
+  for inspecting `Security` and per-operation middleware, which humachi buries
+  inside an opaque closure. Whether a route *exists* is a different question,
+  and the one `chi.Walk` answers authoritatively.

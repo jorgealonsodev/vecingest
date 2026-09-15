@@ -1,0 +1,208 @@
+---
+change: m1-communities
+phase: tasks
+project: vecingest
+date: 2026-09-15
+authority: proposal.md (Decisions 1-4, scope), design.md (D-1..D-7, File Changes, Testing Strategy),
+  specs/*/spec.md (10 capabilities), PRD_go.md §3, §5.1, §5.2, §7.3, §7.4, §7.7, §10, §10.1
+---
+
+# Tasks: M1 — Communities, units, invitations, role portals
+
+## Review Workload Forecast
+
+| Field | Value |
+|-------|-------|
+| Estimated changed lines | Large — two migrations, a new `authz` package (~6 files), ~20 handlers, sqlc queries for six tables, an invitation mail template, a Turnstile client, app portal wiring, PRD/docs corrections |
+| 400-line budget risk | High |
+| Chained PRs recommended | Yes |
+| Suggested split | 8 PRs, PR1 → PR2 → … → PR8, feature-branch-chain |
+| Delivery strategy | auto-chain |
+| Chain strategy | feature-branch-chain |
+
+Decision needed before apply: No
+Chained PRs recommended: Yes
+Chain strategy: feature-branch-chain
+400-line budget risk: High
+
+Tracker branch `feature/m1-communities` accumulates the final integration; PR1 targets the
+tracker branch, each later PR targets the immediate previous PR's branch, and only the tracker
+merges to `main`. This is chosen over stacked-to-main because M1 introduces the tenant-isolation
+enforcement mechanism itself — a defect discovered in PR3 must not already be live on `main`
+through PR1/PR2.
+
+### Suggested Work Units
+
+| Unit | Goal | PR | Focused test command | Runtime harness | Rollback boundary |
+|------|------|-----|----------------------|------------------|--------------------|
+| 1 | Schema (00007/00008) + `authz` package (rungs 1-2, resolvers, allowlist) + boot wiring | PR1 (base: tracker) | `cd api && go test -race ./internal/authz/...` | Testcontainers Postgres 17; in-memory humachi API for A1/A2/A3 | Revert `api/internal/authz/`; `goose down` both migrations |
+| 2 | Office + community management endpoints | PR2 (base: PR1) | `go test ./internal/http/handlers/... -run TestOffice\|TestCommunity` | Testcontainers Postgres | Revert `handlers/{offices,communities}.go` |
+| 3 | Unit management + CSV import | PR3 (base: PR2) | `go test ./internal/http/handlers/... -run TestUnit` | Testcontainers Postgres | Revert `handlers/{units,unit_members,unit_csv_import}.go` |
+| 4 | Invitations + mail template + River sweeper | PR4 (base: PR3) | `go test ./internal/http/handlers/... -run TestInvitation` | Testcontainers Postgres; River test queue | Revert `handlers/invitations.go`, `mail/templates.go` |
+| 5 | Turnstile + non-superadmin TOTP + mandatory-TOTP gate | PR5 (base: PR4) | `go test ./internal/platform/captcha/... ./internal/http/handlers/... -run TestMFA` | Fake Turnstile server, no network | Revert `platform/captcha/`, `handlers/mfa.go` |
+| 6 | `GET /v1/me` memberships, `lint-scope` retirement, permission matrix | PR6 (base: PR5) | `cd api && go test ./api/test/... -run TestPermissionMatrix` | Testcontainers Postgres; matrix generated from `openapi.yaml` | Revert `handlers/me.go`, `cmd/lintscope/main.go` |
+| 7 | App portal memberships | PR7 (base: PR6) | `pnpm --filter app test` | React Native Testing Library | Revert `app/src/screens/PortalScreen.tsx` |
+| 8 | PRD/docs corrections, gate M1, Checkpoint A closure | PR8 (base: PR7, merges tracker → `main`) | `cd api && go test -race ./... && pnpm --filter app test` | Full CI green | Revert `PRD_go.md`, `docs/security/gates/M1.md` |
+
+## Phase 1: Schema + `authz` Foundation (WU-1, PR1 — TDD, D-1/D-2/D-3/D-4/D-5)
+
+- [ ] 1.1 Scaffold `api/internal/authz/{authz.go,resolve.go,assert.go,allowlist.go,scoped/register.go,testdata/negative_register/}` (non-TDD setup, package does not exist yet)
+- [ ] 1.2 RED (Testcontainers): `00007_m1_tenant_schema.sql` up→down→up idempotent; `offices`, `office_members`, `communities`, `units`, `unit_members` created with explicit `GRANT UPDATE, DELETE` and the indexes/uniques of D-5
+- [ ] 1.3 GREEN: implement `api/migrations/schema/00007_m1_tenant_schema.sql` (`SET ROLE vecingest_owner;` … `RESET ROLE;`), five tables, grants, `unit_members_one_president_idx` partial unique, `down` drops in FK order
+- [ ] 1.4 RED (Testcontainers): `00008_invitations.sql` creates `invitations` with the `status` CHECK, unique `token_hash`/`short_code_hash`, `invitations_community_id_status_idx`, explicit grants
+- [ ] 1.5 GREEN: implement `api/migrations/schema/00008_invitations.sql`
+- [ ] 1.6 RED: `sqlc generate` over new `api/internal/db/queries/*.sql` compiles with `decimal.Decimal`/`uuid.UUID`/`time.Time`, no `float64`, every query taking its tenant column as a bound parameter
+- [ ] 1.7 GREEN: write `queries/{offices,office_members,communities,units,unit_members,invitations}.sql`; run `sqlc generate`, commit `internal/db/*.sql.go`
+- [ ] 1.8 RED (compile, `go vet`-clean package): `api/internal/authz/testdata/negative_register/` — a handler `func(ctx, PI, authz.Membership) (*O, error)` fails to compile against plain `huma.Register` (authz-membership: Scoped handler signature does not compile against huma.Register)
+- [ ] 1.9 GREEN: implement `authz.go` — `Membership` (unexported fields, no exported constructor), `Memberships`, `Scope`, `Role`, `CommunityScoped`/`OfficeScoped`, `MetadataKey` (D-1)
+- [ ] 1.10 RED: zero-value `Membership{}` fails every validity accessor (Zero-value membership rejected); an input type missing `authz.CommunityScoped` fails to compile as `scoped.Community`'s type parameter (Input missing its scope interface fails to compile)
+- [ ] 1.11 GREEN: implement panicking accessors on invalid state; implement `scoped/register.go` — `Community[I,O,PI]`, `Office[I,O,PI]`, `Self[I,O]`, each stamping `op.Metadata[authz.MetadataKey]` (D-1/D-2)
+- [ ] 1.12 RED: a scoped constructor resolves membership before invoking the handler and passes it as the final argument (A scoped constructor resolves membership before invoking the handler)
+- [ ] 1.13 GREEN: implement `resolve.go` — four resolvers by route shape (D-4): community via `office_members`∪`unit_members`, unit/invitation via owning `community_id`, office via `(office_id,user_id)`, `Self` via the full membership set
+- [ ] 1.14 RED: a caller with no membership row for the path community resolves to nothing (Foreign resource id resolves to no membership); a request with a valid path resource but a differing `X-Community-Id`-style header still resolves from the path only (Header-supplied tenant id is ignored)
+- [ ] 1.15 GREEN: enforce path-only resolution in `resolve.go`
+- [ ] 1.16 RED: a `tenant` membership on their own unit is rejected 403 against an `owner`-only operation (Wrong role on own resource rejected); admin scope resolves via `communities.office_id` matching an `office_members` row, never a client-supplied office id (office-management: Admin scope derived from office_members)
+- [ ] 1.17 GREEN: implement the role check in `scoped.Community`/`scoped.Office` and admin-scope resolution per §3
+- [ ] 1.18 RED (in-memory humachi API): A1 fails naming the operation when a scoped-prefix route is registered via plain `huma.Register` with no marker (Unregistered scoped operation blocks boot); A2 fails when a marked operation's scope kind has no registered resolver (Marker without a registered resolver blocks boot)
+- [ ] 1.19 RED (in-memory humachi API): A3 fails when a `Hidden: true` operation under a scoped prefix is routed by chi but absent from `Paths` and not allowlisted (Hidden scoped operation blocks boot); A3 passes when the route is present in the allowlist with a stated reason (Allowlisted public route boots normally)
+- [ ] 1.20 RED: the marker survives `huma.NewGroup` prefixing and is still readable from `Paths` (V8 marker-survives-groups)
+- [ ] 1.21 GREEN: implement `assert.go` — `AssertScopedRegistration(oapi, chiRouter, allow)`: A1 walks `Paths`×eight method fields, A2 checks the resolver/role table, A3 diffs `chi.Walk` against `Paths`; register `OnAddOperation` as an additive eager trigger, never the sole check (D-2)
+- [ ] 1.22 RED: every allowlist entry has a non-empty `Reason`; no entry's path begins with `/v1/communities/`, `/v1/units/`, or `/v1/offices/` (Allowlist hygiene, D-3)
+- [ ] 1.23 GREEN: implement `allowlist.go` — `PublicOperations` seeded with M0's existing public routes
+- [ ] 1.24 Modify `api/internal/http/api/api.go` and `api/cmd/vecingest/serve.go` — call `authz.AssertScopedRegistration` after `api.New(...)` and before `ListenAndServe`; a non-nil error returns up to `main` (no `panic` outside `main`)
+- [ ] 1.25 Run `cd api && go build ./... && go test -race ./internal/authz/...`; verify by inspection that a deliberately-unmarked test route fails boot
+
+## Phase 2: Office Management (WU-2, PR2 — TDD)
+
+- [ ] 2.1 RED: non-superadmin `POST /v1/admin/offices` → 403; superadmin creates an office with valid data (Office Creation Restricted To Superadmin, both scenarios)
+- [ ] 2.2 GREEN: implement `api/internal/http/handlers/offices.go` `POST /v1/admin/offices` via plain `huma.Register` behind the existing M0 superadmin-authenticated middleware (not tenant-scoped, so no `scoped.*`/allowlist entry needed)
+- [ ] 2.3 RED: office creation also creates the first `admin` user + `office_members(admin)` row with no usable password until forgot-password; no `invitations` row is inserted (First-Admin Bootstrap Without Invitation, both scenarios)
+- [ ] 2.4 GREEN: implement the bootstrap-admin transaction inside the office-creation handler
+- [ ] 2.5 RED: `POST /v1/offices/me/members` with an unknown email fails without creating a user; with an existing account creates `office_members(admin_staff)` (Office Staff Addition Restricted To Existing Accounts, both scenarios)
+- [ ] 2.6 GREEN: implement the `scoped.Office` handler for `POST /v1/offices/me/members`, roles `[admin]`
+- [ ] 2.7 RED: `GET /v1/offices/me` returns only the caller's own office(s); `GET /v1/offices/me/members` lists only members of the caller's own office(s) (GET /v1/offices/me Returns Caller's Offices, both scenarios)
+- [ ] 2.8 GREEN: implement `scoped.Self` handlers for `GET /v1/offices/me` and `GET /v1/offices/me/members`
+- [ ] 2.9 Run `make gen`; commit regenerated `openapi.yaml`, sqlc code, TS client for the office DTOs
+
+## Phase 3: Community Management (WU-2, PR2 — TDD)
+
+- [ ] 3.1 RED: admin creates a community with `office_id` set from the resolved membership; `admin_staff` gets 403 (Community Creation Restricted To Admin, Scoped To Office, both scenarios)
+- [ ] 3.2 GREEN: implement `scoped.Office` handler for `POST /v1/communities`, roles `[admin]`
+- [ ] 3.3 RED: `GET /v1/communities` returns only communities reachable via office or unit membership; `GET /v1/communities/:id` returns 403/404 with no membership tie (Community Read And List Scoped By Membership, both scenarios)
+- [ ] 3.4 GREEN: implement `scoped.Self` for the list, `scoped.Community` for the detail route
+- [ ] 3.5 RED: `PATCH /v1/communities/:id` permitted for `admin`/`admin_staff`, rejected for `owner`/`tenant` (Community Update Restricted To Office Roles)
+- [ ] 3.6 GREEN: implement `scoped.Community` for `PATCH /v1/communities/:id`, roles `[admin, admin_staff]`
+- [ ] 3.7 RED: community persists the full §7.3 column set including nullable `parent_community_id`, both the null-parent and linked-parent cases (Legal And Descriptive Fields Persisted Per §7.3, both scenarios)
+- [ ] 3.8 GREEN: extend the community DTO and sqlc insert/update queries with the full column set
+- [ ] 3.9 RED: `GET /v1/communities/:id` response contains no reserve-fund-compliance/quorum/balance fields (Community Detail Excludes Cross-Milestone Aggregates)
+- [ ] 3.10 GREEN: constrain the detail DTO to M1-only fields plus unit/office-member counts
+- [ ] 3.11 Run `make gen`; commit regenerated artifacts for the community DTOs
+
+## Phase 4: Unit Management (WU-3, PR3 — TDD)
+
+- [ ] 4.1 RED: admin creates a unit with `community_id` from the route, never the body; owner gets 403 (Unit Creation Scoped To Community, both scenarios)
+- [ ] 4.2 GREEN: implement `scoped.Community` handler for `POST /v1/communities/:id/units`, roles `[admin, admin_staff]`
+- [ ] 4.3 RED: duplicate `(community_id, block, floor, door)` rejected (Unit Uniqueness Per Community)
+- [ ] 4.4 GREEN: map the migration's unique-violation to an API error code
+- [ ] 4.5 RED: coefficients summing to 97 return a warning with no blocked write; summing to 100 return no warning (Participation Coefficient Sum Is A Warning, both scenarios)
+- [ ] 4.6 GREEN: implement the coefficient-sum check as a response-level warning, never a write-time constraint
+- [ ] 4.7 RED: co-owners recorded as two independent `unit_members(owner)` rows; no M1 operation accepts `board_role` for write (Unit Member Roles And Deferred board_role, both scenarios)
+- [ ] 4.8 GREEN: restrict `unit_members` creation to `role: owner|tenant`; omit `board_role` from every M1 request DTO
+- [ ] 4.9 RED: a member created without consent stores `electronic_notifications_consent_at = null`; accepting consent persists both the timestamp and `consent_text_version` (Consent And Notification Fields, both scenarios)
+- [ ] 4.10 GREEN: implement the consent fields in the unit-member create/update DTOs and queries
+- [ ] 4.11 RED: `GET .../members`, `PATCH .../members/:memberId`, `DELETE .../members/:memberId` return 403/404 for a caller with no membership tied to the unit's community (Unit Member Management Scoped To Community)
+- [ ] 4.12 GREEN: implement the three handlers in `api/internal/http/handlers/unit_members.go`, resolved via the unit's `community_id`
+- [ ] 4.13 Run `make gen`; commit regenerated artifacts for unit/unit-member DTOs
+
+## Phase 5: Unit CSV Import (WU-3, PR3 — TDD, D-7)
+
+- [ ] 5.1 RED: `GET .../units/import/template` returns a CSV with the documented columns, scoped to the caller's community membership (Downloadable Import Template)
+- [ ] 5.2 GREEN: implement the template handler in `api/internal/http/handlers/unit_csv_import.go`
+- [ ] 5.3 RED: `?dry_run=true` with 2 invalid + 8 valid rows reports the 2 errors and writes nothing; an all-valid dry run reports success and writes nothing (Dry-Run Validates Without Writing, both scenarios)
+- [ ] 5.4 GREEN: implement row-by-row validation with no DB write when `dry_run=true`
+- [ ] 5.5 RED: a non-dry-run import with 9 valid + 1 invalid row writes nothing and reports the invalid row (Row-By-Row Validation Before Any Write)
+- [ ] 5.6 GREEN: wrap the non-dry-run import in one transaction validating every row before any `INSERT`
+- [ ] 5.7 RED: an exported CSV escapes a leading `=`/`+`/`-`/`@` cell; an imported row with a formula-prefixed owner-name is neutralized before storage (Formula-Injection Hardening, both scenarios)
+- [ ] 5.8 GREEN: implement cell-prefix escaping shared by template/export and import ingestion
+- [ ] 5.9 RED: an uploaded filename `../../etc/passwd.csv` is rejected or sanitized before any storage key is derived (Path-Traversal-Safe Filenames)
+- [ ] 5.10 GREEN: implement filename sanitization; stream the upload body, never write under a client-supplied name
+- [ ] 5.11 Run `make gen` if the import DTOs changed; commit regenerated artifacts
+
+## Phase 6: Invitations (WU-4, PR4 — TDD, D-6)
+
+- [ ] 6.1 RED: `POST /v1/communities/:id/invitations` returns the plaintext short code exactly once; the persisted row contains only `token_hash`/`short_code_hash` (Invitation Creation With Hashed Secrets, both scenarios)
+- [ ] 6.2 GREEN: implement `scoped.Community` handler generating an 8-char unambiguous-alphabet short code via `crypto/rand`, SHA-256 hashing both secrets, roles `[admin, admin_staff]`
+- [ ] 6.3 RED: invitation created with `status=pending`; accept transitions `status=accepted` in the same transaction as the membership write; a `pending` invitation past `expires_at` reads as `expired` before the sweep runs (Explicit Status Column, all three scenarios)
+- [ ] 6.4 GREEN: implement the `status` state machine and read-time expiry derivation
+- [ ] 6.5 RED: accept after expiry rejected; second accept on an already-accepted invitation rejected (Fourteen-Day Expiry And Single Use, both scenarios)
+- [ ] 6.6 GREEN: implement the conditional `UPDATE ... WHERE status='pending' AND expires_at > now() RETURNING id`; zero rows ⇒ 409/404
+- [ ] 6.7 RED: `POST /v1/invitations/preview` with a valid short code returns community/unit/role and creates no account; the registered API surface has no `GET` operation with `token`/`short_code` as a query parameter (Preview Endpoint Is POST, both scenarios)
+- [ ] 6.8 GREEN: implement the `preview` handler; assert via the OpenAPI-walk test that no `GET` operation carries those query parameters
+- [ ] 6.9 RED: accept with no existing account creates `user`+`unit_member` together; accept with an existing account links the membership without duplicating the user; both response shapes are identical (Accept Creates Or Links An Account, all three scenarios)
+- [ ] 6.10 GREEN: implement `POST /v1/auth/accept-invitation` — one transaction, branch on existing email, uniform response shape
+- [ ] 6.11 RED: resend increments `sent_count`; a revoked invitation fails both preview and accept (Resend And Revoke, both scenarios)
+- [ ] 6.12 GREEN: implement `resend` (rate-limited) and `DELETE /v1/invitations/:id` (→`status=revoked`)
+- [ ] 6.13 RED: 10 failed short-code guesses from one IP+device pair lock an 11th attempt from that pair; 10 failed guesses against a resolved invitation from 10 distinct pairs do not lock an 11th distinct pair (Enumeration Lockout Is IP+Device Scoped, both scenarios)
+- [ ] 6.14 GREEN: wire `AttemptCounter` key `invite:{ip}:{deviceHash}` (SHA-256 of `X-Platform`+`X-App-Version`) into `preview`/`accept`, threshold 10/15min → 429 with `Retry-After`; increment `invitations.failed_attempts` only on a resolved invitation, as evidence only
+- [ ] 6.15 RED (Testcontainers): community B cannot list or revoke community A's invitation, 403/404 both ways (Cross-Tenant Isolation Proven By Test, both scenarios)
+- [ ] 6.16 GREEN: fix any resolver gap 6.15 surfaces (should already hold from Phase 1)
+- [ ] 6.17 GREEN: implement `api/internal/mail/templates.go` `RenderInvitation` following `RenderPasswordReset`; wire `river.InsertTx` for the invitation email job inside the creation transaction
+- [ ] 6.18 RED: the daily `invitations.expire` sweep job transitions past-expiry `pending` rows
+- [ ] 6.19 GREEN: implement the River periodic sweeper job
+- [ ] 6.20 Run `make gen`; commit regenerated artifacts for invitation DTOs
+
+## Phase 7: Public-Form Protection + Non-Superadmin TOTP (WU-5, PR5 — TDD, D-7)
+
+- [ ] 7.1 RED: an invalid Turnstile token is rejected before any protected-form logic runs (CaptchaVerifier Interface Abstraction)
+- [ ] 7.2 GREEN: implement `CaptchaVerifier` interface in `internal/domain/...`, Turnstile client in `api/internal/platform/captcha/turnstile.go`, `AlwaysPass` test double
+- [ ] 7.3 RED: a third failed login without Turnstile is rejected; a third failed login with a valid token proceeds (Turnstile Required After The Third Login Failure, both scenarios)
+- [ ] 7.4 GREEN: wire `CaptchaVerifier` into the login handler's failure-count branch
+- [ ] 7.5 RED: `POST /v1/auth/forgot-password` without Turnstile is always rejected (Turnstile Always Required On Forgot-Password)
+- [ ] 7.6 GREEN: wire `CaptchaVerifier` unconditionally into forgot-password
+- [ ] 7.7 RED: an IP over its rate limit is still rejected on forgot-password despite a valid Turnstile token (Per-IP Limits Independent Of Turnstile)
+- [ ] 7.8 GREEN: confirm `Limiter` enforcement runs independently of the `CaptchaVerifier` check
+- [ ] 7.9 RED: the M1 registered API surface contains no `register-company` or public contact-form operation (Company Registration And Contact Forms Out Of M1 Scope)
+- [ ] 7.10 GREEN: verify by inspection that no such handler exists; record the scoped exception in `docs/security/gates/M1.md` (Phase 10)
+- [ ] 7.11 RED: an `admin` with no TOTP enrolled verifies a valid code via the non-superadmin endpoint and becomes active; an `admin_staff` with TOTP enrolled verifies via that endpoint (Non-Superadmin TOTP HTTP Endpoints, both scenarios)
+- [ ] 7.12 GREEN: implement `api/internal/http/handlers/mfa.go` wiring the existing `internal/domain/auth/mfa` enroll/verify/recovery flow for non-superadmin callers
+- [ ] 7.13 RED: an `admin` with no active TOTP is rejected on any admin-scoped route and required to enroll; an `admin` with active TOTP is processed normally; an `owner` with no TOTP is unaffected (Mandatory TOTP For Admin And Admin_staff Scope Access, all three scenarios)
+- [ ] 7.14 GREEN: implement the TOTP-gate check in the office/community resolver path — 403 with a distinguishable code when `user_mfa.enabled_at IS NULL` for `admin`/`admin_staff` scope only
+- [ ] 7.15 Run `make gen`; commit regenerated artifacts for the MFA DTOs
+
+## Phase 8: GET /v1/me Memberships, lint-scope, Permission Matrix (WU-6, PR6 — TDD)
+
+- [ ] 8.1 RED: a non-superadmin user with no memberships gets an empty `memberships` array; a superadmin gets `is_superadmin: true`; a user with one office and one community membership gets both typed entries (GET /v1/me Response Shape, all three scenarios)
+- [ ] 8.2 GREEN: implement `dto/me.go` `memberships[]` with a `scope` discriminator; modify `api/internal/http/handlers/me.go` to populate it from `authz.Memberships`
+- [ ] 8.3 RED: revoking a session via `DELETE /v1/me/sessions/:id` leaves `GET /v1/me`'s `memberships` unchanged (Remote Session Listing and Revocation Endpoints, revoke scenario)
+- [ ] 8.4 GREEN: confirm session revocation and membership reads stay independent — no shared cache (D interfaces table: membership lookups deliberately uncached)
+- [ ] 8.5 RED: `make lint-scope` fails on a deliberately tenant-blind new audit query that is not `GetAuditLogHead`/`ListAuditLogRange`
+- [ ] 8.6 GREEN: modify `api/cmd/lintscope/main.go` — retire the blanket `audit_log` table exception; add the query-level exception map keyed `file:queryName` holding exactly those two entries with their reason
+- [ ] 8.7 RED: `make lint-scope` passes green with all M1 tenant tables and no table-wide `audit_log` exception
+- [ ] 8.8 GREEN: fix any query lint-scope flags; re-run and confirm green
+- [ ] 8.9 RED (generated from `openapi.yaml` at test time): the permission-matrix test fails when a newly registered scoped route is not yet reflected in it (A route missing from the generated matrix fails the check)
+- [ ] 8.10 GREEN: implement the matrix generator reading `api/openapi/openapi.yaml`, asserting 403/404 for every operation × role × own/foreign-resource combination
+- [ ] 8.11 RED (Testcontainers): an `admin` of office A gets 403/404 against a community owned by office B, exercised across every M1 scoped route (Foreign community access denied, 100% route coverage)
+- [ ] 8.12 GREEN: fix any resolver or role-check gap 8.11 surfaces across offices/communities/units/invitations
+- [ ] 8.13 Run `cd api && go test -race ./...`; confirm 100% route coverage in the permission-matrix report (PRD §10.1 M1 gate item 1)
+
+## Phase 9: App Portal Memberships (WU-7, PR7 — TDD RNTL)
+
+- [ ] 9.1 RED (RNTL): a user with one `scope: community` membership renders exactly one selectable row (Portal Renders Real Membership Rows, populated scenario)
+- [ ] 9.2 GREEN: implement the populated branch in `app/src/screens/PortalScreen.tsx`, replacing the hardcoded empty state
+- [ ] 9.3 RED (RNTL, regression guard): a user with an empty `memberships` array still sees the unchanged empty state
+- [ ] 9.4 GREEN: confirm the empty-state branch is preserved unchanged
+- [ ] 9.5 RED (RNTL): a user with three memberships (owner/tenant/admin_staff) sees a context selector listing all three with their roles (Context Selector For Multiple Memberships)
+- [ ] 9.6 GREEN: implement the context selector, resolving the chosen membership's scope path parameters client-side, no new endpoint
+- [ ] 9.7 RED (RNTL): a valid short code at `portal-invitation-link` shows the preview before account creation; an invalid/expired code shows a generic error (Invitation-Code Entry Point Enabled, both scenarios)
+- [ ] 9.8 GREEN: enable `portal-invitation-link`, wire it to `POST /v1/invitations/preview` then the accept-invitation screen
+- [ ] 9.9 Run `pnpm --filter app test`; confirm the regenerated `packages/shared` memberships types are consumed with no hand-written type
+
+## Phase 10: PRD Corrections, Security Gate, Checkpoint A Closure (WU-8, PR8 — document discipline)
+
+- [ ] 10.1 Corregir `PRD_go.md` §7.7 (español): sustituir "un handler sin ella no compila para rutas con ámbito (interfaz obligatoria)" por la redacción del diseño D-1/D-2, NO por la de la propuesta, que quedó superada. La propuesta nombraba un único `scoped.Register` y describía el arranque comparando solo `api.OpenAPI()`; ambas cosas son falsas contra huma v2.39.1 y escribirlas en el PRD reintroduciría el error en el documento de referencia. El texto correcto dice: (a) los handlers con ámbito se registran exclusivamente mediante los constructores tipados `scoped.Community` / `scoped.Office` / `scoped.Self`, cuya firma no es asignable a `huma.Register`; (b) el arranque de `serve` falla si alguna operación con ámbito documentada carece del marcador (A1), si un marcador no tiene resolver ni roles (A2), o si `chi.Walk` sirve una ruta que no está documentada ni en la lista de excepciones revisada (A3); y (c) A3 es imprescindible porque una operación `Hidden: true` se enruta pero nunca llega a `api.OpenAPI()`, de modo que ninguna comprobación que lea una sola superficie puede garantizar el aislamiento
+- [ ] 10.2 Corregir `PRD_go.md` §7.3 (español): documentar `invitations.status` como columna explícita, la desviación deliberada frente a un estado derivado solo de marcas de tiempo
+- [ ] 10.3 Modify `openspec/config.yaml` — add the permission-matrix requirement and the tenant-scope disclosure rule per the design's binding
+- [ ] 10.4 Create `docs/security/gates/M1.md` — Checkpoint A/B split per §10.1, including the scoped exception row for deferred Turnstile coverage on `register-company`/contact forms
+- [ ] 10.5 Archive Checkpoint A evidence: `go test -race ./...`, `pnpm --filter app test`, permission-matrix 100% coverage, `make lint-scope` green — link each gate item to its passing test
+- [ ] 10.6 Verify by inspection: `make gen && git diff --exit-code` clean across `openapi.yaml`, sqlc code, TS client, Zod schemas for the whole M1 struct set
+- [ ] 10.7 Cross-check: every Checkpoint A row in `docs/security/gates/M1.md` cites a passing test or green workflow run, never a bare assertion
