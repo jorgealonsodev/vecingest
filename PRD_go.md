@@ -1476,6 +1476,26 @@ R2_BACKUP_SECRET_ACCESS_KEY=[se muestra UNA sola vez al crear el token]
 # No hay proveedor de SMS: el OTP de voto y firma va por email o por TOTP
 # (decisión de fase 1, ver 11). El correo pasa a ser un canal crítico, no solo
 # de avisos: si el SMTP cae, nadie puede votar a distancia ni firmar un acta.
+#
+# Formato: esquema://usuario:contraseña@host:puerto
+#   smtps:// con el puerto 465  -> TLS implícito
+#   smtp://  con el puerto 587  -> STARTTLS
+#
+# DOS TRAMPAS COMPROBADAS al componer esta URL:
+#  1. Los ESPACIOS la rompen. `net/url` falla con `invalid userinfo` y la API
+#     no arranca. Importa porque Google muestra las contraseñas de aplicación
+#     en cuatro grupos de cuatro: hay que pegarlas seguidas.
+#  2. La arroba del usuario NO hay que codificarla: Go toma la última como
+#     separador. `usuario@gmail.com:clave@smtp.gmail.com:465` se interpreta
+#     bien. Sí hay que codificar `/`, `:`, `#` o cualquier cosa fuera de ASCII
+#     que aparezca en la contraseña.
+#
+# Con Gmail hace falta verificación en dos pasos y una contraseña de
+# aplicación (Seguridad > Contraseñas de aplicaciones); la contraseña normal
+# de la cuenta no funciona. MAIL_FROM debe ser esa misma dirección o Gmail
+# reescribe el remitente. Ojo al techo de envío: ~500 destinatarios al día en
+# una cuenta normal, 2000 en Workspace — suficiente para probar, no para una
+# junta entera votando por OTP.
 SMTP_URL=[smtps://usuario:contraseña@smtp.tuproveedor.com:465 — credenciales del proveedor de correo]
 MAIL_FROM="Vecingest <no-reply@mail.vecingest.app>"
 
