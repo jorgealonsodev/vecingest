@@ -4,6 +4,28 @@
 
 import { z } from "zod";
 
+const CreateOfficeRequest = z.object({
+  $schema: z.string().url().optional(),
+  address: z.string().max(255).optional(),
+  admin_email: z.string().email(),
+  admin_name: z.string().min(1).max(255),
+  cif: z.string().min(1).max(32),
+  collegiate_number: z.string().max(64).optional(),
+  email: z.string().email().optional(),
+  name: z.string().min(1).max(255),
+  phone: z.string().max(32).optional(),
+});
+const OfficeResponse = z.object({
+  $schema: z.string().url().optional(),
+  address: z.string().optional(),
+  cif: z.string(),
+  collegiate_number: z.string().optional(),
+  created_at: z.string().datetime({ offset: true }),
+  email: z.string().optional(),
+  id: z.string(),
+  name: z.string(),
+  phone: z.string().optional(),
+});
 const ForgotPasswordRequest = z.object({
   $schema: z.string().url().optional(),
   email: z.string().email(),
@@ -75,6 +97,26 @@ const ListSessionsResponse = z.object({
   $schema: z.string().url().optional(),
   sessions: z.union([z.array(SessionSummary), z.null()]),
 });
+const ListOfficesResponse = z.object({
+  $schema: z.string().url().optional(),
+  offices: z.union([z.array(OfficeResponse), z.null()]),
+});
+const OfficeMemberResponse = z.object({
+  $schema: z.string().url().optional(),
+  created_at: z.string().datetime({ offset: true }),
+  id: z.string(),
+  office_id: z.string(),
+  role: z.string(),
+  user_id: z.string(),
+});
+const ListOfficeMembersResponse = z.object({
+  $schema: z.string().url().optional(),
+  members: z.union([z.array(OfficeMemberResponse), z.null()]),
+});
+const AddOfficeMemberRequest = z.object({
+  $schema: z.string().url().optional(),
+  email: z.string().email(),
+});
 const Cookie = z.object({
   Domain: z.string(),
   Expires: z.string().datetime({ offset: true }),
@@ -107,6 +149,8 @@ const ErrorModel = z
   .partial();
 
 export const schemas = {
+  CreateOfficeRequest,
+  OfficeResponse,
   ForgotPasswordRequest,
   ForgotPasswordResponse,
   LoginRequest,
@@ -121,6 +165,10 @@ export const schemas = {
   MeResponse,
   SessionSummary,
   ListSessionsResponse,
+  ListOfficesResponse,
+  OfficeMemberResponse,
+  ListOfficeMembersResponse,
+  AddOfficeMemberRequest,
   Cookie,
   ErrorDetail,
   ErrorModel,

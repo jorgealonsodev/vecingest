@@ -8,6 +8,23 @@
  */
 
 export interface paths {
+    "/v1/admin/offices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create an office and its first admin user (superadmin only) */
+        post: operations["createOffice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/auth/forgot-password": {
         parameters: {
             query?: never;
@@ -212,10 +229,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/offices/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the caller's own office(s) */
+        get: operations["getMyOffices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/offices/me/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List members of the caller's own office(s) */
+        get: operations["listMyOfficeMembers"];
+        put?: never;
+        /** Add an existing user as admin_staff to the caller's office */
+        post: operations["addOfficeMember"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AddOfficeMemberRequest: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/AddOfficeMemberRequest.json
+             */
+            readonly $schema?: string;
+            /** Format: email */
+            email: string;
+        };
         CSRFTokenResponse: {
             /**
              * Format: uri
@@ -243,6 +305,24 @@ export interface components {
             Secure: boolean;
             Unparsed: string[] | null;
             Value: string;
+        };
+        CreateOfficeRequest: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/CreateOfficeRequest.json
+             */
+            readonly $schema?: string;
+            address?: string;
+            /** Format: email */
+            admin_email: string;
+            admin_name: string;
+            cif: string;
+            collegiate_number?: string;
+            /** Format: email */
+            email?: string;
+            name: string;
+            phone?: string;
         };
         ErrorDetail: {
             /** @description Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id' */
@@ -309,6 +389,24 @@ export interface components {
              */
             readonly $schema?: string;
             accepted: boolean;
+        };
+        ListOfficeMembersResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/ListOfficeMembersResponse.json
+             */
+            readonly $schema?: string;
+            members: components["schemas"]["OfficeMemberResponse"][] | null;
+        };
+        ListOfficesResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/ListOfficesResponse.json
+             */
+            readonly $schema?: string;
+            offices: components["schemas"]["OfficeResponse"][] | null;
         };
         ListSessionsResponse: {
             /**
@@ -377,6 +475,37 @@ export interface components {
             email: string;
             id: string;
             is_superadmin: boolean;
+        };
+        OfficeMemberResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/OfficeMemberResponse.json
+             */
+            readonly $schema?: string;
+            /** Format: date-time */
+            created_at: string;
+            id: string;
+            office_id: string;
+            role: string;
+            user_id: string;
+        };
+        OfficeResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/OfficeResponse.json
+             */
+            readonly $schema?: string;
+            address?: string;
+            cif: string;
+            collegiate_number?: string;
+            /** Format: date-time */
+            created_at: string;
+            email?: string;
+            id: string;
+            name: string;
+            phone?: string;
         };
         ReadyResponse: {
             /**
@@ -450,6 +579,41 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    createOffice: {
+        parameters: {
+            query?: never;
+            header?: {
+                Authorization?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateOfficeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OfficeResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     forgotPassword: {
         parameters: {
             query?: never;
@@ -826,6 +990,97 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getMyOffices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListOfficesResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listMyOfficeMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListOfficeMembersResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    addOfficeMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddOfficeMemberRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OfficeMemberResponse"];
+                };
             };
             /** @description Error */
             default: {
