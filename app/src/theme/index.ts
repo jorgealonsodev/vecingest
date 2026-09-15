@@ -145,6 +145,31 @@ export const darkTheme: MD3Theme = {
   },
 };
 
+/**
+ * Institutional panel brand surface — the desktop login screen's left
+ * panel from the WEB design system (`docs/design/vecingest-web.md`, Stitch
+ * project `projects/14138416730329310203`, screen
+ * `5f83c21f55d9493da67cc330fa8528d4`, whose left section carries
+ * `bg-on-background text-on-primary`). The WEB system's "Colors" prose fixes
+ * the page on a warm architectural white with "deep corporate navy
+ * typography (`#0F2A4A`)" — that navy-on-white pairing IS this panel.
+ *
+ * The WEB design system has NO dark mode (there is not a single mention of
+ * "dark" in `docs/design/vecingest-web.md`). This panel is therefore a fixed
+ * BRAND surface that must not follow the device color scheme — it is not a
+ * light/dark pair, just these two literal colors in both themes.
+ *
+ * Do not "fix" this back to `theme.colors.onBackground` /
+ * `theme.colors.onPrimary`. Those MD3 tokens are text-on-surface pairs that
+ * deliberately invert between the light and dark themes (`onBackground` is
+ * navy in light but pale beige in dark; `onPrimary` is white in light but
+ * dark blue in dark) — binding the panel to them once shipped the panel as
+ * a pale beige slab with barely-legible dark-blue-on-beige text in dark
+ * mode. See `LoginScreen.theme.test.tsx`'s "institutional panel" test.
+ */
+export const INSTITUTIONAL_PANEL_BACKGROUND = "#0f2a4a";
+export const INSTITUTIONAL_PANEL_FOREGROUND = "#ffffff";
+
 /** Minimum type size and touch target from `docs/design/README.md`. */
 export const MIN_FONT_SIZE = 11;
 export const MIN_TOUCH_TARGET = 44;

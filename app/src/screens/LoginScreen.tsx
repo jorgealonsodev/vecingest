@@ -20,7 +20,13 @@ import { persistRefreshToken } from "../auth/secureTokens";
 import { setSession } from "../auth/session";
 import { FormTextInput } from "../components/FormTextInput";
 import { PrimaryButton } from "../components/PrimaryButton";
-import { BREAKPOINT_DESKTOP, MIN_TOUCH_TARGET, spacing } from "../theme";
+import {
+  BREAKPOINT_DESKTOP,
+  INSTITUTIONAL_PANEL_BACKGROUND,
+  INSTITUTIONAL_PANEL_FOREGROUND,
+  MIN_TOUCH_TARGET,
+  spacing,
+} from "../theme";
 import { loginErrorMessage } from "./errorMessages";
 
 type LoginFormValues = z.infer<typeof schemas.LoginRequest>;
@@ -349,15 +355,16 @@ export function LoginScreen() {
         ]}
       >
         <View
+          testID="login-institutional-panel"
           style={[
             styles.leftPanel,
-            { backgroundColor: theme.colors.onBackground },
+            { backgroundColor: INSTITUTIONAL_PANEL_BACKGROUND },
           ]}
         >
           <View>
             <Text
               variant="titleMedium"
-              style={{ color: theme.colors.onPrimary }}
+              style={{ color: INSTITUTIONAL_PANEL_FOREGROUND }}
             >
               Vecingest
             </Text>
@@ -369,7 +376,7 @@ export function LoginScreen() {
           <View style={styles.statusPill}>
             <Text
               variant="labelSmall"
-              style={{ color: theme.colors.onPrimary }}
+              style={{ color: INSTITUTIONAL_PANEL_FOREGROUND }}
             >
               Sistema Activo · Nodo Seguro Madrid ES-01
             </Text>
@@ -377,7 +384,10 @@ export function LoginScreen() {
 
           <Text
             variant="headlineSmall"
-            style={[styles.leftHeadline, { color: theme.colors.onPrimary }]}
+            style={[
+              styles.leftHeadline,
+              { color: INSTITUTIONAL_PANEL_FOREGROUND },
+            ]}
           >
             La comunidad de propietarios, en orden
           </Text>
@@ -394,7 +404,7 @@ export function LoginScreen() {
             <View style={styles.statItem}>
               <Text
                 variant="headlineSmall"
-                style={{ color: theme.colors.onPrimary }}
+                style={{ color: INSTITUTIONAL_PANEL_FOREGROUND }}
               >
                 100%
               </Text>
@@ -405,7 +415,7 @@ export function LoginScreen() {
             <View style={styles.statItem}>
               <Text
                 variant="headlineSmall"
-                style={{ color: theme.colors.onPrimary }}
+                style={{ color: INSTITUTIONAL_PANEL_FOREGROUND }}
               >
                 256-bit
               </Text>

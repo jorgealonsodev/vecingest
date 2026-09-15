@@ -1,13 +1,23 @@
 import { fireEvent, render, screen } from "@testing-library/react-native";
+import { StyleSheet } from "react-native";
 import { PaperProvider } from "react-native-paper";
 import {
   ACCENT_DARK,
   ACCENT_LIGHT,
   darkTheme,
+  INSTITUTIONAL_PANEL_BACKGROUND,
+  INSTITUTIONAL_PANEL_FOREGROUND,
   lightTheme,
   MIN_TOUCH_TARGET,
 } from "../theme";
 import { LoginScreen } from "./LoginScreen";
+
+/** Flattens an RN `style` prop (array or object) down to a plain object. */
+function flatStyle(element: {
+  props: { style?: unknown };
+}): Record<string, unknown> {
+  return StyleSheet.flatten(element.props.style) as Record<string, unknown>;
+}
 
 // `LoginScreen` reads `useWindowDimensions()` (via `Dimensions.get('window')`
 // under the hood) to pick the mobile/desktop split. Mocking the hook's own
@@ -204,6 +214,48 @@ describe("LoginScreen — desktop split layout", () => {
       setWindowWidth(750);
     }
   });
+});
+
+describe("LoginScreen — institutional panel (WEB design system, no dark mode)", () => {
+  it.each([
+    ["light", lightTheme],
+    ["dark", darkTheme],
+  ] as const)(
+    "keeps the institutional panel's fixed navy background and white heading text in %s mode — it is a brand surface, not a theme token that should invert",
+    async (_label, theme) => {
+      setWindowWidth(1280);
+
+      try {
+        await render(
+          <PaperProvider theme={theme}>
+            <LoginScreen />
+          </PaperProvider>,
+        );
+
+        const panelBackground = flatStyle(
+          screen.getByTestId("login-institutional-panel"),
+        ).backgroundColor;
+        const headingColor = flatStyle(screen.getByText("Vecingest")).color;
+
+        // The panel is the WEB design system's institutional brand surface
+        // (docs/design/vecingest-web.md), which has no dark mode at all. It
+        // must render the same literal colors regardless of the active
+        // theme — never `theme.colors.onBackground` / `onPrimary`, which
+        // both invert between light and dark (this is the regression this
+        // test guards against: the panel once inherited those tokens and
+        // rendered as a pale beige slab with illegible text in dark mode).
+        expect(panelBackground).toBe(INSTITUTIONAL_PANEL_BACKGROUND);
+        expect(headingColor).toBe(INSTITUTIONAL_PANEL_FOREGROUND);
+
+        // Specifically not the dark theme's `onBackground` (pale beige) /
+        // `onPrimary` (dark blue) — the exact tokens the regression used.
+        expect(panelBackground).not.toBe(darkTheme.colors.onBackground);
+        expect(headingColor).not.toBe(darkTheme.colors.onPrimary);
+      } finally {
+        setWindowWidth(750);
+      }
+    },
+  );
 });
 
 /** WCAG 2.x relative-luminance contrast ratio between two hex colors. */
