@@ -74,7 +74,6 @@ type User struct {
 	PasswordHash        string             `json:"password_hash"`
 	Name                string             `json:"name"`
 	Phone               pgtype.Text        `json:"phone"`
-	PhoneVerifiedAt     pgtype.Timestamptz `json:"phone_verified_at"`
 	Locale              string             `json:"locale"`
 	AvatarKey           pgtype.Text        `json:"avatar_key"`
 	IDDocumentEncrypted []byte             `json:"id_document_encrypted"`

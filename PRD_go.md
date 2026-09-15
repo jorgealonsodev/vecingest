@@ -495,7 +495,7 @@ Convenciones: tablas en snake_case plural, ids UUID v7 generados en la aplicaci√
 
 ```
 users
-  id, email (unique), password_hash, name, phone, phone_verified_at, locale, avatar_key,
+  id, email (unique), password_hash, name, phone, locale, avatar_key,
   id_document_encrypted nullable, notification_prefs jsonb, is_superadmin bool,
   last_login_at, deleted_at
 
@@ -546,7 +546,7 @@ password_reset_tokens
   id, user_id FK, token_hash (unique), expires_at (1 h), used_at, requested_ip
 
 otp_challenges                  -- verificaci√≥n por OTP, firma avanzada
-  id, user_id FK, purpose (phone_verify | vote | sign_minutes | sensitive_action),
+  id, user_id FK, purpose (vote | sign_minutes | sensitive_action),
   code_hash, channel (email | totp), expires_at, attempts int, verified_at
 
 user_mfa

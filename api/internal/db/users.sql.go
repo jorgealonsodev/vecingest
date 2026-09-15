@@ -26,7 +26,7 @@ func (q *Queries) EnsureSuperadmin(ctx context.Context, id uuid.UUID) error {
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, password_hash, name, phone, phone_verified_at, locale, avatar_key, id_document_encrypted, notification_prefs, is_superadmin, last_login_at, deleted_at, created_at, updated_at FROM users WHERE email = $1 AND deleted_at IS NULL
+SELECT id, email, password_hash, name, phone, locale, avatar_key, id_document_encrypted, notification_prefs, is_superadmin, last_login_at, deleted_at, created_at, updated_at FROM users WHERE email = $1 AND deleted_at IS NULL
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
@@ -38,7 +38,6 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.PasswordHash,
 		&i.Name,
 		&i.Phone,
-		&i.PhoneVerifiedAt,
 		&i.Locale,
 		&i.AvatarKey,
 		&i.IDDocumentEncrypted,
@@ -53,7 +52,7 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, password_hash, name, phone, phone_verified_at, locale, avatar_key, id_document_encrypted, notification_prefs, is_superadmin, last_login_at, deleted_at, created_at, updated_at FROM users WHERE id = $1 AND deleted_at IS NULL
+SELECT id, email, password_hash, name, phone, locale, avatar_key, id_document_encrypted, notification_prefs, is_superadmin, last_login_at, deleted_at, created_at, updated_at FROM users WHERE id = $1 AND deleted_at IS NULL
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
@@ -65,7 +64,6 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 		&i.PasswordHash,
 		&i.Name,
 		&i.Phone,
-		&i.PhoneVerifiedAt,
 		&i.Locale,
 		&i.AvatarKey,
 		&i.IDDocumentEncrypted,
@@ -82,7 +80,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 const insertUser = `-- name: InsertUser :one
 INSERT INTO users (id, email, password_hash, name, phone, locale, is_superadmin)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, email, password_hash, name, phone, phone_verified_at, locale, avatar_key, id_document_encrypted, notification_prefs, is_superadmin, last_login_at, deleted_at, created_at, updated_at
+RETURNING id, email, password_hash, name, phone, locale, avatar_key, id_document_encrypted, notification_prefs, is_superadmin, last_login_at, deleted_at, created_at, updated_at
 `
 
 type InsertUserParams struct {
@@ -112,7 +110,6 @@ func (q *Queries) InsertUser(ctx context.Context, arg InsertUserParams) (User, e
 		&i.PasswordHash,
 		&i.Name,
 		&i.Phone,
-		&i.PhoneVerifiedAt,
 		&i.Locale,
 		&i.AvatarKey,
 		&i.IDDocumentEncrypted,
