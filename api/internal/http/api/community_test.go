@@ -147,6 +147,40 @@ func TestCommunity_UpdateRestrictedToOfficeRoles(t *testing.T) {
 	}
 }
 
+// community-management: Community Update Restricted To Office Roles
+// (Scenario: Admin of the owning office updates community fields).
+//
+// This covers the POSITIVE half of the requirement. Without it, a
+// completely broken UpdateCommunity -- one that rejects or silently
+// discards every write -- still passes the whole community suite, since
+// the only other PATCH in this file asserts a 403. That was verified by
+// planting exactly that break and watching all five tests stay green.
+func TestCommunity_UpdateByOfficeAdminPersists(t *testing.T) {
+	srv, deps, handlesDB := newTestServer(t)
+	client := newClient(srv, nil)
+
+	officeID, adminID := seedOfficeWithAdmin(t, handlesDB, "patching-admin@example.com")
+	communityID := seedCommunity(t, handlesDB, officeID, "Original Name")
+	adminToken := mintAccessToken(t, deps, handlesDB, adminID, false)
+	auth := map[string]string{"Authorization": "Bearer " + adminToken}
+
+	resp, body := doJSON(t, client, http.MethodPatch, srv.URL+"/v1/communities/"+communityID.String(), map[string]any{
+		"name": "Renamed By Admin",
+	}, auth)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for an office admin updating their own community, got %d body=%v", resp.StatusCode, body)
+	}
+
+	// Persisted, not merely echoed back in the PATCH response.
+	resp, body = doJSON(t, client, http.MethodGet, srv.URL+"/v1/communities/"+communityID.String(), nil, auth)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 re-reading the community, got %d body=%v", resp.StatusCode, body)
+	}
+	if body["name"] != "Renamed By Admin" {
+		t.Fatalf("expected the new name to survive a re-read, got %v", body["name"])
+	}
+}
+
 // community-management: Legal And Descriptive Fields Persisted Per §7.3
 // (both scenarios: created without a parent, linked to a parent).
 func TestCommunity_LegalAndDescriptiveFieldsPersisted(t *testing.T) {
