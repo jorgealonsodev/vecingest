@@ -184,7 +184,18 @@ func requirementSet(cmd Command) map[string]requiredFunc {
 			// review-e72754dc7521b57a). A worker without the key can
 			// never dispatch an invitation, so this fails at boot
 			// rather than one retry-forever job at a time.
-			envEncryptionKey:     always,
+			envEncryptionKey: always,
+			// SMTP_URL / MAIL_FROM: required. The worker subcommand is
+			// the ONLY consumer of the invitation_email job kind, so a
+			// worker with no mail credentials does not "run without
+			// email" -- it completes every invitation job against a
+			// sink and reports success, which is how M1's central
+			// feature came to be broken end to end with no boot,
+			// metric or error signal anywhere (review lineage
+			// review-c4efc3f92d076299). Declared here so a missing
+			// credential fails at boot, exactly like TURNSTILE_SECRET.
+			envSMTPURL:           always,
+			envMailFrom:          always,
 			envDatabaseURLWorker: nil, // optional (D-R)
 		}
 	case CommandSeed:

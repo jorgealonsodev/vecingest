@@ -263,7 +263,38 @@ func ResolveCommunityViaInvitation(ctx context.Context, invitationID, userID uui
 
 // ResolveSelf resolves the caller's full membership set (design D-4:
 // "no path resource ⇒ scoped.Self ⇒ the caller's full membership set"),
-// for GET /v1/me and GET /v1/communities.
+// for GET /v1/communities and the /v1/offices/me routes.
+//
+// It runs the SAME mandatory-TOTP gate ResolveCommunity and ResolveOffice
+// run, over every admin/admin_staff membership it is about to hand out
+// (R1-self-scope-skips-mandatory-totp-gate, review lineage
+// review-c4efc3f92d076299). It previously ran no gate at all, on the
+// assumption that a route with no path resource grants nothing --
+// which is false: addOfficeMember is registered through scoped.Self and
+// inserts an office_members row with role admin_staff, granting
+// office-wide reach into every community of that office through the
+// community resolver's own office leg.
+//
+// The gate belongs HERE, on the whole route class, rather than on the
+// subset of Self routes someone judges privileged. Two reasons:
+//
+//  1. The privilege IS the membership. This function's entire output is
+//     the admin membership set; a handler that receives it can already
+//     act on it, so deciding per route means deciding again in every
+//     handler -- the manual, per-handler authorization check the scoped.*
+//     mechanism exists to replace, and the one that let this through.
+//  2. It makes the default safe. A Self route added tomorrow inherits
+//     the gate without anyone remembering to classify it. "Self means
+//     harmless" is exactly the assumption that produced this hole, and
+//     a per-route rule would preserve it as the default.
+//
+// The deliberate cost: an admin who has not enrolled loses GET
+// /v1/communities and the /v1/offices/me routes until they do. The
+// bootstrap path survives intact because it is not Self-registered --
+// GET /v1/me, POST /v1/me/mfa/enroll and POST /v1/me/mfa/verify are
+// plain huma.Register operations (handlers.RegisterMe/RegisterMFA), so
+// an un-enrolled admin can still read their profile, enroll a factor,
+// and log in again with a code.
 func ResolveSelf(ctx context.Context, userID uuid.UUID) (Memberships, error) {
 	if queries == nil {
 		return nil, errNotConfigured
@@ -280,9 +311,19 @@ func ResolveSelf(ctx context.Context, userID uuid.UUID) (Memberships, error) {
 
 	memberships := make(Memberships, 0, len(officeRows)+len(unitRows))
 	for _, r := range officeRows {
+		if merr := requireMFAForAdminRoles(ctx, Role(r.Role), userID); merr != nil {
+			return nil, merr
+		}
 		memberships = append(memberships, Membership{userID: userID, scope: scope{kind: KindOffice, id: r.OfficeID}, role: Role(r.Role), valid: true})
 	}
 	for _, r := range unitRows {
+		// A no-op today (the unit_members.role CHECK permits only
+		// owner/tenant), kept for the same reason the gate lives in this
+		// function at all: if that role set ever widens, the safe
+		// behaviour must be the one already written down.
+		if merr := requireMFAForAdminRoles(ctx, Role(r.Role), userID); merr != nil {
+			return nil, merr
+		}
 		memberships = append(memberships, Membership{userID: userID, scope: scope{kind: KindCommunity, id: r.CommunityID}, role: Role(r.Role), valid: true})
 	}
 	return memberships, nil

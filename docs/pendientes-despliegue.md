@@ -477,6 +477,102 @@ Lo que sí trae es una migración y un corte de sesión deliberado:
    entra por su propia ruta; hay que añadirlo antes de dar de alta al primer
    administrador de oficina con TOTP.
 
+### BLOQUEO DE DESPLIEGUE — el `worker` ahora exige `SMTP_URL` y `MAIL_FROM`
+
+**No hay ninguna variable nueva que crear**, pero sí un requisito nuevo que
+puede impedir el arranque, así que conviene leerlo entero.
+
+La tercera ronda de revisión encontró que **ninguna invitación se enviaba
+nunca, y el fallo era silencioso**. El subcomando `worker` es el único proceso
+que consume trabajos `invitation_email` (`serve` construye un cliente de River
+solo-productor que nunca arranca), y lo construía con `platmail.LogMailer`: cada
+trabajo descifraba el código corto, componía el mensaje, **lo escribía en un log
+y devolvía `nil`**. La fila del trabajo quedaba marcada como completada, sin
+reintento ni cola de fallidos, mientras `POST /v1/communities/{id}/invitations`
+respondía 201 y `POST /v1/invitations/{id}/resend` incrementaba `sent_count`
+como prueba de un envío que no ocurrió.
+
+`worker` usa ahora el mismo `internal/mail.AsyncMailer` que `serve`, y
+`SMTP_URL` y `MAIL_FROM` son requisitos declarados de `CommandWorker`.
+
+- **Qué hay que hacer en el servidor: nada.** Ambas variables ya son
+  obligatorias para `serve` y ya están en `stack.env`; `worker` hereda el mismo
+  `env_file: stack.env` a través del ancla `x-app-image`, así que las lee sin
+  tocar `docker-compose.yml`.
+- **Qué pasa si alguna vez faltan:** `worker` muere en el arranque con
+  `config validation failed: MAIL_FROM: missing; SMTP_URL: missing`, igual que
+  murió en su día por `CORS_ORIGINS`. Eso es deliberado: un worker sin
+  credenciales de correo no "funciona sin email", completa todas las
+  invitaciones contra un sumidero y las da por buenas.
+- **SMTP_URL tiene que ser real.** El apartado 2 de este documento sigue
+  vigente y ahora afecta también a las invitaciones, no solo a los avisos de
+  bloqueo: mientras apunte a un servidor inexistente, el envío falla por
+  trabajo (con error y reintento, ya no en silencio), pero el vecino sigue sin
+  recibir nada. El código corto en papel continúa funcionando como vía
+  alternativa.
+
+### El código corto de invitación cambia de huella — invitaciones pendientes
+
+Sin migración, sin columna nueva y sin variable nueva: `invitations.short_code_hash`
+pasa de SHA-256 sin sal a **HMAC-SHA-256 bajo `ENCRYPTION_KEY`**. El motivo es
+que ocho símbolos de un alfabeto de 32 son unos 40 bits: la tabla entera se
+podía enumerar sin conexión en minutos de GPU, de modo que la garantía "solo se
+persisten huellas" era nominal frente a quien pudiera leer la tabla, una copia
+de seguridad o una réplica de lectura. La clave vive en el entorno del proceso y
+nunca en la base de datos, que es exactamente la frontera de confianza en la que
+ya se apoya el sellado del mismo código en la fila del trabajo.
+
+El tipo y el tamaño de la columna no cambian (`bytea`, 32 bytes), el índice
+UNIQUE sigue en pie y la búsqueda sigue siendo un único acceso indexado.
+
+**Consecuencia, y no tiene arreglo posible:** una huella no es reversible, así
+que **las invitaciones pendientes creadas antes de este cambio dejan de
+resolverse por código corto** y hay que volver a emitirlas. El *token* opaco no
+se ve afectado (256 bits de entropía, sigue con SHA-256). En este hito no hay
+invitaciones en producción, así que hoy no afecta a nadie; si alguna vez se
+rota `ENCRYPTION_KEY`, el efecto será el mismo y por la misma razón.
+
+### El 2FA obligatorio de admin llega también a las rutas `scoped.Self`
+
+La misma ronda encontró que `ResolveSelf` —el resolutor detrás de **todas** las
+operaciones `scoped.Self`— nunca ejecutaba la comprobación de segundo factor, de
+modo que la puerta que cerraron las dos rondas anteriores no corría en esa clase
+de rutas. `POST /v1/offices/me/members` está registrada así e inserta una fila
+`office_members` con rol `admin_staff`, que da alcance a toda la oficina.
+
+Ahora la comprobación corre en el resolutor, sobre el conjunto de pertenencias
+que va a entregar. Para `owner` y `tenant` no cambia nada. Para un `admin` o
+`admin_staff` **cuya sesión no haya superado un reto TOTP**:
+
+- `GET /v1/communities`, `GET /v1/offices/me` y `GET|POST /v1/offices/me/members`
+  responden 403 (`AUTH_MFA_ENROLLMENT_REQUIRED` si no tiene factor,
+  `AUTH_MFA_REQUIRED` si lo tiene y esta sesión no lo usó).
+- El camino de alta sigue abierto: `GET /v1/me`, `POST /v1/me/mfa/enroll` y
+  `POST /v1/me/mfa/verify` **no** son rutas `scoped.Self`, así que un
+  administrador sin factor todavía puede darse de alta y volver a iniciar
+  sesión con el código.
+
+Sigue en pie lo dicho en el apartado anterior sobre la app: `LoginScreen`
+todavía no tiene campo para el código TOTP, así que esto hay que resolverlo
+antes de dar de alta al primer administrador de oficina con segundo factor.
+
+### `forgot-password` ya no se abre con un solo fallo de Turnstile
+
+La degradación que añadió la ronda 2 no podía activarse en la avería para la que
+existía: `verifyCaptcha` cortocircuitaba con el token vacío y **no llamaba al
+verificador**, así que una petición sin token nunca producía el error de
+transporte que alimenta el contador. En la avería típica de Turnstile el propio
+widget no carga y el navegador no tiene token que enviar, justo el caso que no
+podía activarla.
+
+Ahora el token vacío se envía al verificador (una llamada saliente acotada a 2s,
+detrás del limitador por IP, que responde `success:false` cuando el servicio
+está sano), de forma que esas peticiones sí registran la avería. A cambio, la
+apertura exige el umbral que los nombres de las constantes siempre prometieron:
+**3 fallos de transporte en 60 segundos**, no uno. Durante una avería real, los
+dos primeros intentos de recuperación de cada ventana siguen rechazándose; son
+los que la dan a conocer. `POST /v1/auth/login` sigue cerrándose siempre.
+
 ## Lo que queda de la Fase 14 (Checkpoint B) y quién tiene que hacerlo
 
 Estado a 2026-09-08. El bloqueo de infraestructura de la Fase 14

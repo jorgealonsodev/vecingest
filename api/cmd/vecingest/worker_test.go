@@ -110,13 +110,38 @@ func TestWorkerSubcommand_LeadershipAndGracefulShutdown(t *testing.T) {
 		"DATABASE_URL="+dsn,
 		"APP_ENV=development",
 		"ENCRYPTION_KEY="+encKey,
+		"SMTP_URL=smtp://127.0.0.1:1",
+		"MAIL_FROM=no-reply@example.com",
 	)
+
+	// R4-invitation-email-is-never-dispatched-by-any-process (review
+	// lineage review-c4efc3f92d076299): the worker is the only process
+	// that consumes invitation_email jobs, so it must REFUSE TO BOOT
+	// without mail credentials rather than complete every job against a
+	// sink. Asserted through the real binary, so a revert to a log sink
+	// cannot leave SMTP_URL merely validated and then discarded.
+	noMailEnv := append(os.Environ(),
+		"DATABASE_URL="+dsn,
+		"APP_ENV=development",
+		"ENCRYPTION_KEY="+encKey,
+		"SMTP_URL=",
+		"MAIL_FROM=",
+	)
+	noMailCmd := exec.Command(binPath, "worker")
+	noMailCmd.Env = noMailEnv
+	out, err := noMailCmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected `worker` to refuse to start without SMTP credentials, it started instead: %s", out)
+	}
+	if !strings.Contains(string(out), "SMTP_URL: missing") || !strings.Contains(string(out), "MAIL_FROM: missing") {
+		t.Fatalf("expected the boot failure to name SMTP_URL and MAIL_FROM, got: %s", out)
+	}
 
 	workerCmd := exec.Command(binPath, "worker")
 	workerCmd.Env = env
-	stdoutPipe, err := workerCmd.StdoutPipe()
-	if err != nil {
-		t.Fatalf("stdout pipe: %v", err)
+	stdoutPipe, perr := workerCmd.StdoutPipe()
+	if perr != nil {
+		t.Fatalf("stdout pipe: %v", perr)
 	}
 	if err := workerCmd.Start(); err != nil {
 		t.Fatalf("start worker: %v", err)

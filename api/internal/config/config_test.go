@@ -73,11 +73,17 @@ func TestLoad_PerSubcommandRequiredSet(t *testing.T) {
 		{"migrate full set passes", config.CommandMigrate, ""},
 		{"migrate missing BOOTSTRAP_DATABASE_URL", config.CommandMigrate, "BOOTSTRAP_DATABASE_URL"},
 		{"migrate missing APP_DB_PASSWORD", config.CommandMigrate, "APP_DB_PASSWORD"},
-		{"worker full set passes (no JWT/PROXY_IP/CORS/PORT/SMTP required)", config.CommandWorker, ""},
+		{"worker full set passes (no JWT/PROXY_IP/CORS/PORT required)", config.CommandWorker, ""},
 		{"worker missing DATABASE_URL", config.CommandWorker, "DATABASE_URL"},
 		// The invitation-email job payload carries its short code
 		// sealed under ENCRYPTION_KEY, and the worker is what opens it.
 		{"worker missing ENCRYPTION_KEY", config.CommandWorker, "ENCRYPTION_KEY"},
+		// The worker is the ONLY consumer of invitation_email jobs, so
+		// a worker with no mail credentials silently completes every
+		// invitation against a sink (review lineage
+		// review-c4efc3f92d076299). It must not boot.
+		{"worker missing SMTP_URL", config.CommandWorker, "SMTP_URL"},
+		{"worker missing MAIL_FROM", config.CommandWorker, "MAIL_FROM"},
 		{"serve missing TURNSTILE_SECRET", config.CommandServe, "TURNSTILE_SECRET"},
 		{"seed full set passes (no ENCRYPTION_KEY required)", config.CommandSeed, ""},
 		{"seed missing DATABASE_URL", config.CommandSeed, "DATABASE_URL"},

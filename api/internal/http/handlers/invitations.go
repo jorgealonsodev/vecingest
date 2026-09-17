@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -93,7 +95,7 @@ func (d *Deps) CreateInvitation(ctx context.Context, in *dto.CreateInvitationInp
 	if err != nil {
 		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
-	shortCodeHash := hashInviteSecret(rawShortCode)
+	shortCodeHash := d.hashInviteShortCode(rawShortCode)
 
 	now := d.clock().Now()
 	inv, err := q.InsertInvitation(ctx, db.InsertInvitationParams{
@@ -316,14 +318,24 @@ func (d *Deps) AcceptInvitation(ctx context.Context, in *dto.AcceptInvitationInp
 		return nil, apperr.New(400, apperr.CodeValidation, "consent is required", nil)
 	}
 
-	tx, err := d.DB.Write.Begin(ctx)
-	if err != nil {
-		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	q := db.New(tx)
+	// EVERYTHING up to the Begin below runs OUTSIDE a transaction, on
+	// purpose (R3-accept-invitation-holds-write-tx-across-password-work,
+	// review lineage review-c4efc3f92d076299). This endpoint is
+	// unauthenticated and public, and the work between here and the
+	// transaction is the expensive kind: a password policy whose
+	// production wiring reaches HIBP over the network, plus Argon2id,
+	// which is slow by design. The handler used to open the transaction
+	// first and take the invitation row lock via the failed-attempts
+	// UPDATE before any of it, so each request pinned a primary write
+	// connection and a row lock for that whole duration -- a cheap
+	// denial of service against the primary pool that needed nothing
+	// but a valid short code.
+	//
+	// Nothing here writes, so there is nothing to roll back; the
+	// transaction below still covers every write as one unit.
+	readQ := db.New(d.DB.Write)
 
-	inv, err := d.resolveInvitationSecret(ctx, q, in.Body.Token, in.Body.ShortCode)
+	inv, err := d.resolveInvitationSecret(ctx, readQ, in.Body.Token, in.Body.ShortCode)
 	if err != nil {
 		if errors.Is(err, errInvitationSecretMissing) || errors.Is(err, errInvitationSecretAmbiguous) {
 			return nil, apperr.New(400, apperr.CodeValidation, "exactly one of token or short_code is required", nil)
@@ -332,9 +344,6 @@ func (d *Deps) AcceptInvitation(ctx context.Context, in *dto.AcceptInvitationInp
 			_, _ = d.InviteAttempts.Fail(ctx, key, inviteLockoutWindow)
 			return nil, invitationNotFound()
 		}
-		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
-	}
-	if err := q.IncrementInvitationFailedAttempts(ctx, db.IncrementInvitationFailedAttemptsParams{ID: inv.ID, CommunityID: inv.CommunityID}); err != nil {
 		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
 
@@ -351,18 +360,14 @@ func (d *Deps) AcceptInvitation(ctx context.Context, in *dto.AcceptInvitationInp
 		return nil, apperr.New(500, apperr.CodeInternal, "invitation has no unit assigned", nil)
 	}
 
-	// design D-6: "Single use is enforced by the write, not by a prior
-	// read" -- this conditional UPDATE is what actually rejects a
-	// second accept or an accept past expiry; zero rows ⇒ 409.
-	if _, err := q.AcceptInvitation(ctx, db.AcceptInvitationParams{ID: inv.ID, CommunityID: inv.CommunityID}); err != nil {
-		if isNoRows(err) {
-			return nil, apperr.New(409, apperr.CodeConflict, "invitation is no longer available", nil)
-		}
-		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
-	}
-
-	var userID uuid.UUID
-	existing, err := q.GetUserByEmail(ctx, inv.Email.String)
+	// Resolve WHICH account this accept is for, and prove the caller may
+	// use it, before taking any lock. newPasswordHash is non-empty only
+	// on the create branch.
+	var (
+		userID          uuid.UUID
+		newPasswordHash string
+	)
+	existing, err := readQ.GetUserByEmail(ctx, inv.Email.String)
 	switch {
 	case err == nil:
 		// The invitation secret proves the CHANNEL, never the identity:
@@ -372,11 +377,13 @@ func (d *Deps) AcceptInvitation(ctx context.Context, in *dto.AcceptInvitationInp
 		// account (review lineage review-0e1833930adf141a). Linking an
 		// existing account therefore requires that account's OWN
 		// password, verified through the SAME primitive Login uses.
-		// The whole accept rolls back on mismatch, so the invitation
-		// stays usable for the genuine owner's next attempt.
+		// A mismatch returns before any write happens at all, so the
+		// invitation stays usable for the genuine owner's next attempt
+		// -- the same guarantee the old rollback gave, now without
+		// needing a rollback.
 		//
-		// Because that rollback also leaves the short code replayable,
-		// this branch is a credential-guessing surface and MUST be
+		// Because the short code stays replayable either way, this
+		// branch is a credential-guessing surface and MUST be
 		// throttled by the SAME account lockout POST /v1/auth/login
 		// uses -- keyed on email+IP, with its escalating block window
 		// and its victim alert -- not by the invitation enumeration
@@ -401,14 +408,50 @@ func (d *Deps) AcceptInvitation(ctx context.Context, in *dto.AcceptInvitationInp
 		}
 		userID = existing.ID
 	case isNoRows(err):
-		hash, herr := password.Hash(in.Body.Password)
-		if herr != nil {
+		// Argon2id, deliberately slow -- which is exactly why it runs
+		// here and not inside the transaction below.
+		newPasswordHash, err = password.Hash(in.Body.Password)
+		if err != nil {
 			return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 		}
+	default:
+		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+	}
+
+	// --- From here on, and only from here on, a write transaction. It
+	// covers the single-use claim, the account/membership writes and the
+	// audit entry as one unit, and nothing slow runs inside it.
+	tx, err := d.DB.Write.Begin(ctx)
+	if err != nil {
+		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := db.New(tx)
+
+	if err := q.IncrementInvitationFailedAttempts(ctx, db.IncrementInvitationFailedAttemptsParams{ID: inv.ID, CommunityID: inv.CommunityID}); err != nil {
+		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+	}
+
+	// design D-6: "Single use is enforced by the write, not by a prior
+	// read" -- this conditional UPDATE is what actually rejects a second
+	// accept or an accept past expiry; zero rows ⇒ 409. It is unaffected
+	// by the reordering above precisely because the guarantee never came
+	// from how long the transaction was held: a concurrent accept that
+	// read the same row before either transaction opened still loses
+	// here, and TestInvitation_ConcurrentAcceptsOfTheSameCodeYieldExactly
+	// OneSuccess proves it.
+	if _, err := q.AcceptInvitation(ctx, db.AcceptInvitationParams{ID: inv.ID, CommunityID: inv.CommunityID}); err != nil {
+		if isNoRows(err) {
+			return nil, apperr.New(409, apperr.CodeConflict, "invitation is no longer available", nil)
+		}
+		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+	}
+
+	if newPasswordHash != "" {
 		newUser, uerr := q.InsertUser(ctx, db.InsertUserParams{
 			ID:           uuid.New(),
 			Email:        inv.Email.String,
-			PasswordHash: hash,
+			PasswordHash: newPasswordHash,
 			Name:         in.Body.Name,
 			Phone:        optionalText(in.Body.Phone),
 			Locale:       "es",
@@ -418,8 +461,6 @@ func (d *Deps) AcceptInvitation(ctx context.Context, in *dto.AcceptInvitationInp
 			return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 		}
 		userID = newUser.ID
-	default:
-		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
 
 	var consentAt pgtype.Timestamptz
@@ -510,7 +551,7 @@ func (d *Deps) resolveInvitationSecret(ctx context.Context, q invitationsQuerier
 	case rawToken != "":
 		return q.GetInvitationByTokenHash(ctx, hashInviteSecret(rawToken))
 	case rawShortCode != "":
-		return q.GetInvitationByShortCodeHash(ctx, hashInviteSecret(normalizeShortCode(rawShortCode)))
+		return q.GetInvitationByShortCodeHash(ctx, d.hashInviteShortCode(normalizeShortCode(rawShortCode)))
 	default:
 		return db.Invitation{}, errInvitationSecretMissing
 	}
@@ -524,12 +565,63 @@ func normalizeShortCode(s string) string {
 	return strings.ToUpper(strings.TrimSpace(s))
 }
 
-// hashInviteSecret is the single hashing primitive for both the
-// invitation token and short code (SHA-256, design D-6), reusing
-// token.HashToken so there is exactly one hash implementation for every
-// hashed secret in this codebase.
+// hashInviteSecret is the hashing primitive for the invitation TOKEN
+// (SHA-256, design D-6), reusing token.HashToken so there is exactly one
+// implementation for every HIGH-ENTROPY hashed secret in this codebase.
+// The opaque token is 256 bits of crypto/rand, so an unsalted, unkeyed
+// digest is sound for it: there is no candidate list to enumerate.
 func hashInviteSecret(raw string) []byte {
 	return token.HashToken(raw)
+}
+
+// hashInviteShortCode is deliberately NOT that primitive
+// (R1-invitation-short-code-hash-offline-recoverable, review lineage
+// review-c4efc3f92d076299). The short code is eight symbols from a
+// 32-symbol alphabet -- about 40 bits -- so the entire preimage space is
+// 2^40 candidates, and a single-round unsalted SHA-256 under a UNIQUE
+// index turned "only hashes are persisted" into a guarantee that holds
+// on paper and not in fact: minutes of commodity GPU work recover every
+// pending code from a table dump, a backup or a read replica.
+//
+// It is an HMAC-SHA-256 under ENCRYPTION_KEY, and each part of that was
+// a choice against a real alternative:
+//
+//   - NOT a per-row salt. The lookup path resolves an invitation FROM
+//     the code (GetInvitationByShortCodeHash) and short_code_hash is
+//     UNIQUE. A per-row salt makes the digest unreproducible without
+//     first finding the row, which is the row you are trying to find --
+//     it would force a table scan plus one KDF per row, and the UNIQUE
+//     constraint would have to go.
+//
+//   - NOT a slow KDF with a fixed pepper. It would work, and it would
+//     put an Argon2id-class cost on every preview and accept: two
+//     UNAUTHENTICATED endpoints. That is the identical primary-pool
+//     denial-of-service lever this same round had to remove from
+//     AcceptInvitation, reintroduced one layer down.
+//
+//   - NOT more entropy in the code. The code's length is a usability
+//     constraint, not an implementation detail: it is read aloud and
+//     copied from paper by a neighbour (design D-6's "paper/voice"
+//     delivery path), and the alphabet already excludes O/0/I/1 to make
+//     that survivable. Twelve or sixteen characters would buy the bits
+//     by making the delivery path materially worse.
+//
+// A keyed MAC keeps the digest deterministic -- so the UNIQUE index and
+// the single indexed lookup are untouched -- and is constant-cost, while
+// moving the secret OUT of the database entirely. The named adversary
+// holds the table; ENCRYPTION_KEY is in the process environment (config
+// unsets it after load), which is exactly the trust boundary the round-2
+// fix already relies on when it seals this same short code into the
+// river_job row. Reusing that key means no new configuration variable
+// and no new secret to rotate.
+//
+// What it does NOT defend against: an attacker who has the key as well
+// as the table can still enumerate 2^40 candidates. That is the accepted
+// residual, and it is the same one every keyed-digest scheme carries.
+func (d *Deps) hashInviteShortCode(raw string) []byte {
+	mac := hmac.New(sha256.New, d.MFAKey[:])
+	mac.Write([]byte(raw))
+	return mac.Sum(nil)
 }
 
 // invitationUsable reports whether inv can still be previewed/accepted:

@@ -15,12 +15,34 @@ import (
 const captchaAfterFailures = 2
 
 // verifyCaptcha reports whether token is a valid Turnstile response.
-// d.Captcha == nil or an empty token both fail closed (false, nil
-// error) -- a deployment that forgets to wire Captcha, or a caller who
-// omits the token entirely, is rejected exactly like an invalid token,
+// d.Captcha == nil fails closed (false, nil error): a deployment that
+// forgets to wire Captcha is rejected exactly like an invalid token,
 // never silently allowed through.
+//
+// An EMPTY token is deliberately NOT short-circuited. It used to be, and
+// that is what made the degraded path unreachable in the only outage
+// shape that matters (R4-captcha-degradation-cannot-engage-without-a-
+// token, review lineage review-c4efc3f92d076299): when Turnstile is
+// down the widget itself fails to load, so browsers arrive holding no
+// token, and a local refusal produced no transport error for
+// recordCaptchaOutage to count. The counter therefore only advanced
+// while clients could still mint tokens -- exactly when it was not
+// needed.
+//
+// Sending the empty token to the verifier costs one refusal that ends
+// the same way: a healthy siteverify answers 200 with success=false for
+// a missing response, so the caller still gets (false, nil) and still
+// refuses the request. What changes is that an UNREACHABLE siteverify
+// now returns an error for these requests, which is the evidence the
+// outage counter exists to collect.
+//
+// The trade, stated plainly: a tokenless request on an unauthenticated
+// endpoint now causes one outbound siteverify call where it previously
+// caused none. That call is bounded at 2s on the request context
+// (platform/captcha.verifyTimeout) and the endpoint sits behind
+// limiter.LoginReset's per-IP budget, which is independent of Turnstile.
 func (d *Deps) verifyCaptcha(ctx context.Context, token, remoteIP string) (bool, error) {
-	if d.Captcha == nil || token == "" {
+	if d.Captcha == nil {
 		return false, nil
 	}
 	return d.Captcha.Verify(ctx, token, remoteIP)

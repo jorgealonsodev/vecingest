@@ -152,7 +152,13 @@ func Self[I any, O any](api huma.API, op huma.Operation, handler func(context.Co
 		}
 		memberships, err := authz.ResolveSelf(ctx, userID)
 		if err != nil {
-			return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+			// The SAME mapping the other constructors use, not a blanket
+			// 500: ResolveSelf now runs the mandatory-TOTP gate over the
+			// admin memberships it hands out (review lineage
+			// review-c4efc3f92d076299), and that refusal has to reach the
+			// client as the 403 code naming the client's next move --
+			// enroll a factor, or log in again with one.
+			return nil, resolveErrorResponse(err)
 		}
 		return handler(ctx, in, memberships)
 	})

@@ -32,13 +32,28 @@ func (d *Deps) ForgotPassword(ctx context.Context, in *dto.ForgotPasswordInput) 
 	// entirely independent of Turnstile, and the response is
 	// enumeration-safe either way. Login makes the opposite call
 	// (auth_login.go) and says why there.
+	// One rule, and the threshold is what decides it: forgot-password
+	// degrades open only once a SUSTAINED outage has been recorded
+	// (captchaOutageThreshold failures inside captchaOutageWindow).
+	//
+	// A single transport error no longer opens the endpoint by itself.
+	// It used to, which left the threshold constants deciding nothing
+	// here; with verifyCaptcha no longer short-circuiting an empty token
+	// (captcha.go), tokenless requests now produce that evidence
+	// themselves, so the counter is both reachable and load-bearing
+	// (R4-captcha-degradation-cannot-engage-without-a-token, review
+	// lineage review-c4efc3f92d076299).
+	//
+	// The cost is explicit: during a genuine outage the first
+	// captchaOutageThreshold recovery attempts in a window are still
+	// refused, because that is how the outage becomes known. Login makes
+	// the opposite call and stays fail-closed throughout
+	// (auth_login.go), while still feeding this same counter.
 	ok, cerr := d.verifyCaptcha(ctx, in.Body.TurnstileToken, clientIP(ctx))
 	if cerr != nil {
 		d.recordCaptchaOutage(ctx)
-	} else if !ok && !d.captchaUnavailable(ctx) {
-		// A recorded, still-open outage also covers the tokenless
-		// requests an outage necessarily produces: with the widget
-		// down the client has no token to send.
+	}
+	if !ok && !d.captchaUnavailable(ctx) {
 		return nil, captchaRequired()
 	}
 

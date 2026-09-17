@@ -296,3 +296,96 @@ func TestMFAGate_OwnerWithNoFactorIsUnaffected(t *testing.T) {
 		t.Fatalf("expected an owner's password-only session to reach a community-scoped read, got %d body=%v", resp.StatusCode, body)
 	}
 }
+
+// R1-self-scope-skips-mandatory-totp-gate (review lineage
+// review-c4efc3f92d076299). ResolveSelf -- the resolver behind EVERY
+// scoped.Self operation -- never called requireMFAForAdminRoles, so the
+// gate the two previous rounds built did not run on that route class at
+// all. POST /v1/offices/me/members is registered through scoped.Self and
+// inserts an office_members row with role admin_staff, which grants the
+// target office-wide reach into every community of that office through
+// the community resolver's office leg. An admin who never enrolled
+// authenticates on a password alone (the login challenge only fires for
+// accounts that already have an active factor), so that session -- the
+// exact caller the gate is specified to refuse -- could still perform
+// the escalation.
+func TestMFAGate_SelfScopedPrivilegeGrantRefusedWithoutSecondFactor(t *testing.T) {
+	srv, _, handlesDB := newTestServer(t)
+	client := newClient(srv, nil)
+
+	adminEmail := "self-scope-gate-admin@example.com"
+	_, _ = seedOfficeAdminUser(t, handlesDB, adminEmail)
+	targetEmail := "self-scope-gate-target@example.com"
+	targetID := createUser(t, handlesDB, targetEmail, false)
+
+	// No factor on the account, so login succeeds on a password alone
+	// and the session it issues is NOT second-factor authenticated.
+	resp, body := login(t, client, srv.URL, adminEmail, "", "web")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("test setup: an admin with no factor must still log in on a password alone, got %d body=%v", resp.StatusCode, body)
+	}
+	auth := bearer(accessTokenFrom(t, body))
+
+	resp, body = doJSON(t, client, http.MethodPost, srv.URL+"/v1/offices/me/members", map[string]any{
+		"email": targetEmail,
+	}, auth)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403: a session that never proved a second factor must not grant office-wide admin_staff through a scoped.Self route, got %d body=%v", resp.StatusCode, body)
+	}
+	if body["code"] != "AUTH_MFA_ENROLLMENT_REQUIRED" {
+		t.Fatalf("expected AUTH_MFA_ENROLLMENT_REQUIRED (this admin has no factor at all, so the client's move is to enroll), got %v", body)
+	}
+	if n := officeMemberCount(t, handlesDB, targetID); n != 0 {
+		t.Fatalf("expected NO office_members row for the target: the privilege-granting write must not have happened, got %d", n)
+	}
+
+	// The same session must not read the office's member list either --
+	// getMyOffices and listMyOfficeMembers are Self-registered too, and
+	// they answer from the very membership set the gate governs.
+	resp, body = doJSON(t, client, http.MethodGet, srv.URL+"/v1/offices/me/members", nil, auth)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 on the Self-scoped office member listing for a session with no second factor, got %d body=%v", resp.StatusCode, body)
+	}
+}
+
+// The positive path the gate must not break: the SAME admin, with a
+// factor, logging in WITH a valid code, completes the same write. Without
+// this the test above would be satisfied by a route that refuses every
+// admin unconditionally.
+func TestMFAGate_SelfScopedPrivilegeGrantSucceedsWithSecondFactor(t *testing.T) {
+	srv, deps, handlesDB := newTestServer(t)
+	client := newClient(srv, nil)
+
+	adminEmail := "self-scope-gate-ok-admin@example.com"
+	_, adminID := seedOfficeAdminUser(t, handlesDB, adminEmail)
+	secret := seedActiveMFAWithSecret(t, handlesDB, deps.MFAKey, adminID)
+	targetEmail := "self-scope-gate-ok-target@example.com"
+	targetID := createUser(t, handlesDB, targetEmail, false)
+
+	resp, body := login(t, client, srv.URL, adminEmail, validTOTPCode(t, secret), "web")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected a valid TOTP code to complete the login, got %d body=%v", resp.StatusCode, body)
+	}
+	auth := bearer(accessTokenFrom(t, body))
+
+	resp, body = doJSON(t, client, http.MethodPost, srv.URL+"/v1/offices/me/members", map[string]any{
+		"email": targetEmail,
+	}, auth)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected a second-factor-authenticated office admin to add staff through the Self-scoped route, got %d body=%v", resp.StatusCode, body)
+	}
+	if n := officeMemberCount(t, handlesDB, targetID); n != 1 {
+		t.Fatalf("expected exactly one office_members row for the target, got %d", n)
+	}
+}
+
+func officeMemberCount(t *testing.T, handlesDB db.Handles, userID uuid.UUID) int {
+	t.Helper()
+	var count int
+	if err := handlesDB.Write.QueryRow(t.Context(),
+		`SELECT count(*) FROM office_members WHERE user_id = $1`, userID,
+	).Scan(&count); err != nil {
+		t.Fatalf("count office members: %v", err)
+	}
+	return count
+}

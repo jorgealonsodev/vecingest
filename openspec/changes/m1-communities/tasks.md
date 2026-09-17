@@ -221,6 +221,19 @@ marked `[x]`.
 - [x] C3.6 The shared test harness was fixed, never the gate: `mintAccessToken` derives the minted session's second-factor fact from the account's own factor, exactly as login now does, and the gate's own tests drive the real login endpoint instead of the helper
 - [x] C3.7 Run `make gen` (`LoginRequest` gained `totp_code`); confirmed idempotent, and the hand-maintained `packages/shared/src/errors.ts` code list plus the app's Spanish copy were kept in sync with `apperr.go`
 
+### Correction round 4 — review lineage `review-c4efc3f92d076299`
+
+Five findings on top of the delivered Phase 6/7 code. No new task was added:
+each fix corrects code a task above already marked `[x]`. **Two of the five
+were defects in the previous two rounds' own corrections** (C4.3 and C4.4),
+which is the pattern this change has now shown three rounds running.
+
+- [x] C4.1 `R4-invitation-email-is-never-dispatched-by-any-process` — the `worker` subcommand (the ONLY consumer of `invitation_email`) built its River client with `platmail.LogMailer`, so every job decrypted the short code, rendered the message, wrote it to a log sink and returned `nil`: recorded completed, never retried, never dead-lettered, while `CreateInvitation` answered 201 and `ResendInvitation` incremented `sent_count`. M1's central feature did not work end to end and failed silently. `runWorker` now builds the real `internal/mail.AsyncMailer` through `buildWorkerMailer`, and `SMTP_URL`/`MAIL_FROM` are declared requirements of `CommandWorker` so a mail-less worker cannot boot
+- [x] C4.2 `R1-self-scope-skips-mandatory-totp-gate` — `ResolveSelf` never called `requireMFAForAdminRoles`, so the gate rounds 2/3 built did not run on ANY `scoped.Self` route; `addOfficeMember` is registered that way and inserts `office_members.role = admin_staff`. The gate now runs in `ResolveSelf` over the admin memberships it hands out — the whole route class, not a per-route judgement — and `scoped.Self` renders resolver errors through the same `resolveErrorResponse` the other constructors use
+- [x] C4.3 `R4-captcha-degradation-cannot-engage-without-a-token` (defect in round 2's own fix) — `verifyCaptcha` short-circuited an empty token WITHOUT calling the verifier, so the tokenless requests a widget outage produces could never record the transport error the outage counter consumes. The empty token now reaches the verifier, and forgot-password degrades open only on the recorded threshold, which makes `captchaOutageThreshold`/`Window` load-bearing instead of decorative
+- [x] C4.4 `R3-accept-invitation-holds-write-tx-across-password-work` (defect in round 1's own fix) — the unauthenticated accept endpoint opened a primary-pool transaction and took the invitation row lock BEFORE password-policy validation, `password.Verify` and `password.Hash`. Secret resolution, policy validation and all password work now run before `Begin`; the transaction covers only the writes. Single use still comes from the conditional `AcceptInvitation` UPDATE, and rollback-on-mismatch became return-before-any-write
+- [x] C4.5 `R1-invitation-short-code-hash-offline-recoverable` — `short_code_hash` was a single-round unsalted SHA-256 of ~40 bits under a UNIQUE index, enumerable offline by exactly the adversary the same candidate defends against when it seals that code before queuing it. It is now HMAC-SHA-256 under `ENCRYPTION_KEY`: deterministic (UNIQUE index and single indexed lookup untouched), constant-cost (no KDF on two unauthenticated endpoints), no new config, no migration. The opaque token keeps plain SHA-256 — 256 bits has no candidate list
+
 ## Phase 8: GET /v1/me Memberships, lint-scope, Permission Matrix (WU-6, PR6 — TDD)
 
 - [ ] 8.1 RED: a non-superadmin user with no memberships gets an empty `memberships` array; a superadmin gets `is_superadmin: true`; a user with one office and one community membership gets both typed entries (GET /v1/me Response Shape, all three scenarios)

@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -932,5 +933,61 @@ func TestInvitation_JobRowNeverPersistsThePlaintextShortCode(t *testing.T) {
 	}
 	if string(opened) != shortCode {
 		t.Fatalf("expected the sealed payload to open to the issued short code %q, got %q", shortCode, opened)
+	}
+}
+
+// R1-invitation-short-code-hash-offline-recoverable (review lineage
+// review-c4efc3f92d076299). The short code is 8 symbols from a 32-symbol
+// alphabet -- about 40 bits -- and it was persisted as a single-round
+// unsalted SHA-256 digest under a UNIQUE index. Full enumeration of that
+// preimage space is minutes of commodity GPU work, so the digest
+// protected nothing against an adversary who can read the invitations
+// table: a backup, a read replica, or anyone with SELECT. That is the
+// SAME adversary this candidate names when it seals the very same short
+// code before letting it reach a durable river_job row, and recovering
+// one pending code is enough on its own -- accept resolves by short code
+// and issues a session plus a membership with no second secret.
+func TestInvitation_ShortCodeDigestIsNotOfflineEnumerable(t *testing.T) {
+	srv, deps, handlesDB := newTestServer(t)
+	client := newClient(srv, nil)
+
+	officeID, adminID := seedOfficeWithAdmin(t, handlesDB, "invite-digest-admin@example.com")
+	communityID := seedCommunity(t, handlesDB, officeID, "Invite Digest Community")
+	unitID := seedUnit(t, handlesDB, communityID)
+	auth := map[string]string{"Authorization": "Bearer " + mintAccessToken(t, deps, handlesDB, adminID, false)}
+
+	_, createBody := doJSON(t, client, http.MethodPost, srv.URL+"/v1/communities/"+communityID.String()+"/invitations", map[string]any{
+		"unit_id": unitID.String(), "email": "invite-digest@example.com", "role": "owner",
+	}, auth)
+	shortCode, _ := createBody["short_code"].(string)
+	if shortCode == "" {
+		t.Fatalf("test setup: expected a short code in the creation response, got %v", createBody)
+	}
+
+	var stored []byte
+	if err := handlesDB.Write.QueryRow(t.Context(),
+		`SELECT short_code_hash FROM invitations WHERE community_id = $1`, communityID,
+	).Scan(&stored); err != nil {
+		t.Fatalf("read short_code_hash: %v", err)
+	}
+
+	// The exact computation an attacker holding nothing but the table
+	// would run over a 32^8 candidate list.
+	bare := sha256.Sum256([]byte(shortCode))
+	if bytes.Equal(stored, bare[:]) {
+		t.Fatalf("invitations.short_code_hash is a bare unsalted SHA-256 of the short code: ~40 bits of entropy is offline-enumerable, so anyone who can read this table recovers every pending invitation's plaintext code")
+	}
+
+	// It is keyed on ENCRYPTION_KEY specifically -- a secret that lives
+	// in the process environment and never in the database, which is the
+	// whole point. Under a different key the same code no longer
+	// resolves, so the digest cannot have been computed from the code
+	// alone.
+	deps.MFAKey = sha256.Sum256([]byte("a different ENCRYPTION_KEY entirely"))
+	resp, body := doJSON(t, client, http.MethodPost, srv.URL+"/v1/invitations/preview", map[string]any{
+		"short_code": shortCode,
+	}, nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected the short-code digest to be keyed on ENCRYPTION_KEY (a different key must not resolve the same code), got %d body=%v", resp.StatusCode, body)
 	}
 }

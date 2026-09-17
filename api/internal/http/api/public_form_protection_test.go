@@ -210,23 +210,31 @@ func TestPublicForm_ForgotPasswordDegradesOpenDuringAVerifierOutage(t *testing.T
 	createUser(t, handlesDB, email, false)
 
 	// A client that minted its token before the outage began: the
-	// verifier error is proof the SERVICE is down, not that the token
-	// is bad.
+	// verifier error is proof the SERVICE is down, not that the token is
+	// bad. REWRITTEN in review lineage review-c4efc3f92d076299: this
+	// block used to assert that the FIRST such error degraded the
+	// endpoint open, which meant captchaOutageThreshold/Window decided
+	// nothing on this path and were protection in name only. Degradation
+	// is now what the constants say it is -- a sustained outage -- so the
+	// first two requests still fail closed.
+	for i := range 2 {
+		resp, body := doJSON(t, client, http.MethodPost, srv.URL+"/v1/auth/forgot-password", map[string]any{
+			"email": email, "turnstile_token": preOutageToken,
+		}, nil)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("attempt %d: expected forgot-password to stay closed until a SUSTAINED verifier outage is established, got %d body=%v", i+1, resp.StatusCode, body)
+		}
+	}
 	resp, body := doJSON(t, client, http.MethodPost, srv.URL+"/v1/auth/forgot-password", map[string]any{
 		"email": email, "turnstile_token": preOutageToken,
 	}, nil)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected forgot-password to degrade open while the verifier is unreachable, got %d body=%v", resp.StatusCode, body)
+		t.Fatalf("expected forgot-password to degrade open once the verifier outage is established, got %d body=%v", resp.StatusCode, body)
 	}
 
-	// Past the outage threshold (3 observed failures in the window) a
-	// client that cannot mint a token AT ALL -- the normal case during
-	// an outage, since the widget itself is down -- is also let through.
-	for range 2 {
-		doJSON(t, client, http.MethodPost, srv.URL+"/v1/auth/forgot-password", map[string]any{
-			"email": email, "turnstile_token": preOutageToken,
-		}, nil)
-	}
+	// And a client that cannot mint a token AT ALL -- the normal case
+	// during an outage, since the widget itself is down -- is let
+	// through on the same established outage.
 	resp, body = doJSON(t, client, http.MethodPost, srv.URL+"/v1/auth/forgot-password", map[string]any{
 		"email": email,
 	}, nil)
@@ -262,5 +270,50 @@ func TestPublicForm_LoginStaysFailClosedDuringAVerifierOutage(t *testing.T) {
 	}, nil)
 	if resp.StatusCode == http.StatusOK || body["access_token"] != nil {
 		t.Fatalf("expected login to stay fail-closed while the verifier is unreachable, got %d body=%v", resp.StatusCode, body)
+	}
+}
+
+// R4-captcha-degradation-cannot-engage-without-a-token (review lineage
+// review-c4efc3f92d076299). The degraded path above was unreachable in
+// the outage shape it exists for. verifyCaptcha short-circuited on an
+// empty token and returned (false, nil) WITHOUT calling the verifier, so
+// a tokenless request never produced the transport error the outage
+// counter consumes: the counter only advanced while clients could still
+// mint tokens. In the dominant Turnstile outage the widget itself fails
+// to load and browsers send no token at all, so the counter stayed at 0
+// and every forgot-password was refused for the whole outage.
+//
+// This test primes the counter with TOKENLESS requests only -- the
+// traffic an outage actually produces. The existing degradation test
+// above primes with three pre-outage tokens, which is precisely why it
+// could not observe the gap.
+func TestPublicForm_ForgotPasswordDegradesOpenWhenClientsHoldNoTokenAtAll(t *testing.T) {
+	srv, deps, handlesDB := newTestServer(t)
+	deps.Captcha = unavailableVerifier{}
+	client := newClient(srv, nil)
+
+	email := "captcha-outage-tokenless@example.com"
+	createUser(t, handlesDB, email, false)
+
+	// Every request below carries NO turnstile_token, because during a
+	// widget outage the client has none to carry.
+	tokenless := map[string]any{"email": email}
+
+	// Below the threshold the endpoint still fails closed: one flaky
+	// call is not an outage.
+	// handlers.captchaOutageThreshold is 3 (unexported; spelled out here
+	// because this test lives in api_test). The request that records the
+	// third failure is itself the first one that observes the outage as
+	// established, so exactly two requests precede it.
+	for i := range 2 {
+		resp, body := doJSON(t, client, http.MethodPost, srv.URL+"/v1/auth/forgot-password", tokenless, nil)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("attempt %d: expected forgot-password to stay closed before a sustained outage is established, got %d body=%v", i+1, resp.StatusCode, body)
+		}
+	}
+
+	resp, body := doJSON(t, client, http.MethodPost, srv.URL+"/v1/auth/forgot-password", tokenless, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected tokenless forgot-password requests to establish the verifier outage themselves and then degrade open, got %d body=%v", resp.StatusCode, body)
 	}
 }
