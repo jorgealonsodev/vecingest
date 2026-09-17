@@ -404,11 +404,38 @@ pero **ninguna línea de Go las lee** a fecha de hoy. Verificado con `grep`:
 | `R2_*` | El almacenamiento de ficheros no está implementado en M0 |
 | `TSA_URL` | El sellado de tiempo tampoco; además tiene valor por defecto en el compose |
 | `SENTRY_DSN` | El SDK no está ni en `api/go.mod` ni en `app/package.json` |
-| `TURNSTILE_SECRET` | La API lo lee al `Holder` pero nadie lo usa; la Site Key ni siquiera tiene variable donde aterrizar |
+| ~~`TURNSTILE_SECRET`~~ | **Ya NO aplica: M1 lo implementó y ahora es OBLIGATORIO fuera de desarrollo. Ver el bloqueo al final de esta sección.** |
 | `EXPO_ACCESS_TOKEN` | Cero apariciones en todo el repositorio; es para compilar con EAS, nunca una variable del stack |
 
 Antes de implementar Turnstile hará falta decidir dónde aterriza la Site Key,
 que es pública y tiene que llegar al cliente.
+
+### BLOQUEO DE DESPLIEGUE — `TURNSTILE_SECRET` (nuevo en M1, Fase 7)
+
+**El próximo despliegue no arranca sin esto.** La Fase 7 implementó Turnstile y
+la ronda 2 de revisión exigió que un secreto ausente falle en el arranque en vez
+de silenciosamente en el primer uso. `TURNSTILE_SECRET` es ahora obligatorio
+salvo con `APP_ENV=development`, y este stack corre con `APP_ENV: production`.
+
+`docker-compose.yml` no lo declara porque los secretos llegan por `env_file:
+stack.env`, así que **hay que añadirlo a `stack.env` en el servidor antes de
+redesplegar**. Sin él, `api` y `worker` mueren con `config validation failed:
+TURNSTILE_SECRET: missing`, exactamente igual que murieron en su día por
+`CORS_ORIGINS: missing`.
+
+Se obtiene en el panel de Cloudflare Turnstile, junto a la Site Key (que sigue
+sin variable donde aterrizar: es pública, va al cliente, y decidir su sitio
+sigue pendiente).
+
+`ENCRYPTION_KEY` pasó a ser también requisito del `worker`, no solo de `serve`,
+porque el código corto de invitación viaja cifrado en la fila del job. Ya estaba
+en `stack.env` para `serve`, y el `worker` hereda el mismo `env_file`, así que
+ahí no hay nada que añadir — pero conviene saberlo si alguna vez se separan.
+
+**Purga pendiente**: las filas `river_job` encoladas antes de ese cambio guardan
+el código en claro y ahora no se pueden descifrar. En este hito la cola está
+vacía, así que no afecta; un despliegue con trabajos de invitación pendientes
+tendría que purgarlos antes de actualizar.
 
 ## Lo que queda de la Fase 14 (Checkpoint B) y quién tiene que hacerlo
 
