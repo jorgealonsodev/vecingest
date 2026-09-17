@@ -81,7 +81,10 @@ func (d *Deps) SuperadminLogin(ctx context.Context, in *dto.SuperadminLoginInput
 		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
 
-	loginOut, err := d.issueSession(ctx, q, user.ID, true, in.Body.DeviceName, in.Body.Platform, ip)
+	// true, unconditionally: this endpoint has no path to this line
+	// without an accepted TOTP code, so its sessions are always
+	// second-factor authenticated.
+	loginOut, err := d.issueSession(ctx, q, user.ID, true, true, in.Body.DeviceName, in.Body.Platform, ip)
 	if err != nil {
 		return nil, err
 	}

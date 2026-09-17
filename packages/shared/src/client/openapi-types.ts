@@ -887,6 +887,8 @@ export interface components {
              * @enum {string}
              */
             platform: "ios" | "android" | "web";
+            /** @description Required only for accounts with an active TOTP factor; a 403 AUTH_MFA_REQUIRED response means the account needs one. */
+            totp_code?: string;
             turnstile_token?: string;
         };
         LoginResponse: {

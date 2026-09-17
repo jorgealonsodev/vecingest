@@ -113,6 +113,22 @@ func (f *fakeQuerier) ListUnitMembershipsByUserID(_ context.Context, userID uuid
 	return rows, nil
 }
 
+// adminSessionContext is the context an ADMIN request actually arrives
+// with in production: the caller's user id plus the second-factor fact
+// the Bearer middleware reads off the access token's mfa claim
+// (api.bearerAuthAndRateLimit). Since the mandatory-TOTP gate became
+// per-session rather than per-account (review lineage
+// review-0e1833930adf141a), a test that gives an admin only a user id is
+// describing a password-only session, which the gate correctly refuses.
+//
+// Fixing the tests here rather than loosening the gate is the point: the
+// callers below are exercising resolution and role checks, not the MFA
+// gate, so they need a session shaped like the one those routes are
+// reached with.
+func adminSessionContext(userID uuid.UUID) context.Context {
+	return authz.ContextWithMFAAuthenticated(authz.ContextWithUserID(context.Background(), userID), true)
+}
+
 func splitKey(k string) [2]string {
 	for i := 0; i < len(k); i++ {
 		if k[i] == '|' {
@@ -299,7 +315,7 @@ func TestCommunity_AdminScopeDerivedFromOfficeMembers(t *testing.T) {
 	})
 
 	_, r := newCommunityTestAPI(t, []authz.Role{authz.RoleAdmin})
-	ctx := authz.ContextWithUserID(context.Background(), adminUserID)
+	ctx := adminSessionContext(adminUserID)
 	w := doGet(r, ctx, "/v1/communities/"+communityID.String()+"/fixture", nil)
 
 	if w.Code != http.StatusOK {
@@ -402,11 +418,45 @@ func TestCommunity_AdminWithMFAAllowed(t *testing.T) {
 	})
 
 	_, r := newCommunityTestAPI(t, []authz.Role{authz.RoleAdmin})
-	ctx := authz.ContextWithUserID(context.Background(), adminUserID)
+	ctx := adminSessionContext(adminUserID)
 	w := doGet(r, ctx, "/v1/communities/"+communityID.String()+"/fixture", nil)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200 for an admin with active TOTP, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// The bypass this gate was rewritten to close (review lineage
+// review-0e1833930adf141a, R1-mandatory-totp-gate-is-only-an-enrollment-
+// flag), at the resolver layer: the account HAS an active factor
+// (mfaDisabledUsers is empty, so IsUserMFAEnabled reports true) and the
+// SESSION still never used it. The old gate read only the account flag
+// and let this through, which is exactly how a password-only session
+// could enroll a factor and walk in.
+//
+// The code must be AUTH_MFA_REQUIRED, not AUTH_MFA_ENROLLMENT_REQUIRED:
+// there is nothing left to enroll, the caller has to log in again with
+// a code.
+func TestCommunity_AdminEnrolledButSessionNotSecondFactorAuthenticatedRejected(t *testing.T) {
+	communityID := uuid.New()
+	adminUserID := uuid.New()
+	authz.Configure(&fakeQuerier{
+		communityViaOfficeRoles: map[string]string{key(communityID, adminUserID): string(authz.RoleAdmin)},
+	})
+
+	_, r := newCommunityTestAPI(t, []authz.Role{authz.RoleAdmin})
+	// User id only: a session that authenticated on a password alone.
+	ctx := authz.ContextWithUserID(context.Background(), adminUserID)
+	w := doGet(r, ctx, "/v1/communities/"+communityID.String()+"/fixture", nil)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for an admin whose SESSION never passed a second factor, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "AUTH_MFA_REQUIRED") {
+		t.Fatalf("expected AUTH_MFA_REQUIRED (log in again with a code), got body: %s", w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "AUTH_MFA_ENROLLMENT_REQUIRED") {
+		t.Fatalf("expected NOT the enrollment code: the factor already exists, so an enrollment screen would refuse this caller with a 409; got body: %s", w.Body.String())
 	}
 }
 
@@ -460,7 +510,7 @@ func TestOffice_AdminWithMFAAllowed(t *testing.T) {
 	})
 
 	_, r := newOfficeTestAPI(t, []authz.Role{authz.RoleAdmin})
-	ctx := authz.ContextWithUserID(context.Background(), adminUserID)
+	ctx := adminSessionContext(adminUserID)
 	w := doGet(r, ctx, "/v1/offices/"+officeID.String()+"/fixture", nil)
 
 	if w.Code != http.StatusOK {

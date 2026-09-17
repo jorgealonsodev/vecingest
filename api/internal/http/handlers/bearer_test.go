@@ -40,7 +40,7 @@ func TestAuthenticate_WrongSchemeRejected(t *testing.T) {
 func TestAuthenticate_ValidBearerAccepted(t *testing.T) {
 	d := newTestDeps()
 	familyID := uuid.New()
-	tok, err := d.AccessIssuer.IssueAccess(uuid.New(), familyID, false)
+	tok, err := d.AccessIssuer.IssueAccess(uuid.New(), familyID, false, false)
 	if err != nil {
 		t.Fatalf("unexpected error issuing token: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestAuthenticate_ValidBearerAccepted(t *testing.T) {
 func TestAuthenticate_RevokedSessionRejected(t *testing.T) {
 	d := newTestDeps()
 	familyID := uuid.New()
-	tok, err := d.AccessIssuer.IssueAccess(uuid.New(), familyID, false)
+	tok, err := d.AccessIssuer.IssueAccess(uuid.New(), familyID, false, false)
 	if err != nil {
 		t.Fatalf("unexpected error issuing token: %v", err)
 	}

@@ -452,7 +452,13 @@ func (d *Deps) AcceptInvitation(ctx context.Context, in *dto.AcceptInvitationInp
 		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
 
-	sessionOut, err := d.issueSession(ctx, db.New(d.DB.Write), userID, false, in.Body.DeviceName, in.Body.Platform, ip)
+	// mfaAuthenticated is false: accepting an invitation proves a
+	// password (or creates one), never a second factor. An invitation
+	// only ever grants owner or tenant (invitations.role CHECK), roles
+	// the mandatory-TOTP gate does not apply to, so this costs the new
+	// member nothing -- and if one of them is later made an admin, the
+	// gate correctly makes them log in again with a code.
+	sessionOut, err := d.issueSession(ctx, db.New(d.DB.Write), userID, false, false, in.Body.DeviceName, in.Body.Platform, ip)
 	if err != nil {
 		return nil, err
 	}

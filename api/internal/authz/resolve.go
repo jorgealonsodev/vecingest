@@ -22,15 +22,28 @@ import (
 // never partial data (design D-4: "Foreign resource → 404").
 var ErrNoMembership = errors.New("authz: no membership for this resource")
 
-// ErrMFARequired is returned when the caller's resolved role is admin or
-// admin_staff and TOTP is not yet active on their account
-// (auth-mfa-totp delta: Mandatory TOTP For Admin And Admin_staff Scope
-// Access; design D-7). It is DISTINCT from ErrNoMembership: the caller
-// genuinely has the membership, they just cannot use it until they
-// enroll -- scoped.* renders this as its own 403 code
+// ErrMFAEnrollmentRequired is returned when the caller's resolved role
+// is admin or admin_staff and NO second factor exists on their account
+// yet (auth-mfa-totp delta: Mandatory TOTP For Admin And Admin_staff
+// Scope Access; design D-7). It is DISTINCT from ErrNoMembership: the
+// caller genuinely has the membership, they just cannot use it until
+// they enroll -- scoped.* renders this as its own 403 code
 // (apperr.CodeMFAEnrollmentRequired), never the generic 404 a foreign
 // resource gets.
-var ErrMFARequired = errors.New("authz: TOTP enrollment required for this role")
+var ErrMFAEnrollmentRequired = errors.New("authz: TOTP enrollment required for this role")
+
+// ErrMFAAuthenticationRequired is returned when the caller's resolved
+// role is admin or admin_staff, a second factor DOES exist on their
+// account, and the session in hand simply never used it -- it
+// authenticated on a password alone.
+//
+// It is deliberately distinct from ErrMFAEnrollmentRequired because the
+// two demand different things of the client: enroll a factor (a flow
+// that starts at /v1/me/mfa/enroll) versus log in again carrying a code
+// (a flow that starts at /v1/auth/login). Collapsing them would send a
+// caller who already has an authenticator app to an enrollment screen
+// that refuses them with a 409.
+var ErrMFAAuthenticationRequired = errors.New("authz: second-factor authentication required for this role")
 
 // errNotConfigured is returned when a resolver runs before Configure
 // was ever called (a boot-wiring bug, not a caller error).
@@ -71,10 +84,13 @@ type Querier interface {
 	// for cross-tenant isolation purposes (invitations spec:
 	// "Cross-Tenant Isolation Proven By Test").
 	GetInvitationCommunityID(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
-	// IsUserMFAEnabled backs the mandatory-TOTP gate for admin/
-	// admin_staff roles (auth-mfa-totp delta). It always returns exactly
-	// one row (true/false), never pgx.ErrNoRows -- a caller who never
-	// enrolled resolves cleanly to false.
+	// IsUserMFAEnabled tells the mandatory-TOTP gate's two failure modes
+	// apart (auth-mfa-totp delta): no factor on the account means the
+	// caller must ENROLL, a factor that this session simply never used
+	// means they must LOG IN AGAIN with a code. It no longer decides
+	// whether the gate opens -- the session's own fact does. It always
+	// returns exactly one row (true/false), never pgx.ErrNoRows -- a
+	// caller who never enrolled resolves cleanly to false.
 	IsUserMFAEnabled(ctx context.Context, userID uuid.UUID) (bool, error)
 }
 
@@ -98,35 +114,41 @@ func isNoRows(err error) bool { return errors.Is(err, pgx.ErrNoRows) }
 // here). owner/tenant (and any role neither admin nor admin_staff) are
 // untouched -- TOTP stays optional for them.
 //
-// KNOWN INCOMPLETE -- do not read this as second-factor authentication
-// (review lineage review-0e1833930adf141a,
-// R1-mandatory-totp-gate-ineffective). IsUserMFAEnabled is a DURABLE
-// per-account flag (user_mfa.enabled_at IS NOT NULL), not per-session
-// evidence, and POST /v1/auth/login accepts no TOTP code for a
-// non-superadmin. An attacker holding only an admin's PASSWORD
-// therefore gets a session that satisfies this gate whenever the
-// victim has enrolled; where the victim has not enrolled, the ungated
-// /v1/me/mfa/enroll + /v1/me/mfa/verify pair lets that same
-// password-only session enroll a fresh factor and pass. What this gate
-// does enforce is an enrollment PRECONDITION: an admin/admin_staff
-// cannot use their scope until a second factor exists on the account.
-// Closing it requires carrying the second-factor fact on the session
-// (a login TOTP challenge or an explicit step-up, an mfa claim on the
-// access token, and this check reading that claim). That work is NOT
-// in this correction; it was deferred over its 200-line budget and is
-// documented here rather than left looking effective.
+// What it enforces is SECOND-FACTOR AUTHENTICATION OF THIS SESSION, not
+// enrollment on the account. The distinction is the whole fix for
+// R1-mandatory-totp-gate-is-only-an-enrollment-flag (review lineages
+// review-0e1833930adf141a and review-e72754dc7521b57a): the previous
+// implementation read IsUserMFAEnabled, a durable per-account flag, so
+// a session that had proved nothing but a password satisfied it as long
+// as the victim had ever enrolled -- and where the victim had not, that
+// same session could enroll a fresh factor through the ungated
+// /v1/me/mfa/enroll + /v1/me/mfa/verify pair and pass. Reading the
+// session's own fact closes both: an attacker may still enroll, but the
+// session they hold was minted with mfa=false and no endpoint can
+// promote it. Only a fresh login through the TOTP challenge produces an
+// elevated session.
+//
+// The account query survives for ONE purpose: telling the two failure
+// modes apart. An admin with no factor at all must be sent to enroll
+// (the bootstrap path, which is why the enroll endpoints stay reachable
+// from a password-only session); an admin who HAS a factor must be sent
+// back to log in with a code. Those are different screens, so they are
+// different errors.
 func requireMFAForAdminRoles(ctx context.Context, role Role, userID uuid.UUID) error {
 	if role != RoleAdmin && role != RoleAdminStaff {
 		return nil
 	}
-	enabled, err := queries.IsUserMFAEnabled(ctx, userID)
+	if MFAAuthenticatedFromContext(ctx) {
+		return nil
+	}
+	enrolled, err := queries.IsUserMFAEnabled(ctx, userID)
 	if err != nil {
 		return err
 	}
-	if !enabled {
-		return ErrMFARequired
+	if !enrolled {
+		return ErrMFAEnrollmentRequired
 	}
-	return nil
+	return ErrMFAAuthenticationRequired
 }
 
 // ResolveCommunity resolves the caller's membership for communityID via

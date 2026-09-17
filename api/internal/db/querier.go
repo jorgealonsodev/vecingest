@@ -118,6 +118,10 @@ type Querier interface {
 	// office_members: tenant column office_id (design D-5).
 	InsertOfficeMember(ctx context.Context, arg InsertOfficeMemberParams) (OfficeMember, error)
 	InsertPasswordResetToken(ctx context.Context, arg InsertPasswordResetTokenParams) (PasswordResetToken, error)
+	// mfa_at is set at INSERT time and never updated afterwards: how a
+	// session authenticated is decided once, when it is created (login) or
+	// inherited from the row it rotates from (refresh). A session cannot be
+	// promoted to second-factor authenticated later without a fresh login.
 	InsertSession(ctx context.Context, arg InsertSessionParams) (Session, error)
 	// units: tenant column community_id (design D-5).
 	InsertUnit(ctx context.Context, arg InsertUnitParams) (Unit, error)

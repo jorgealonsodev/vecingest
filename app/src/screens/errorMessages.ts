@@ -21,6 +21,8 @@ export function loginErrorMessage(error: ApiErrorBody): string {
       return "Se ha bloqueado el acceso temporalmente por demasiados intentos.";
     case ErrorCode.AuthMFAEnrollmentRequired:
       return "Esta cuenta requiere activar la verificación en dos pasos.";
+    case ErrorCode.AuthMFARequired:
+      return "Esta cuenta tiene la verificación en dos pasos activada: introduce el código de tu aplicación de autenticación.";
     default:
       return "No se ha podido iniciar sesión. Inténtalo de nuevo.";
   }

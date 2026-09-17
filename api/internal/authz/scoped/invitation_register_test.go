@@ -58,7 +58,7 @@ func TestInvitation_ResolvesCommunityMembershipViaInvitationID(t *testing.T) {
 	})
 
 	_, r := newInvitationTestAPI(t, []authz.Role{authz.RoleAdmin, authz.RoleAdminStaff})
-	ctx := authz.ContextWithUserID(context.Background(), userID)
+	ctx := adminSessionContext(userID)
 	w := doGet(r, ctx, "/v1/invitations/"+invitationID.String()+"/fixture", nil)
 
 	if w.Code != http.StatusOK {

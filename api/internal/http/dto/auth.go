@@ -19,6 +19,13 @@ type LoginRequest struct {
 	// Failure) -- optional here so the first two attempts need no
 	// client-side challenge at all.
 	TurnstileToken string `json:"turnstile_token,omitempty"`
+	// TOTPCode is REQUIRED when, and only when, the account has an
+	// ACTIVE second factor (auth-mfa-totp). Omitting it for such an
+	// account is answered with 403 AUTH_MFA_REQUIRED -- distinct from
+	// invalid credentials precisely so a client can prompt for the code
+	// instead of reporting a wrong password. Accounts with no factor
+	// (every owner and tenant who has not opted in) never send it.
+	TOTPCode string `json:"totp_code,omitempty" doc:"Required only for accounts with an active TOTP factor; a 403 AUTH_MFA_REQUIRED response means the account needs one."`
 }
 
 // LoginInput wraps the login request body.

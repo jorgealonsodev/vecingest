@@ -26,12 +26,21 @@ type systemClock struct{}
 func (systemClock) Now() time.Time { return time.Now() }
 
 // Claims are the JWT access-token claims (D-D): sub, sid (= family_id),
-// sa (is_superadmin), iat, exp and jti, carried by jwt.RegisteredClaims
-// plus the two vecingest-specific fields.
+// sa (is_superadmin), mfa (second-factor authenticated), iat, exp and
+// jti, carried by jwt.RegisteredClaims plus the three
+// vecingest-specific fields.
+//
+// MFA reports how the SESSION authenticated, never what the account is
+// capable of: it is true only for a session whose login actually
+// satisfied a TOTP challenge (auth-mfa-totp; review lineage
+// review-0e1833930adf141a). An absent claim decodes to false, which is
+// the correct and safe reading of every token minted before this field
+// existed -- none of them passed a challenge.
 type Claims struct {
 	jwt.RegisteredClaims
 	SID string `json:"sid"`
 	SA  bool   `json:"sa"`
+	MFA bool   `json:"mfa"`
 }
 
 var (
@@ -72,7 +81,12 @@ func kidFor(secret []byte) string {
 
 // IssueAccess mints a 15-minute HS256 access token for userID under
 // familyID (the session's family id, D-D's sid claim).
-func (iss Issuer) IssueAccess(userID, familyID uuid.UUID, isSuperadmin bool) (string, error) {
+//
+// mfaAuthenticated is an explicit parameter rather than a field on some
+// options struct with a zero value, so every call site has to state how
+// its session authenticated and a new one cannot acquire the elevated
+// reading by omission -- the compiler asks the question.
+func (iss Issuer) IssueAccess(userID, familyID uuid.UUID, isSuperadmin, mfaAuthenticated bool) (string, error) {
 	now := iss.clock().Now()
 	claims := Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -83,6 +97,7 @@ func (iss Issuer) IssueAccess(userID, familyID uuid.UUID, isSuperadmin bool) (st
 		},
 		SID: familyID.String(),
 		SA:  isSuperadmin,
+		MFA: mfaAuthenticated,
 	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	tok.Header["kid"] = kidFor(iss.Secret)

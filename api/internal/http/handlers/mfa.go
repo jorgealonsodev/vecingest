@@ -22,10 +22,14 @@ import (
 // everyone else, and the ONLY way an admin/admin_staff without TOTP can
 // ever satisfy the mandatory-TOTP gate (authz.resolve.go), since this
 // route is NOT under a scoped prefix and therefore never itself gated.
-// That last property is also why the gate is an enrollment
-// precondition rather than second-factor authentication: a
-// password-only session reaches this route and can enroll itself past
-// the gate. See requireMFAForAdminRoles' KNOWN INCOMPLETE note.
+//
+// It stays ungated ON PURPOSE, and that is now safe. A password-only
+// session can still reach this route and enroll a factor -- an admin
+// with no factor has no other way to acquire one -- but enrolling no
+// longer opens anything: the gate reads the SESSION's own second-factor
+// fact, and the session doing the enrolling was minted without it. The
+// caller must log in again, this time with a code
+// (requireMFAForAdminRoles; review lineage review-0e1833930adf141a).
 // Re-enrolling an ALREADY-ACTIVE factor is refused (409): silently
 // replacing a live secret would strand the caller's current
 // authenticator app with no warning.

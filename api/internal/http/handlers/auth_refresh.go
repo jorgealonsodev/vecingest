@@ -96,7 +96,11 @@ func (d *Deps) Refresh(ctx context.Context, in *dto.RefreshInput) (*dto.RefreshO
 	}
 	_ = ip
 
-	access, err := d.AccessIssuer.IssueAccess(result.UserID, result.FamilyID, user.IsSuperadmin)
+	// result.MFAAuthenticated comes from the rotated session ROW, not
+	// from the presented access token (which refresh never sees) and not
+	// from the account's enrollment state: rotation preserves how the
+	// original login authenticated, and can neither grant nor revoke it.
+	access, err := d.AccessIssuer.IssueAccess(result.UserID, result.FamilyID, user.IsSuperadmin, result.MFAAuthenticated)
 	if err != nil {
 		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}

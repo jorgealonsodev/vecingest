@@ -166,12 +166,21 @@ func resolveErrorResponse(err error) error {
 	if errors.Is(err, authz.ErrNoMembership) {
 		return apperr.New(404, apperr.CodeNotFound, "not found", nil)
 	}
-	if errors.Is(err, authz.ErrMFARequired) {
+	if errors.Is(err, authz.ErrMFAEnrollmentRequired) {
 		// Distinguishable from the generic forbidden() (design D-7;
 		// auth-mfa-totp delta: Mandatory TOTP For Admin And Admin_staff
 		// Scope Access) -- the SAME code superadmin login already uses
-		// for its own mandatory-TOTP branch.
+		// for its own mandatory-TOTP branch. The client's move is to
+		// enroll a factor.
 		return apperr.New(403, apperr.CodeMFAEnrollmentRequired, "TOTP enrollment required for this role", nil)
+	}
+	if errors.Is(err, authz.ErrMFAAuthenticationRequired) {
+		// A SEPARATE code from the one above: the factor exists, this
+		// session just never used it, so the client's move is to log in
+		// again with a code -- not to open an enrollment screen that
+		// would refuse them with a 409 (review lineage
+		// review-0e1833930adf141a).
+		return apperr.New(403, apperr.CodeMFARequired, "second-factor authentication required for this role", nil)
 	}
 	return apperr.New(500, apperr.CodeInternal, "internal error", nil)
 }

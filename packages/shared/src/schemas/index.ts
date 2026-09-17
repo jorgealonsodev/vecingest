@@ -59,6 +59,7 @@ const LoginRequest = z.object({
   email: z.string().email(),
   password: z.string().min(12),
   platform: z.enum(["ios", "android", "web"]),
+  totp_code: z.string().optional(),
   turnstile_token: z.string().optional(),
 });
 const RefreshRequest = z

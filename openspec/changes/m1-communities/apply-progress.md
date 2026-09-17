@@ -828,3 +828,105 @@ Three separable defects, three deliberate decisions:
    but a deployment carrying pending invitation jobs must purge them.
 4. C2.1's test is a wiring assertion, not a replication-lag simulation (see
    above). A genuine lag test remains open work.
+
+## Correction round 3 — closing `R1-mandatory-totp-gate-is-only-an-enrollment-flag`
+
+**Status**: the one finding correction round 2 deliberately left open is CLOSED.
+Its own work unit, its own design, on `feature/m1-communities-pr5-turnstile`.
+
+**Branch**: `feature/m1-communities-pr5-turnstile`. Not merged, not pushed —
+delivery is the user's decision.
+
+### The defect
+
+`requireMFAForAdminRoles` (`api/internal/authz/resolve.go`) read
+`IsUserMFAEnabled`, a DURABLE PER-ACCOUNT flag, so it could not enforce a
+per-session requirement. Its own KNOWN INCOMPLETE comment named both bypasses:
+a password-only session satisfied the gate whenever the victim had ever
+enrolled, and where the victim had not, the ungated `/v1/me/mfa/enroll` +
+`/v1/me/mfa/verify` pair let that same session enroll a fresh factor and pass.
+PRD §10.1 requires 2FA for admins, so this was a milestone gate failure.
+
+### The fix: the gate moved from an account flag to a per-session fact
+
+Both bypasses close at once. An attacker holding only a password can still
+enroll a factor, but the session they already hold keeps `mfa=false`, so it buys
+them nothing — while the legitimate admin keeps the bootstrap path they need in
+order to enroll at all.
+
+| Piece | Where |
+|---|---|
+| Migration `00010_sessions_mfa.sql` — `sessions.mfa_at timestamptz`, nullable, NO default | `api/migrations/schema/` |
+| `Claims.MFA` + `IssueAccess(..., mfaAuthenticated bool)` | `api/internal/domain/auth/token/access.go` |
+| Login TOTP challenge through the existing `mfa.ThrottledVerify`/`mfa.VerifyTOTP` path | `api/internal/http/handlers/auth_login.go` |
+| `issueSession` stamps the fact on the row AND the token | `api/internal/http/handlers/auth_login.go` |
+| Superadmin login passes `true` (it cannot reach that line without a code) | `api/internal/http/handlers/auth_superadmin.go` |
+| Accept-invitation passes `false` (it proves a password, never a factor) | `api/internal/http/handlers/invitations.go` |
+| Rotation carries `mfa_at` forward and reports it | `api/internal/domain/auth/session/rotate.go` |
+| Refresh reissues with the preserved fact | `api/internal/http/handlers/auth_refresh.go` |
+| Bearer middleware publishes the verified claim into the request context | `api/internal/http/api/api.go` |
+| `ContextWithMFAAuthenticated` / `MFAAuthenticatedFromContext` (fail-closed) | `api/internal/authz/context.go` |
+| The gate itself; `ErrMFAEnrollmentRequired` vs `ErrMFAAuthenticationRequired` | `api/internal/authz/resolve.go` |
+| `AUTH_MFA_REQUIRED` (403) rendered distinctly from `AUTH_MFA_ENROLLMENT_REQUIRED` | `api/internal/authz/scoped/register.go`, `api/internal/http/apperr/apperr.go` |
+| `LoginRequest.totp_code` (+ regenerated openapi/TS/Zod) | `api/internal/http/dto/auth.go` |
+
+The account query survives for exactly one purpose: telling the two failure
+modes apart. No factor at all → enroll (403 `AUTH_MFA_ENROLLMENT_REQUIRED`).
+Factor present, session never used it → log in again with a code (403
+`AUTH_MFA_REQUIRED`). Two different client flows; a client that cannot tell them
+apart sends a user with an authenticator app to an enrollment screen that
+refuses them with a 409.
+
+### TDD Cycle Evidence
+
+| # | Test | RED (observed) | GREEN |
+|---|---|---|---|
+| 1 | `TestMFAGate_AdminWithEnrolledFactorRejectedWithoutTOTPCode` | Natural, against the unfixed code: `expected 403: an account with an ACTIVE second factor must not authenticate on a password alone, got 200 body=...access_token:eyJ...` | passes |
+| 2 | `TestMFAGate_AdminLoginWithValidCodeReachesAdminScopedRoute` | Natural: `expected 200: a valid TOTP code must complete the login, got 422 ... location:body.totp_code message:unexpected property` | passes |
+| 3 | `TestMFAGate_PasswordOnlySessionCannotEnrollItsWayPastTheGate` (the bypass-2 regression) | Natural: `expected 403: a session that authenticated on a PASSWORD ALONE must not reach an admin-scoped route by enrolling a second factor after the fact, got 200 body=...name:Bypass Community` — the unfixed code CREATED the community | passes |
+| 4 | `TestMFAGate_RefreshPreservesSecondFactorFact` | Natural at the login leg (422); then break-induced on the refresh leg by setting `MfaAt: pgtype.Timestamptz{}` in `Rotator.Rotate`: `expected a REFRESHED second-factor-authenticated session to still reach an admin-scoped route, got 403 body=map[code:AUTH_MFA_REQUIRED ...]` | passes |
+| 5 | `TestMFAGate_OwnerWithNoFactorIsUnaffected` | Regression guard — green before AND after by design. Gut-checked by breaking the no-factor branch of `challengeTOTP` so every account is challenged: `expected 200: an owner with no second factor must still log in on a password alone, got 403 body=map[code:AUTH_MFA_REQUIRED ...]` | passes |
+| 6 | `TestSchemaSet_SessionsMFAUpgradePathLeavesExistingSessionsUnelevated` | Break-induced by changing the migration to `ADD COLUMN mfa_at timestamptz DEFAULT now()`: `expected the pre-upgrade session to read as NOT second-factor authenticated (mfa_at IS NULL), got 2026-09-17 17:05:29 ... the migration just elevated every session that existed before it` | passes |
+| 7 | `TestCommunity_AdminEnrolledButSessionNotSecondFactorAuthenticatedRejected` (resolver-level twin of #3) | The pre-fix gate returned nil for this exact input (account flag true), so it could not have failed; it fails against a gate that ignores the session fact | passes |
+| 8 | `TestIssueAccess_CarriesMFAClaimBothWays`, `TestVerifyAccess_TokenWithoutMFAClaimDecodesAsNotAuthenticated` | The claim did not exist | passes |
+
+### Existing tests corrected, never loosened
+
+- `TestMFA_AdminWithoutTOTPBlockedFromAdminScopedRoute` asserted bypass 2 as an
+  EXPECTED RESULT ("after enrolling, the identical caller succeeds"). Its tail
+  now asserts that the pre-enrollment session stays blocked with the changed
+  code, and that a real login carrying a real code opens the route.
+- `mintAccessToken` (the shared harness) now DERIVES the minted session's
+  second-factor fact from the account's own factor — exactly what login now
+  produces for that account — instead of taking a parameter a caller could get
+  wrong. Every `seedOfficeWithAdmin` admin keeps working because Phase 7 already
+  seeds them an active factor. The gate's own tests deliberately do not use this
+  helper: they drive the real login endpoint, because a helper that decided the
+  fact under test would prove nothing.
+- Four `internal/authz/scoped` positive-path admin tests now build their context
+  with `adminSessionContext` (user id + second-factor fact), the shape a real
+  admin request arrives with. The gate was not weakened to accommodate them.
+
+### Verification
+
+- `cd api && go test -race ./...` → **394 passed, 0 failed** in 39 packages (385 before; +9).
+- `gofumpt -l .` → clean. `golangci-lint run ./...` → **0 issues**. `make lint-scope` → OK.
+- `make gen` → ran; second run changed no generated artifact (sha256-compared).
+- `pnpm --filter app test` → 40 passed / 10 suites.
+
+### Deployment
+
+**No new required configuration variable.** The code travels in the login body,
+not the environment, so nothing here can stop the stack from booting. What it
+does bring is migration `00010` and a deliberate session cut for admins —
+documented in `docs/pendientes-despliegue.md` ("Migración 00010 y el 2FA
+obligatorio de admin — SIN variable nueva"), including the fact that the app has
+no TOTP input field yet.
+
+### Size
+
+~993 added + 79 deleted ≈ 1072 changed lines, of which ~460 are the two new test
+files and much of the rest is this codebase's dense comment style. The session
+explicitly waived the line budget for this work ("No line budget: correctness and
+honest tests come first"). Nothing was compressed, and no test was dropped, to
+approach a number: a `size:exception` is the honest classification.

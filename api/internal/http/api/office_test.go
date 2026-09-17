@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/jorgealonsodev/vecingest/internal/db"
 	"github.com/jorgealonsodev/vecingest/internal/domain/auth/token"
@@ -17,6 +18,22 @@ import (
 // revoked one) and mints a matching access token directly via the
 // Issuer -- bypassing the full (TOTP-gated, for superadmin) login flow,
 // exactly as bearer_test.go already does for its own unit tests.
+//
+// The minted session's SECOND-FACTOR fact is DERIVED from the account,
+// never passed in: a user with an active TOTP factor gets an
+// mfa-authenticated session, a user without one gets a password-only
+// session. That is precisely what POST /v1/auth/login now produces for
+// each of those two accounts (auth-mfa-totp; review lineage
+// review-0e1833930adf141a), so this helper keeps standing in for a real
+// login instead of quietly minting an elevation login would have
+// refused.
+//
+// Deriving it is deliberate, and so is its limit. It means no test can
+// accidentally acquire an elevated session by forgetting a parameter --
+// but it also means this helper must never be used to test the gate
+// itself: mfa_session_gate_test.go drives the real login endpoint,
+// because a helper that decides the fact under test proves nothing
+// about how that fact is established.
 func mintAccessToken(t *testing.T, deps *handlers.Deps, handlesDB db.Handles, userID uuid.UUID, isSuperadmin bool) string {
 	t.Helper()
 	familyID := uuid.New()
@@ -25,6 +42,10 @@ func mintAccessToken(t *testing.T, deps *handlers.Deps, handlesDB db.Handles, us
 		t.Fatalf("generate refresh: %v", err)
 	}
 	q := db.New(handlesDB.Write)
+	mfaAuthenticated, err := q.IsUserMFAEnabled(t.Context(), userID)
+	if err != nil {
+		t.Fatalf("read user_mfa enrollment: %v", err)
+	}
 	if _, err := q.InsertSession(t.Context(), db.InsertSessionParams{
 		ID:               uuid.New(),
 		UserID:           userID,
@@ -32,10 +53,11 @@ func mintAccessToken(t *testing.T, deps *handlers.Deps, handlesDB db.Handles, us
 		FamilyID:         familyID,
 		Platform:         "web",
 		ExpiresAt:        time.Now().Add(time.Hour),
+		MfaAt:            pgtype.Timestamptz{Time: time.Now(), Valid: mfaAuthenticated},
 	}); err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
-	access, err := deps.AccessIssuer.IssueAccess(userID, familyID, isSuperadmin)
+	access, err := deps.AccessIssuer.IssueAccess(userID, familyID, isSuperadmin, mfaAuthenticated)
 	if err != nil {
 		t.Fatalf("issue access: %v", err)
 	}

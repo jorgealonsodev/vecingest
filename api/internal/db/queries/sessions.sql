@@ -1,6 +1,10 @@
 -- name: InsertSession :one
-INSERT INTO sessions (id, user_id, refresh_token_hash, family_id, device_name, platform, ip, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+-- mfa_at is set at INSERT time and never updated afterwards: how a
+-- session authenticated is decided once, when it is created (login) or
+-- inherited from the row it rotates from (refresh). A session cannot be
+-- promoted to second-factor authenticated later without a fresh login.
+INSERT INTO sessions (id, user_id, refresh_token_hash, family_id, device_name, platform, ip, expires_at, mfa_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING *;
 
 -- name: GetSessionByRefreshTokenHash :one

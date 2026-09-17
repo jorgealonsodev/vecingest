@@ -437,6 +437,46 @@ el código en claro y ahora no se pueden descifrar. En este hito la cola está
 vacía, así que no afecta; un despliegue con trabajos de invitación pendientes
 tendría que purgarlos antes de actualizar.
 
+### Migración 00010 y el 2FA obligatorio de admin — SIN variable nueva
+
+**No hace falta ninguna variable de configuración nueva.** El código TOTP viaja
+en el cuerpo de `POST /v1/auth/login` (`totp_code`), no en el entorno, así que
+este cambio no puede impedir el arranque como hizo `TURNSTILE_SECRET`.
+
+Lo que sí trae es una migración y un corte de sesión deliberado:
+
+1. **Migración `00010_sessions_mfa.sql`** añade `sessions.mfa_at timestamptz`
+   (anulable, sin valor por defecto). Es aditiva y se aplica sobre la base de
+   datos ya desplegada; `internal/platform/migrate`
+   (`TestSchemaSet_SessionsMFAUpgradePathLeavesExistingSessionsUnelevated`)
+   migra hasta la 00009, crea una sesión como la creaba el código anterior,
+   aplica la 00010 encima y comprueba que esa fila queda con `mfa_at` NULL. No
+   es una corrección que solo funcione sobre una base de datos limpia.
+
+2. **Toda sesión existente pasa a contar como NO autenticada con segundo
+   factor**, que es exactamente lo que es: ninguna superó nunca un reto TOTP.
+   Para `owner` y `tenant` no cambia nada. Para `admin` y `admin_staff`:
+
+   - Si la cuenta **tiene** TOTP activo, sus rutas con ámbito responden 403
+     `AUTH_MFA_REQUIRED` hasta que vuelva a iniciar sesión **con el código**.
+   - Si la cuenta **no tiene** TOTP, sigue respondiendo 403
+     `AUTH_MFA_ENROLLMENT_REQUIRED` como hasta ahora, y el camino de alta
+     (`/v1/me/mfa/enroll` + `/verify`) sigue abierto desde una sesión con solo
+     contraseña. Lo que ya no ocurre es que darse de alta desde esa sesión
+     abra la puerta: hay que volver a iniciar sesión con un código.
+
+   El superadmin no se ve afectado: `/v1/auth/superadmin/login` ya exigía TOTP,
+   así que sus sesiones nuevas nacen autenticadas con segundo factor.
+
+3. **La app todavía no tiene campo para el código.** `LoginScreen` envía
+   `email`/`password`/`platform` y ya traduce el nuevo código de error
+   ("introduce el código de tu aplicación de autenticación"), pero **no hay
+   todavía un input de TOTP**: un administrador con segundo factor activo no
+   puede completar el login desde la app hasta que se añada. Hoy no bloquea
+   nada porque el único 2FA activo en producción es el del superadmin, que
+   entra por su propia ruta; hay que añadirlo antes de dar de alta al primer
+   administrador de oficina con TOTP.
+
 ## Lo que queda de la Fase 14 (Checkpoint B) y quién tiene que hacerlo
 
 Estado a 2026-09-08. El bloqueo de infraestructura de la Fase 14

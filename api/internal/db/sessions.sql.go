@@ -15,7 +15,7 @@ import (
 )
 
 const getSessionByRefreshTokenHash = `-- name: GetSessionByRefreshTokenHash :one
-SELECT id, user_id, refresh_token_hash, family_id, device_name, platform, ip, last_used_at, expires_at, revoked_at, created_at, updated_at FROM sessions WHERE refresh_token_hash = $1
+SELECT id, user_id, refresh_token_hash, family_id, device_name, platform, ip, last_used_at, expires_at, revoked_at, created_at, updated_at, mfa_at FROM sessions WHERE refresh_token_hash = $1
 `
 
 func (q *Queries) GetSessionByRefreshTokenHash(ctx context.Context, refreshTokenHash []byte) (Session, error) {
@@ -34,27 +34,33 @@ func (q *Queries) GetSessionByRefreshTokenHash(ctx context.Context, refreshToken
 		&i.RevokedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.MfaAt,
 	)
 	return i, err
 }
 
 const insertSession = `-- name: InsertSession :one
-INSERT INTO sessions (id, user_id, refresh_token_hash, family_id, device_name, platform, ip, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, user_id, refresh_token_hash, family_id, device_name, platform, ip, last_used_at, expires_at, revoked_at, created_at, updated_at
+INSERT INTO sessions (id, user_id, refresh_token_hash, family_id, device_name, platform, ip, expires_at, mfa_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, user_id, refresh_token_hash, family_id, device_name, platform, ip, last_used_at, expires_at, revoked_at, created_at, updated_at, mfa_at
 `
 
 type InsertSessionParams struct {
-	ID               uuid.UUID   `json:"id"`
-	UserID           uuid.UUID   `json:"user_id"`
-	RefreshTokenHash []byte      `json:"refresh_token_hash"`
-	FamilyID         uuid.UUID   `json:"family_id"`
-	DeviceName       pgtype.Text `json:"device_name"`
-	Platform         string      `json:"platform"`
-	Ip               *netip.Addr `json:"ip"`
-	ExpiresAt        time.Time   `json:"expires_at"`
+	ID               uuid.UUID          `json:"id"`
+	UserID           uuid.UUID          `json:"user_id"`
+	RefreshTokenHash []byte             `json:"refresh_token_hash"`
+	FamilyID         uuid.UUID          `json:"family_id"`
+	DeviceName       pgtype.Text        `json:"device_name"`
+	Platform         string             `json:"platform"`
+	Ip               *netip.Addr        `json:"ip"`
+	ExpiresAt        time.Time          `json:"expires_at"`
+	MfaAt            pgtype.Timestamptz `json:"mfa_at"`
 }
 
+// mfa_at is set at INSERT time and never updated afterwards: how a
+// session authenticated is decided once, when it is created (login) or
+// inherited from the row it rotates from (refresh). A session cannot be
+// promoted to second-factor authenticated later without a fresh login.
 func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (Session, error) {
 	row := q.db.QueryRow(ctx, insertSession,
 		arg.ID,
@@ -65,6 +71,7 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (S
 		arg.Platform,
 		arg.Ip,
 		arg.ExpiresAt,
+		arg.MfaAt,
 	)
 	var i Session
 	err := row.Scan(
@@ -80,12 +87,13 @@ func (q *Queries) InsertSession(ctx context.Context, arg InsertSessionParams) (S
 		&i.RevokedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.MfaAt,
 	)
 	return i, err
 }
 
 const listLiveSessionsByFamilyID = `-- name: ListLiveSessionsByFamilyID :many
-SELECT id, user_id, refresh_token_hash, family_id, device_name, platform, ip, last_used_at, expires_at, revoked_at, created_at, updated_at FROM sessions WHERE family_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC
+SELECT id, user_id, refresh_token_hash, family_id, device_name, platform, ip, last_used_at, expires_at, revoked_at, created_at, updated_at, mfa_at FROM sessions WHERE family_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC
 `
 
 func (q *Queries) ListLiveSessionsByFamilyID(ctx context.Context, familyID uuid.UUID) ([]Session, error) {
@@ -110,6 +118,7 @@ func (q *Queries) ListLiveSessionsByFamilyID(ctx context.Context, familyID uuid.
 			&i.RevokedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.MfaAt,
 		); err != nil {
 			return nil, err
 		}

@@ -190,9 +190,19 @@ func TestMFA_ReEnrollAlreadyActiveConflicts(t *testing.T) {
 // auth-mfa-totp delta: Mandatory TOTP For Admin And Admin_staff Scope
 // Access, end-to-end through a REAL admin-scoped route (not just the
 // authz-package fixture used by internal/authz/scoped's own tests): an
-// admin with NO TOTP is rejected creating a community; after enrolling
-// and activating TOTP through THIS phase's own endpoints, the identical
-// caller succeeds.
+// admin with NO TOTP is rejected creating a community, and an admin who
+// has one and has USED it succeeds.
+//
+// The middle of this test changed when the gate stopped being an
+// enrollment flag (review lineage review-0e1833930adf141a). It used to
+// assert that the identical password-only caller succeeded as soon as it
+// had enrolled itself -- which was bypass 2 written down as an expected
+// result. Enrolling now changes only WHICH rejection that session gets
+// (AUTH_MFA_REQUIRED instead of AUTH_MFA_ENROLLMENT_REQUIRED), and only
+// a fresh login carrying a code opens the route.
+// TestMFAGate_PasswordOnlySessionCannotEnrollItsWayPastTheGate is the
+// dedicated regression for that bypass; this test keeps its own subject,
+// which is the enrollment precondition and the normal admin path.
 func TestMFA_AdminWithoutTOTPBlockedFromAdminScopedRoute(t *testing.T) {
 	srv, deps, handlesDB := newTestServer(t)
 	client := newClient(srv, nil)
@@ -234,11 +244,30 @@ func TestMFA_AdminWithoutTOTPBlockedFromAdminScopedRoute(t *testing.T) {
 		t.Fatalf("expected 200 activating TOTP, got %d body=%v", verifyResp.StatusCode, verifyBody)
 	}
 
+	// The precondition is satisfied, the session's own authentication is
+	// not: this caller still holds the token it got before any factor
+	// existed.
+	resp, body = doJSON(t, client, http.MethodPost, srv.URL+"/v1/communities", map[string]any{
+		"office_id": office.ID.String(), "name": "Still Blocked Community",
+	}, auth)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected the pre-enrollment session to stay blocked after enrolling, got %d body=%v", resp.StatusCode, body)
+	}
+	if body["code"] != "AUTH_MFA_REQUIRED" {
+		t.Fatalf("expected the rejection to change to AUTH_MFA_REQUIRED once a factor exists, got %v", body)
+	}
+
+	// "An admin with active TOTP is processed normally": a real login
+	// carrying a real code.
+	resp, body = login(t, client, srv.URL, "mfa-gate-admin@example.com", validTOTPCode(t, secret), "web")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected the admin to log in with a valid TOTP code, got %d body=%v", resp.StatusCode, body)
+	}
 	resp, body = doJSON(t, client, http.MethodPost, srv.URL+"/v1/communities", map[string]any{
 		"office_id": office.ID.String(), "name": "Allowed Community",
-	}, auth)
+	}, bearer(accessTokenFrom(t, body)))
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		t.Fatalf("expected success once TOTP is active, got %d body=%v", resp.StatusCode, body)
+		t.Fatalf("expected success once TOTP is active AND the session used it, got %d body=%v", resp.StatusCode, body)
 	}
 }
 
