@@ -59,24 +59,9 @@ func riverDown(ctx context.Context, db *sql.DB) error {
 }
 
 // grantRiverTables grants app_rw full CRUD on every table River's
-// migration set creates, PLUS USAGE on every sequence backing one of
-// those tables' identity/serial columns (river_job.id and friends).
-// River tables are explicitly NOT append-only (D-L); invariant I1's
-// assertion excludes them entirely because it only scans audit_log's
-// own partition tree.
-//
-// The sequence grant is a fix for a gap invisible until M1: M0/PR1-3
-// never called Client.Insert/InsertMany for any job kind (queue_test.go's
-// own "river_job must stay empty" assertion), so a missing sequence
-// grant never surfaced. Table-level GRANT INSERT does NOT implicitly
-// grant USAGE on a table's own backing sequence in PostgreSQL -- they
-// are separate privilege objects -- so the first real producer
-// (invitations: task 6.17, river.InsertTx) failed with "permission
-// denied for sequence river_job_id_seq" until this was added. This is a
-// bugfix to an already-embedded Go migration function that has never
-// run against a real deployment (Checkpoint A has not shipped yet), not
-// a new migration: the pinned RiverTargetVersion and this function's
-// migration version number (4) are unchanged.
+// migration set creates. River tables are explicitly NOT append-only
+// (D-L); invariant I1's assertion excludes them entirely because it only
+// scans audit_log's own partition tree.
 //
 // The grant is discovered by name pattern (river_*) rather than a
 // hardcoded table list. The design's own D-L table list ("river_job,
@@ -100,15 +85,6 @@ BEGIN
     WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname LIKE 'river\_%' ESCAPE '\'
   LOOP
     EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON %I TO app_rw', r.relname);
-  END LOOP;
-
-  FOR r IN
-    SELECT c.relname
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'public' AND c.relkind = 'S' AND c.relname LIKE 'river\_%' ESCAPE '\'
-  LOOP
-    EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE %I TO app_rw', r.relname);
   END LOOP;
 END;
 $$;

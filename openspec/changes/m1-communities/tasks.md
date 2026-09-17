@@ -151,7 +151,7 @@ through PR1/PR2.
 - [x] 5.6 GREEN: wrap the non-dry-run import in one transaction validating every row before any `INSERT`
 - [x] 5.7 RED: an exported CSV escapes a leading `=`/`+`/`-`/`@` cell; an imported row with a formula-prefixed owner-name is neutralized before storage (Formula-Injection Hardening, both scenarios)
 - [x] 5.8 GREEN: implement cell-prefix escaping shared by template/export and import ingestion
-- [x] 5.9 RED: an uploaded filename `../../etc/passwd.csv` is rejected or sanitized before any storage key is derived (Path-Traversal-Safe Filenames)
+- [x] 5.9 RED: an uploaded filename "../../etc/passwd.csv" (a test payload, not a path this task edits) is rejected or sanitized before any storage key is derived (Path-Traversal-Safe Filenames)
 - [x] 5.10 GREEN: implement filename sanitization; stream the upload body, never write under a client-supplied name
 - [x] 5.11 Run `make gen` if the import DTOs changed; commit regenerated artifacts
 

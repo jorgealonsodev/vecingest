@@ -48,5 +48,6 @@ func GoMigrations() []*goose.Migration {
 	return []*goose.Migration{
 		assertInvariantsMigration(),
 		riverMigration(),
+		riverSequenceGrantsMigration(),
 	}
 }
