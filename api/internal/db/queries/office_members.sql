@@ -17,3 +17,10 @@ SELECT office_id, role FROM office_members WHERE user_id = $1 AND deleted_at IS 
 
 -- name: ListOfficeMembers :many
 SELECT * FROM office_members WHERE office_id = $1 AND deleted_at IS NULL ORDER BY created_at ASC;
+
+-- CountOfficeMembersByOfficeID backs community-management: Community
+-- Detail Excludes Cross-Milestone Aggregates -- the community detail
+-- response's office-member count is a plain count of the owning
+-- office's own rows, never a reserve-fund/quorum/balance aggregate.
+-- name: CountOfficeMembersByOfficeID :one
+SELECT count(*) FROM office_members WHERE office_id = $1 AND deleted_at IS NULL;

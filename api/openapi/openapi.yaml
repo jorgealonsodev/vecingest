@@ -31,6 +31,122 @@ components:
       required:
         - csrf_token
       type: object
+    CommunityDetailResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/CommunityDetailResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        address:
+          type: string
+        annual_budget:
+          type: string
+        cif:
+          type: string
+        city:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        dpa_signed_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        last_ordinary_meeting_at:
+          format: date-time
+          type: string
+        name:
+          type: string
+        office_id:
+          type: string
+        office_member_count:
+          format: int64
+          type: integer
+        parent_community_id:
+          type: string
+        postal_code:
+          type: string
+        province:
+          type: string
+        reserve_fund:
+          type: string
+        secretary_is_office:
+          type: boolean
+        unit_count:
+          format: int64
+          type: integer
+        updated_at:
+          format: date-time
+          type: string
+      required:
+        - unit_count
+        - office_member_count
+        - id
+        - office_id
+        - name
+        - secretary_is_office
+        - created_at
+        - updated_at
+      type: object
+    CommunityResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/CommunityResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        address:
+          type: string
+        annual_budget:
+          type: string
+        cif:
+          type: string
+        city:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        dpa_signed_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        last_ordinary_meeting_at:
+          format: date-time
+          type: string
+        name:
+          type: string
+        office_id:
+          type: string
+        parent_community_id:
+          type: string
+        postal_code:
+          type: string
+        province:
+          type: string
+        reserve_fund:
+          type: string
+        secretary_is_office:
+          type: boolean
+        updated_at:
+          format: date-time
+          type: string
+      required:
+        - id
+        - office_id
+        - name
+        - secretary_is_office
+        - created_at
+        - updated_at
+      type: object
     Cookie:
       additionalProperties: false
       properties:
@@ -84,6 +200,50 @@ components:
         - Partitioned
         - Raw
         - Unparsed
+      type: object
+    CreateCommunityRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/CreateCommunityRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        address:
+          maxLength: 255
+          type: string
+        annual_budget:
+          type: string
+        cif:
+          maxLength: 32
+          type: string
+        city:
+          maxLength: 128
+          type: string
+        name:
+          maxLength: 255
+          minLength: 1
+          type: string
+        office_id:
+          type: string
+        parent_community_id:
+          format: uuid
+          type: string
+        postal_code:
+          maxLength: 16
+          type: string
+        province:
+          maxLength: 128
+          type: string
+        reserve_fund:
+          type: string
+        secretary_is_office:
+          type: boolean
+      required:
+        - office_id
+        - name
       type: object
     CreateOfficeRequest:
       additionalProperties: false
@@ -217,6 +377,25 @@ components:
           type: boolean
       required:
         - accepted
+      type: object
+    ListCommunitiesResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/ListCommunitiesResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        communities:
+          items:
+            $ref: "#/components/schemas/CommunityResponse"
+          type:
+            - array
+            - "null"
+      required:
+        - communities
       type: object
     ListOfficeMembersResponse:
       additionalProperties: false
@@ -547,6 +726,45 @@ components:
         - password
         - platform
       type: object
+    UpdateCommunityRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/UpdateCommunityRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        address:
+          maxLength: 255
+          type: string
+        annual_budget:
+          type: string
+        cif:
+          maxLength: 32
+          type: string
+        city:
+          maxLength: 128
+          type: string
+        name:
+          maxLength: 255
+          minLength: 1
+          type: string
+        parent_community_id:
+          format: uuid
+          type: string
+        postal_code:
+          maxLength: 16
+          type: string
+        province:
+          maxLength: 128
+          type: string
+        reserve_fund:
+          type: string
+        secretary_is_office:
+          type: boolean
+      type: object
 info:
   title: Vecingest API
   version: 0.1.0
@@ -790,6 +1008,106 @@ paths:
       summary: TOTP-gated superadmin login
       tags:
         - auth
+  /v1/communities:
+    get:
+      operationId: listMyCommunities
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListCommunitiesResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: List communities reachable through the caller's own membership
+      tags:
+        - communities
+    post:
+      operationId: createCommunity
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCommunityRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommunityResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Create a community in the caller's own office
+      tags:
+        - communities
+  /v1/communities/{id}:
+    get:
+      operationId: getCommunity
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: uuid
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommunityDetailResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Get a community the caller has a membership tied to
+      tags:
+        - communities
+    patch:
+      operationId: updateCommunity
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: uuid
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCommunityRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommunityResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Update a community (admin/admin_staff only)
+      tags:
+        - communities
   /v1/health/live:
     get:
       operationId: healthLive

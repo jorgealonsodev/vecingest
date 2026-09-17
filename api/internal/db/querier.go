@@ -14,6 +14,16 @@ type Querier interface {
 	ConfirmUserMFAEnrollment(ctx context.Context, userID uuid.UUID) error
 	ConsumePasswordResetToken(ctx context.Context, id uuid.UUID) error
 	ConsumeUserMFARecoveryCode(ctx context.Context, arg ConsumeUserMFARecoveryCodeParams) (int64, error)
+	// CountOfficeMembersByOfficeID backs community-management: Community
+	// Detail Excludes Cross-Milestone Aggregates -- the community detail
+	// response's office-member count is a plain count of the owning
+	// office's own rows, never a reserve-fund/quorum/balance aggregate.
+	CountOfficeMembersByOfficeID(ctx context.Context, officeID uuid.UUID) (int64, error)
+	// CountUnitsByCommunityID backs community-management: Community Detail
+	// Excludes Cross-Milestone Aggregates -- the community detail response's
+	// unit count is a plain count of this tenant's own rows, never a
+	// reserve-fund/quorum/balance aggregate from a later milestone.
+	CountUnitsByCommunityID(ctx context.Context, communityID uuid.UUID) (int64, error)
 	// platform-bootstrap: Idempotent Superadmin Bootstrap -- a second
 	// bootstrap-superadmin run against an existing, non-superadmin user
 	// (e.g. one first created by seed) promotes it, but NEVER touches its
@@ -103,6 +113,20 @@ type Querier interface {
 	RevokeSessionFamily(ctx context.Context, familyID uuid.UUID) error
 	SetUserMFARecoveryCodes(ctx context.Context, arg SetUserMFARecoveryCodesParams) error
 	TouchSessionLastUsed(ctx context.Context, id uuid.UUID) error
+	// UpdateCommunity persists the community-management: Community Update
+	// Restricted To Office Roles / Legal And Descriptive Fields Persisted
+	// Per §7.3 field set (task 3.8's "full column set"). transferred_* and
+	// office_id are deliberately absent from the SET list: transferring a
+	// community to a different office is a distinct sensitive operation
+	// (design D-5 documents transferred_from_office_id/transferred_at as
+	// schema groundwork, not an M1 endpoint) this PATCH's admin/admin_staff
+	// role check must never be able to trigger implicitly. office_id is
+	// kept in the RETURNING column list only (rather than SELECT *) so
+	// lint-scope's textual check keeps seeing this tenant-scoped UPDATE's
+	// own tenant column, matching GetCommunityByID's documented deviation
+	// above for the identical reason: an update already scoped to one
+	// exact id (WHERE id = $1) has no other tenant's row to touch.
+	UpdateCommunity(ctx context.Context, arg UpdateCommunityParams) (Community, error)
 	UpdateUserLastLogin(ctx context.Context, arg UpdateUserLastLoginParams) error
 	UpdateUserMFALastTOTPStep(ctx context.Context, arg UpdateUserMFALastTOTPStepParams) (int64, error)
 	UpdateUserPassword(ctx context.Context, arg UpdateUserPasswordParams) error

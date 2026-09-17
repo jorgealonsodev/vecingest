@@ -113,17 +113,17 @@ through PR1/PR2.
 
 ## Phase 3: Community Management (WU-2, PR2 — TDD)
 
-- [ ] 3.1 RED: admin creates a community with `office_id` set from the resolved membership; `admin_staff` gets 403 (Community Creation Restricted To Admin, Scoped To Office, both scenarios)
-- [ ] 3.2 GREEN: implement `scoped.Office` handler for `POST /v1/communities`, roles `[admin]`
-- [ ] 3.3 RED: `GET /v1/communities` returns only communities reachable via office or unit membership; `GET /v1/communities/:id` returns 403/404 with no membership tie (Community Read And List Scoped By Membership, both scenarios)
-- [ ] 3.4 GREEN: implement `scoped.Self` for the list, `scoped.Community` for the detail route
-- [ ] 3.5 RED: `PATCH /v1/communities/:id` permitted for `admin`/`admin_staff`, rejected for `owner`/`tenant` (Community Update Restricted To Office Roles)
-- [ ] 3.6 GREEN: implement `scoped.Community` for `PATCH /v1/communities/:id`, roles `[admin, admin_staff]`
-- [ ] 3.7 RED: community persists the full §7.3 column set including nullable `parent_community_id`, both the null-parent and linked-parent cases (Legal And Descriptive Fields Persisted Per §7.3, both scenarios)
-- [ ] 3.8 GREEN: extend the community DTO and sqlc insert/update queries with the full column set
-- [ ] 3.9 RED: `GET /v1/communities/:id` response contains no reserve-fund-compliance/quorum/balance fields (Community Detail Excludes Cross-Milestone Aggregates)
-- [ ] 3.10 GREEN: constrain the detail DTO to M1-only fields plus unit/office-member counts
-- [ ] 3.11 Run `make gen`; commit regenerated artifacts for the community DTOs
+- [x] 3.1 RED: admin creates a community with `office_id` set from the resolved membership; `admin_staff` gets 403 (Community Creation Restricted To Admin, Scoped To Office, both scenarios)
+- [x] 3.2 GREEN: implement `scoped.Office` handler for `POST /v1/communities`, roles `[admin]`
+- [x] 3.3 RED: `GET /v1/communities` returns only communities reachable via office or unit membership; `GET /v1/communities/:id` returns 403/404 with no membership tie (Community Read And List Scoped By Membership, both scenarios)
+- [x] 3.4 GREEN: implement `scoped.Self` for the list, `scoped.Community` for the detail route
+- [x] 3.5 RED: `PATCH /v1/communities/:id` permitted for `admin`/`admin_staff`, rejected for `owner`/`tenant` (Community Update Restricted To Office Roles)
+- [x] 3.6 GREEN: implement `scoped.Community` for `PATCH /v1/communities/:id`, roles `[admin, admin_staff]`
+- [x] 3.7 RED: community persists the full §7.3 column set including nullable `parent_community_id`, both the null-parent and linked-parent cases (Legal And Descriptive Fields Persisted Per §7.3, both scenarios)
+- [x] 3.8 GREEN: extend the community DTO and sqlc insert/update queries with the full column set
+- [x] 3.9 RED: `GET /v1/communities/:id` response contains no reserve-fund-compliance/quorum/balance fields (Community Detail Excludes Cross-Milestone Aggregates)
+- [x] 3.10 GREEN: constrain the detail DTO to M1-only fields plus unit/office-member counts
+- [x] 3.11 Run `make gen`; commit regenerated artifacts for the community DTOs
 
 ## Phase 4: Unit Management (WU-3, PR3 — TDD)
 
