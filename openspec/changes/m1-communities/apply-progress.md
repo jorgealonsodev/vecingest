@@ -617,3 +617,59 @@ None beyond the one pre-existing test fix (`TestAuthFlow_ForgotPasswordEnumerati
 ### Status
 
 25/25 Phase 1. 9/9 Phase 2. 11/11 Phase 3. 13/13 Phase 4. 11/11 Phase 5. 20/20 Phase 6. **15/15 Phase 7 (this run).** Phase 8 (WU-6, PR6 — GET /v1/me memberships, lint-scope, permission matrix) NOT started per this run's explicit instruction to stop after Phase 7.
+
+## Bounded security correction — review lineage review-0e1833930adf141a (post-PR5)
+
+Not a `tasks.md` work unit: an out-of-band correction of five adversarial-review
+findings against already-delivered Phase 6/7 code, on
+`feature/m1-communities-pr5-turnstile`. Budget: 200 changed lines. Actual: 320
+(282 additions + 38 deletions), all in `api/`.
+
+Mode: Strict TDD. Every fix had its test written first and observed failing
+against the unfixed code before any production change.
+
+| Finding | Severity | Status |
+|---|---|---|
+| R1-accept-invitation-account-takeover / R3-accept-links-existing-account-without-credential-proof | BLOCKER | Fixed |
+| R3-enumeration-lockout-keyed-on-client-controlled-headers | CRITICAL | Fixed |
+| R3-mfa-activation-not-atomic-with-recovery-codes | CRITICAL | Fixed |
+| R1-mandatory-totp-gate-ineffective | CRITICAL | NOT fixed — documented as KNOWN INCOMPLETE |
+
+### TDD cycle evidence
+
+| Finding | RED test | Assertion observed failing against the unfixed code |
+|---|---|---|
+| Accept takeover | `TestInvitation_AcceptRequiresTheExistingAccountsOwnPassword` | `expected accept for a pre-existing account WITHOUT that account's password to be rejected, got 200 body=map[... access_token:eyJ... refresh_token:nik_99uty...]` |
+| Accept takeover (rewritten existing test) | `TestInvitation_AcceptCreatesOrLinksAnAccount`, scenario 2 | `expected accept for an existing account with the WRONG password to be refused with no session, got 200 body=map[... access_token:eyJ...]` |
+| Lockout key | `TestInvitation_EnumerationLockoutIgnoresClientControlledDeviceHeaders` | `expected the 11th attempt from the SAME address to be locked out despite a different X-Platform/X-App-Version pair on every request, got 404` |
+| MFA atomicity | `TestMFA_ActivationIsAtomicWithRecoveryCodeIssuance` | `expected TOTP to remain INACTIVE after a failed activation, got enabled_at=2026-09-17 15:01:10 ... -- the account now has an active factor and no recovery path` |
+
+### Work unit evidence
+
+- Focused: `go test -race -run 'TestInvitation_' ./internal/http/api/` → 12 passed.
+- Full: `cd api && go test -race ./...` → 371 passed, 0 failed (one Testcontainers
+  container-creation flake on the first run, `TestWorkerSubcommand_LeadershipAndGracefulShutdown`,
+  passed on a re-run in isolation).
+- `gofumpt -l .` → clean. `golangci-lint run ./...` → `0 issues.`
+- `make gen` run twice → no generated artifact changed (no DTO or SQL change).
+- Rollback boundary: the single commit on `feature/m1-communities-pr5-turnstile`;
+  reverting it restores the pre-correction behaviour with no other work removed.
+
+### Deviations recorded
+
+1. `invitations` spec, "Accept Creates Or Links An Account Without Revealing Prior
+   Existence": requiring the existing account's password makes a mismatch
+   distinguishable from the account-creation path, so a holder of a valid
+   invitation secret can now learn that the invited email already has an account.
+   Accepted over cross-tenant account takeover. Spec text needs amending.
+2. `invitations` spec, "Enumeration Lockout Is IP+Device Scoped, Not
+   Per-Invitation" and design D-6's `invite:{ip}:{deviceHash}`: the key is now
+   the address alone. The device leg was client-supplied, which made the whole
+   threshold bypassable. Spec and design text need amending.
+3. Test harness: `xffTransport` overwrote every caller-set `X-Forwarded-For`, so
+   no integration test ever exercised two genuinely distinct client addresses.
+   It now only fills the header in when absent. This repaired an assertion the
+   old lockout test could not make.
+4. `TestInvitation_AcceptCreatesOrLinksAnAccount` scenario 2 encoded the
+   vulnerable behaviour (any policy-valid password linked an existing account).
+   Rewritten to assert the fixed behaviour. No test was weakened or deleted.
