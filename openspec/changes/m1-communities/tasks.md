@@ -127,33 +127,33 @@ through PR1/PR2.
 
 ## Phase 4: Unit Management (WU-3, PR3 — TDD)
 
-- [ ] 4.1 RED: admin creates a unit with `community_id` from the route, never the body; owner gets 403 (Unit Creation Scoped To Community, both scenarios)
-- [ ] 4.2 GREEN: implement `scoped.Community` handler for `POST /v1/communities/:id/units`, roles `[admin, admin_staff]`
-- [ ] 4.3 RED: duplicate `(community_id, block, floor, door)` rejected (Unit Uniqueness Per Community)
-- [ ] 4.4 GREEN: map the migration's unique-violation to an API error code
-- [ ] 4.5 RED: coefficients summing to 97 return a warning with no blocked write; summing to 100 return no warning (Participation Coefficient Sum Is A Warning, both scenarios)
-- [ ] 4.6 GREEN: implement the coefficient-sum check as a response-level warning, never a write-time constraint
-- [ ] 4.7 RED: co-owners recorded as two independent `unit_members(owner)` rows; no M1 operation accepts `board_role` for write (Unit Member Roles And Deferred board_role, both scenarios)
-- [ ] 4.8 GREEN: restrict `unit_members` creation to `role: owner|tenant`; omit `board_role` from every M1 request DTO
-- [ ] 4.9 RED: a member created without consent stores `electronic_notifications_consent_at = null`; accepting consent persists both the timestamp and `consent_text_version` (Consent And Notification Fields, both scenarios)
-- [ ] 4.10 GREEN: implement the consent fields in the unit-member create/update DTOs and queries
-- [ ] 4.11 RED: `GET .../members`, `PATCH .../members/:memberId`, `DELETE .../members/:memberId` return 403/404 for a caller with no membership tied to the unit's community (Unit Member Management Scoped To Community)
-- [ ] 4.12 GREEN: implement the three handlers in `api/internal/http/handlers/unit_members.go`, resolved via the unit's `community_id`
-- [ ] 4.13 Run `make gen`; commit regenerated artifacts for unit/unit-member DTOs
+- [x] 4.1 RED: admin creates a unit with `community_id` from the route, never the body; owner gets 403 (Unit Creation Scoped To Community, both scenarios)
+- [x] 4.2 GREEN: implement `scoped.Community` handler for `POST /v1/communities/:id/units`, roles `[admin, admin_staff]`
+- [x] 4.3 RED: duplicate `(community_id, block, floor, door)` rejected (Unit Uniqueness Per Community)
+- [x] 4.4 GREEN: map the migration's unique-violation to an API error code
+- [x] 4.5 RED: coefficients summing to 97 return a warning with no blocked write; summing to 100 return no warning (Participation Coefficient Sum Is A Warning, both scenarios)
+- [x] 4.6 GREEN: implement the coefficient-sum check as a response-level warning, never a write-time constraint
+- [x] 4.7 RED: co-owners recorded as two independent `unit_members(owner)` rows; no M1 operation accepts `board_role` for write (Unit Member Roles And Deferred board_role, both scenarios)
+- [x] 4.8 GREEN: restrict `unit_members` creation to `role: owner|tenant`; omit `board_role` from every M1 request DTO
+- [x] 4.9 RED: a member created without consent stores `electronic_notifications_consent_at = null`; accepting consent persists both the timestamp and `consent_text_version` (Consent And Notification Fields, both scenarios)
+- [x] 4.10 GREEN: implement the consent fields in the unit-member create/update DTOs and queries
+- [x] 4.11 RED: `GET .../members`, `PATCH .../members/:memberId`, `DELETE .../members/:memberId` return 403/404 for a caller with no membership tied to the unit's community (Unit Member Management Scoped To Community)
+- [x] 4.12 GREEN: implement the three handlers in `api/internal/http/handlers/unit_members.go`, resolved via the unit's `community_id`
+- [x] 4.13 Run `make gen`; commit regenerated artifacts for unit/unit-member DTOs
 
 ## Phase 5: Unit CSV Import (WU-3, PR3 — TDD, D-7)
 
-- [ ] 5.1 RED: `GET .../units/import/template` returns a CSV with the documented columns, scoped to the caller's community membership (Downloadable Import Template)
-- [ ] 5.2 GREEN: implement the template handler in `api/internal/http/handlers/unit_csv_import.go`
-- [ ] 5.3 RED: `?dry_run=true` with 2 invalid + 8 valid rows reports the 2 errors and writes nothing; an all-valid dry run reports success and writes nothing (Dry-Run Validates Without Writing, both scenarios)
-- [ ] 5.4 GREEN: implement row-by-row validation with no DB write when `dry_run=true`
-- [ ] 5.5 RED: a non-dry-run import with 9 valid + 1 invalid row writes nothing and reports the invalid row (Row-By-Row Validation Before Any Write)
-- [ ] 5.6 GREEN: wrap the non-dry-run import in one transaction validating every row before any `INSERT`
-- [ ] 5.7 RED: an exported CSV escapes a leading `=`/`+`/`-`/`@` cell; an imported row with a formula-prefixed owner-name is neutralized before storage (Formula-Injection Hardening, both scenarios)
-- [ ] 5.8 GREEN: implement cell-prefix escaping shared by template/export and import ingestion
-- [ ] 5.9 RED: an uploaded filename `../../etc/passwd.csv` is rejected or sanitized before any storage key is derived (Path-Traversal-Safe Filenames)
-- [ ] 5.10 GREEN: implement filename sanitization; stream the upload body, never write under a client-supplied name
-- [ ] 5.11 Run `make gen` if the import DTOs changed; commit regenerated artifacts
+- [x] 5.1 RED: `GET .../units/import/template` returns a CSV with the documented columns, scoped to the caller's community membership (Downloadable Import Template)
+- [x] 5.2 GREEN: implement the template handler in `api/internal/http/handlers/unit_csv_import.go`
+- [x] 5.3 RED: `?dry_run=true` with 2 invalid + 8 valid rows reports the 2 errors and writes nothing; an all-valid dry run reports success and writes nothing (Dry-Run Validates Without Writing, both scenarios)
+- [x] 5.4 GREEN: implement row-by-row validation with no DB write when `dry_run=true`
+- [x] 5.5 RED: a non-dry-run import with 9 valid + 1 invalid row writes nothing and reports the invalid row (Row-By-Row Validation Before Any Write)
+- [x] 5.6 GREEN: wrap the non-dry-run import in one transaction validating every row before any `INSERT`
+- [x] 5.7 RED: an exported CSV escapes a leading `=`/`+`/`-`/`@` cell; an imported row with a formula-prefixed owner-name is neutralized before storage (Formula-Injection Hardening, both scenarios)
+- [x] 5.8 GREEN: implement cell-prefix escaping shared by template/export and import ingestion
+- [x] 5.9 RED: an uploaded filename `../../etc/passwd.csv` is rejected or sanitized before any storage key is derived (Path-Traversal-Safe Filenames)
+- [x] 5.10 GREEN: implement filename sanitization; stream the upload body, never write under a client-supplied name
+- [x] 5.11 Run `make gen` if the import DTOs changed; commit regenerated artifacts
 
 ## Phase 6: Invitations (WU-4, PR4 — TDD, D-6)
 

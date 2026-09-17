@@ -48,6 +48,11 @@ type Querier interface {
 	// back the Self resolver (GET /v1/me's full membership set).
 	ListOfficeMembershipsByUserID(ctx context.Context, userID uuid.UUID) ([]db.ListOfficeMembershipsByUserIDRow, error)
 	ListUnitMembershipsByUserID(ctx context.Context, userID uuid.UUID) ([]db.ListUnitMembershipsByUserIDRow, error)
+	// GetUnitCommunityID is the unit resolver's own lookup (design D-4:
+	// the {unitId} route shape resolves community membership via the
+	// unit's own community_id, one join, then the community resolver's
+	// predicate).
+	GetUnitCommunityID(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
 }
 
 var queries Querier
@@ -114,6 +119,29 @@ func ResolveOffice(ctx context.Context, officeID, userID uuid.UUID) (Membership,
 		return Membership{}, err
 	}
 	return Membership{userID: userID, scope: scope{kind: KindOffice, id: officeID}, role: Role(row.Role), valid: true}, nil
+}
+
+// ResolveCommunityViaUnit resolves the caller's membership for the
+// community owning unitID (design D-4: the {unitId} route shape
+// resolves via units.community_id, one join, then the community
+// resolver's predicate above). A unit that does not exist, or is
+// soft-deleted, resolves to ErrNoMembership -- exactly like a foreign
+// community -- so a caller learns nothing about whether the unit id
+// itself is valid (D-4: "Foreign resource → 404").
+func ResolveCommunityViaUnit(ctx context.Context, unitID, userID uuid.UUID) (Membership, error) {
+	if queries == nil {
+		return Membership{}, errNotConfigured
+	}
+
+	communityID, err := queries.GetUnitCommunityID(ctx, unitID)
+	if err != nil {
+		if isNoRows(err) {
+			return Membership{}, ErrNoMembership
+		}
+		return Membership{}, err
+	}
+
+	return ResolveCommunity(ctx, communityID, userID)
 }
 
 // ResolveSelf resolves the caller's full membership set (design D-4:

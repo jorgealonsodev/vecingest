@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/jorgealonsodev/vecingest/internal/db"
@@ -90,4 +91,19 @@ func (u userLookup) LookupByEmail(ctx context.Context, email string) (uuid.UUID,
 
 func isNoRows(err error) bool {
 	return errors.Is(err, pgx.ErrNoRows)
+}
+
+// isUniqueViolation reports whether err is a Postgres unique-constraint
+// violation (SQLSTATE 23505), mirroring
+// internal/domain/auth/mfa.isSerializationFailure's classification
+// pattern (an interface{ SQLState() string } check via errors.As,
+// rather than importing pgconn directly) -- unit-management: Unit
+// Uniqueness Per Community (task 4.4) maps this to a 409, never a raw
+// 500.
+func isUniqueViolation(err error) bool {
+	var pgErr interface{ SQLState() string }
+	if errors.As(err, &pgErr) {
+		return pgErr.SQLState() == pgerrcode.UniqueViolation
+	}
+	return false
 }

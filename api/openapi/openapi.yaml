@@ -288,6 +288,46 @@ components:
         - admin_name
         - admin_email
       type: object
+    CreateUnitRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/CreateUnitRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        block:
+          maxLength: 64
+          type: string
+        cadastral_ref:
+          maxLength: 64
+          type: string
+        door:
+          maxLength: 32
+          type: string
+        floor:
+          maxLength: 32
+          type: string
+        members:
+          items:
+            $ref: "#/components/schemas/UnitMemberCreateRequest"
+          type:
+            - array
+            - "null"
+        participation_coefficient:
+          type: string
+        type:
+          enum:
+            - flat
+            - premises
+            - garage
+            - storage
+          type: string
+      required:
+        - type
+      type: object
     ErrorDetail:
       additionalProperties: false
       properties:
@@ -453,6 +493,25 @@ components:
             - "null"
       required:
         - sessions
+      type: object
+    ListUnitMembersResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/ListUnitMembersResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        members:
+          items:
+            $ref: "#/components/schemas/UnitMemberResponse"
+          type:
+            - array
+            - "null"
+      required:
+        - members
       type: object
     LiveResponse:
       additionalProperties: false
@@ -726,6 +785,190 @@ components:
         - password
         - platform
       type: object
+    UnitCreateResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/UnitCreateResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        block:
+          type: string
+        cadastral_ref:
+          type: string
+        community_id:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        door:
+          type: string
+        floor:
+          type: string
+        id:
+          type: string
+        members:
+          items:
+            $ref: "#/components/schemas/UnitMemberResponse"
+          type:
+            - array
+            - "null"
+        participation_coefficient:
+          type: string
+        type:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+        warnings:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - id
+        - community_id
+        - type
+        - created_at
+        - updated_at
+      type: object
+    UnitImportResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/UnitImportResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        dry_run:
+          type: boolean
+        imported:
+          format: int64
+          type: integer
+        rows:
+          items:
+            $ref: "#/components/schemas/UnitImportRowResult"
+          type:
+            - array
+            - "null"
+        warnings:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - dry_run
+        - imported
+        - rows
+      type: object
+    UnitImportRowResult:
+      additionalProperties: false
+      properties:
+        block:
+          type: string
+        door:
+          type: string
+        errors:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        floor:
+          type: string
+        owner_dni_cif:
+          type: string
+        owner_name:
+          type: string
+        row:
+          format: int64
+          type: integer
+        type:
+          type: string
+        unit_id:
+          type: string
+      required:
+        - row
+      type: object
+    UnitMemberCreateRequest:
+      additionalProperties: false
+      properties:
+        consent_text_version:
+          type: string
+        electronic_notifications_consent:
+          type: boolean
+        email:
+          format: email
+          type: string
+        notification_address:
+          type: string
+        role:
+          enum:
+            - owner
+            - tenant
+          type: string
+        tenure:
+          enum:
+            - full_owner
+            - bare_owner
+            - usufructuary
+          type: string
+      required:
+        - email
+        - role
+      type: object
+    UnitMemberResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/UnitMemberResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        community_id:
+          type: string
+        consent_text_version:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        electronic_notifications_consent_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        notification_address:
+          type: string
+        role:
+          type: string
+        tenure:
+          type: string
+        unit_id:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+        user_id:
+          type: string
+      required:
+        - id
+        - unit_id
+        - community_id
+        - user_id
+        - role
+        - tenure
+        - created_at
+        - updated_at
+      type: object
     UpdateCommunityRequest:
       additionalProperties: false
       properties:
@@ -764,6 +1007,34 @@ components:
           type: string
         secretary_is_office:
           type: boolean
+      type: object
+    UpdateUnitMemberRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/UpdateUnitMemberRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        consent_text_version:
+          type: string
+        electronic_notifications_consent:
+          type: boolean
+        notification_address:
+          type: string
+        role:
+          enum:
+            - owner
+            - tenant
+          type: string
+        tenure:
+          enum:
+            - full_owner
+            - bare_owner
+            - usufructuary
+          type: string
       type: object
 info:
   title: Vecingest API
@@ -1108,6 +1379,107 @@ paths:
       summary: Update a community (admin/admin_staff only)
       tags:
         - communities
+  /v1/communities/{id}/units:
+    post:
+      operationId: createUnit
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: uuid
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUnitRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnitCreateResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Create a unit in a community (admin/admin_staff only)
+      tags:
+        - units
+  /v1/communities/{id}/units/import:
+    post:
+      operationId: importUnits
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: uuid
+            type: string
+        - explode: false
+          in: query
+          name: dry_run
+          schema:
+            type: boolean
+      requestBody:
+        content:
+          multipart/form-data:
+            encoding:
+              file:
+                contentType: application/octet-stream
+            schema:
+              properties:
+                file:
+                  contentEncoding: binary
+                  contentMediaType: application/octet-stream
+                  format: binary
+                  type: string
+              required:
+                - file
+              type: object
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnitImportResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Bulk-import units via CSV (?dry_run=true validates without writing)
+      tags:
+        - units
+  /v1/communities/{id}/units/import/template:
+    get:
+      operationId: getUnitImportTemplate
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: uuid
+            type: string
+      responses:
+        "200":
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Download the unit/owner CSV import template
+      tags:
+        - units
   /v1/health/live:
     get:
       operationId: healthLive
@@ -1281,3 +1653,94 @@ paths:
       summary: Add an existing user as admin_staff to the caller's office
       tags:
         - offices
+  /v1/units/{unitId}/members:
+    get:
+      operationId: listUnitMembers
+      parameters:
+        - in: path
+          name: unitId
+          required: true
+          schema:
+            format: uuid
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListUnitMembersResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: List a unit's members (any membership tied to the unit's community)
+      tags:
+        - units
+  /v1/units/{unitId}/members/{memberId}:
+    delete:
+      operationId: deleteUnitMember
+      parameters:
+        - in: path
+          name: unitId
+          required: true
+          schema:
+            format: uuid
+            type: string
+        - in: path
+          name: memberId
+          required: true
+          schema:
+            format: uuid
+            type: string
+      responses:
+        "204":
+          description: No Content
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Remove a unit member (admin/admin_staff only)
+      tags:
+        - units
+    patch:
+      operationId: updateUnitMember
+      parameters:
+        - in: path
+          name: unitId
+          required: true
+          schema:
+            format: uuid
+            type: string
+        - in: path
+          name: memberId
+          required: true
+          schema:
+            format: uuid
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUnitMemberRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnitMemberResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Update a unit member (admin/admin_staff only)
+      tags:
+        - units

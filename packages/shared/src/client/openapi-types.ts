@@ -180,6 +180,57 @@ export interface paths {
         patch: operations["updateCommunity"];
         trace?: never;
     };
+    "/v1/communities/{id}/units": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create a unit in a community (admin/admin_staff only) */
+        post: operations["createUnit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/communities/{id}/units/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Bulk-import units via CSV (?dry_run=true validates without writing) */
+        post: operations["importUnits"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/communities/{id}/units/import/template": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download the unit/owner CSV import template */
+        get: operations["getUnitImportTemplate"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/health/live": {
         parameters: {
             query?: never;
@@ -298,6 +349,41 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/v1/units/{unitId}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a unit's members (any membership tied to the unit's community) */
+        get: operations["listUnitMembers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/units/{unitId}/members/{memberId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove a unit member (admin/admin_staff only) */
+        delete: operations["deleteUnitMember"];
+        options?: never;
+        head?: never;
+        /** Update a unit member (admin/admin_staff only) */
+        patch: operations["updateUnitMember"];
         trace?: never;
     };
 }
@@ -440,6 +526,22 @@ export interface components {
             name: string;
             phone?: string;
         };
+        CreateUnitRequest: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/CreateUnitRequest.json
+             */
+            readonly $schema?: string;
+            block?: string;
+            cadastral_ref?: string;
+            door?: string;
+            floor?: string;
+            members?: components["schemas"]["UnitMemberCreateRequest"][] | null;
+            participation_coefficient?: string;
+            /** @enum {string} */
+            type: "flat" | "premises" | "garage" | "storage";
+        };
         ErrorDetail: {
             /** @description Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id' */
             location?: string;
@@ -541,6 +643,15 @@ export interface components {
              */
             readonly $schema?: string;
             sessions: components["schemas"]["SessionSummary"][] | null;
+        };
+        ListUnitMembersResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/ListUnitMembersResponse.json
+             */
+            readonly $schema?: string;
+            members: components["schemas"]["UnitMemberResponse"][] | null;
         };
         LiveResponse: {
             /**
@@ -695,6 +806,86 @@ export interface components {
             /** @description Required unless the response is 403 MFA enrollment-required. */
             totp_code?: string;
         };
+        UnitCreateResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/UnitCreateResponse.json
+             */
+            readonly $schema?: string;
+            block?: string;
+            cadastral_ref?: string;
+            community_id: string;
+            /** Format: date-time */
+            created_at: string;
+            door?: string;
+            floor?: string;
+            id: string;
+            members?: components["schemas"]["UnitMemberResponse"][] | null;
+            participation_coefficient?: string;
+            type: string;
+            /** Format: date-time */
+            updated_at: string;
+            warnings?: string[] | null;
+        };
+        UnitImportResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/UnitImportResponse.json
+             */
+            readonly $schema?: string;
+            dry_run: boolean;
+            /** Format: int64 */
+            imported: number;
+            rows: components["schemas"]["UnitImportRowResult"][] | null;
+            warnings?: string[] | null;
+        };
+        UnitImportRowResult: {
+            block?: string;
+            door?: string;
+            errors?: string[] | null;
+            floor?: string;
+            owner_dni_cif?: string;
+            owner_name?: string;
+            /** Format: int64 */
+            row: number;
+            type?: string;
+            unit_id?: string;
+        };
+        UnitMemberCreateRequest: {
+            consent_text_version?: string;
+            electronic_notifications_consent?: boolean;
+            /** Format: email */
+            email: string;
+            notification_address?: string;
+            /** @enum {string} */
+            role: "owner" | "tenant";
+            /** @enum {string} */
+            tenure?: "full_owner" | "bare_owner" | "usufructuary";
+        };
+        UnitMemberResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/UnitMemberResponse.json
+             */
+            readonly $schema?: string;
+            community_id: string;
+            consent_text_version?: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            electronic_notifications_consent_at?: string;
+            id: string;
+            notification_address?: string;
+            role: string;
+            tenure: string;
+            unit_id: string;
+            /** Format: date-time */
+            updated_at: string;
+            user_id: string;
+        };
         UpdateCommunityRequest: {
             /**
              * Format: uri
@@ -713,6 +904,21 @@ export interface components {
             province?: string;
             reserve_fund?: string;
             secretary_is_office?: boolean;
+        };
+        UpdateUnitMemberRequest: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/UpdateUnitMemberRequest.json
+             */
+            readonly $schema?: string;
+            consent_text_version?: string;
+            electronic_notifications_consent?: boolean;
+            notification_address?: string;
+            /** @enum {string} */
+            role?: "owner" | "tenant";
+            /** @enum {string} */
+            tenure?: "full_owner" | "bare_owner" | "usufructuary";
         };
     };
     responses: never;
@@ -1123,6 +1329,110 @@ export interface operations {
             };
         };
     };
+    createUnit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateUnitRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnitCreateResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    importUnits: {
+        parameters: {
+            query?: {
+                dry_run?: boolean;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "multipart/form-data": {
+                    /** Format: binary */
+                    file: string;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnitImportResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getUnitImportTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     healthLive: {
         parameters: {
             query?: never;
@@ -1352,6 +1662,103 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OfficeMemberResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listUnitMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                unitId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListUnitMembersResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    deleteUnitMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                unitId: string;
+                memberId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateUnitMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                unitId: string;
+                memberId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateUnitMemberRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnitMemberResponse"];
                 };
             };
             /** @description Error */
