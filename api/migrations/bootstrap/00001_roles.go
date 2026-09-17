@@ -74,14 +74,6 @@ func Up(ctx context.Context, db *sql.DB) error {
 			END IF;
 		END $do$;`,
 
-		fmt.Sprintf(`DO $do$ BEGIN
-			IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = %[1]s) THEN
-				CREATE ROLE %[2]s LOGIN PASSWORD %[3]s;
-			ELSE
-				ALTER ROLE %[2]s LOGIN PASSWORD %[3]s;
-			END IF;
-		END $do$;`, quoteLiteral(appDBUser), quotedUser, quotedPassword),
-
 		`CREATE EXTENSION IF NOT EXISTS btree_gist;`,
 		`CREATE EXTENSION IF NOT EXISTS pg_stat_statements;`,
 
@@ -117,15 +109,27 @@ func Up(ctx context.Context, db *sql.DB) error {
 	// ROLE %I LOGIN PASSWORD %L). The interpolated values are proven safe
 	// by construction, not assumed: every dynamic identifier goes through
 	// quoteIdent (pgx.Identifier{}.Sanitize(), sql_quote.go), and the only
-	// dynamic literal (the role password) goes through quoteLiteral,
-	// which doubles embedded single quotes -- the standard, sufficient
-	// escaping for a string literal under Postgres's standard_conforming_strings
+	// dynamic literal (the role password) is no longer interpolated here
+	// at all -- it moved to ensureAppRole, because quote-doubling is NOT
+	// sufficient inside a dollar-quoted block (see that function). What
+	// remains in stmts interpolates only quoteIdent'd identifiers, whose
+	// doubled double-quotes are correct in the ordinary parsing context
+	// these statements use. quoteLiteral doubles embedded single quotes --
+	// the standard, sufficient escaping for a string literal in that same
+	// ordinary context, under Postgres's standard_conforming_strings
 	// = on default (in effect on every Postgres release since 9.1, and
 	// never altered by any migration in this set, so backslash sequences
 	// are never re-interpreted). Both appDBUser and appDBPassword also
 	// come from this process's own environment (APP_DB_USER/APP_DB_PASSWORD),
 	// set by the operator deploying the stack, not from any external or
 	// request-controlled input.
+	// The app role is created OUTSIDE the stmts loop, and deliberately not
+	// inside a DO $do$...$do$ block. See ensureAppRole for why that
+	// distinction is load-bearing rather than stylistic.
+	if err := ensureAppRole(ctx, db, appDBUser, quotedUser, quotedPassword); err != nil {
+		return err
+	}
+
 	for _, stmt := range stmts {
 		if _, err := db.ExecContext(ctx, stmt); err != nil { //nolint:gosec // G701: every dynamic value in stmt is quoted via quoteIdent/quoteLiteral -- see comment above
 			return fmt.Errorf("bootstrap migration: %w (statement: %s)", err, firstLine(stmt))
@@ -193,4 +197,58 @@ func firstLine(s string) string {
 		return s[:80] + "..."
 	}
 	return s
+}
+
+// ensureAppRole creates or updates the application login role.
+//
+// It is a separate function, and deliberately not wrapped in a
+// DO $do$ ... END $do$ block, because it used to be. Inside a
+// dollar-quoted string Postgres performs NO quote processing and scans
+// only for the closing tag, so quoteLiteral's doubled single quotes
+// protect nothing there: an APP_DB_PASSWORD containing the literal text
+// `$do$` closed the block early and the rest parsed at top level.
+//
+// The injected SQL did not actually execute, which was established by
+// running it rather than by reasoning about it (see
+// TestRunMigrate_AppDBPasswordCannotInjectSQL). Closing the block leaves
+// the DO body ending in `... PASSWORD 'x` -- an unterminated string
+// literal -- and the attacker cannot close it, because quoteLiteral
+// doubles every `'` they supply. Postgres rejects the PL/pgSQL body at
+// parse time, and the simple query protocol parses the whole batch before
+// executing any of it.
+//
+// So the observed defect was narrower than it looks: any operator
+// password containing `$do$` broke deployment with an opaque syntax
+// error. The reason to fix it structurally anyway is that the safety
+// rested on an accident -- the shape of the surrounding statement -- and
+// not on the escaping being correct. Reorder or reword that statement so
+// the body still parses, and the same construct becomes remote-code-shaped
+// against the bootstrap SUPERUSER connection, which owns vecingest_owner,
+// the append-only event trigger and every default privilege in D-B.
+//
+// Asking pg_roles with a BOUND parameter and then issuing bare DDL removes
+// the dollar-quoted context altogether. Outside it, doubling single quotes
+// is correct and sufficient under standard_conforming_strings = on.
+// Rejecting `$` outright was considered and dropped: passwords legitimately
+// contain it, and generated ones frequently do.
+func ensureAppRole(ctx context.Context, db *sql.DB, appDBUser, quotedUser, quotedPassword string) error {
+	// $1 is a real bound parameter, so this lookup uses the extended
+	// protocol and the role name cannot influence how it is parsed.
+	var exists bool
+	if err := db.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)`, appDBUser,
+	).Scan(&exists); err != nil {
+		return fmt.Errorf("bootstrap migration: looking up role %q: %w", appDBUser, err)
+	}
+
+	verb := "CREATE"
+	if exists {
+		verb = "ALTER"
+	}
+
+	stmt := fmt.Sprintf(`%s ROLE %s LOGIN PASSWORD %s;`, verb, quotedUser, quotedPassword)
+	if _, err := db.ExecContext(ctx, stmt); err != nil { //nolint:gosec // G701: identifier via quoteIdent, password via quoteLiteral, and no dollar-quoted context -- see the doc comment above
+		return fmt.Errorf("bootstrap migration: %s ROLE %q: %w", verb, appDBUser, err)
+	}
+	return nil
 }
