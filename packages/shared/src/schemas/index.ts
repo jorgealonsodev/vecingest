@@ -36,6 +36,7 @@ const AcceptInvitationRequest = z.object({
   platform: z.enum(["ios", "android", "web"]),
   short_code: z.string().optional(),
   token: z.string().optional(),
+  totp_code: z.string().optional(),
 });
 const LoginResponse = z.object({
   $schema: z.string().url().optional(),
@@ -296,6 +297,7 @@ const RevokeInvitationResponse = z.object({
 const ResendInvitationResponse = z.object({
   $schema: z.string().url().optional(),
   sent_count: z.number().int(),
+  short_code: z.string(),
 });
 const MeResponse = z.object({
   $schema: z.string().url().optional(),

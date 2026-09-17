@@ -526,6 +526,8 @@ export interface components {
             platform: "ios" | "android" | "web";
             short_code?: string;
             token?: string;
+            /** @description Required only when the invited address already has an account with an active TOTP factor; a 403 AUTH_MFA_REQUIRED response means the account needs one. */
+            totp_code?: string;
         };
         AddOfficeMemberRequest: {
             /**
@@ -1035,6 +1037,7 @@ export interface components {
             readonly $schema?: string;
             /** Format: int32 */
             sent_count: number;
+            short_code: string;
         };
         ResetPasswordRequest: {
             /**

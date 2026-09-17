@@ -82,9 +82,13 @@ func runWorker(ctx context.Context, _ []string, stdout io.Writer, lookup config.
 		return fmt.Errorf("worker: graceful shutdown: %w", err)
 	}
 	// Drain the mailer's bounded pool AFTER the River client stopped
-	// working jobs, so a message a job enqueued on its way out is still
-	// delivered (design D-N: "drained on graceful shutdown"), on the
-	// same bounded budget serve uses.
+	// working jobs (design D-N: "drained on graceful shutdown"), on the
+	// same bounded budget serve uses. Since buildWorkerMailer returns
+	// mail.Sync, no invitation_email job leaves anything IN that pool --
+	// its send completed, or the job failed and River will retry it. This
+	// drain is now belt-and-braces for anything else that might share the
+	// mailer, not the thing standing between an accepted job and a
+	// delivered message.
 	if err := sender.Close(stopCtx); err != nil {
 		slog.WarnContext(ctx, "worker: mailer did not drain within the shutdown grace period", "error", err)
 	}
@@ -109,5 +113,20 @@ type workerMailer interface {
 // sender expression and it is this call, so a regression to a log sink
 // has to be written here, where the test looks.
 func buildWorkerMailer(cfg config.Config, holder *secrets.Holder) (workerMailer, error) {
-	return mail.New(mail.Config{SMTPURL: holder.SMTPURL(), From: cfg.MailFrom})
+	m, err := mail.New(mail.Config{SMTPURL: holder.SMTPURL(), From: cfg.MailFrom})
+	if err != nil {
+		return nil, err
+	}
+	// mail.Sync, never the bare *AsyncMailer. A worker's return value is
+	// what marks its job row completed, and AsyncMailer.SendRaw returns nil
+	// the moment the bounded pool accepts the message -- before a byte is
+	// dialled -- so River recorded invitation_email COMPLETED before
+	// delivery was attempted and every failure after the hand-off fell
+	// outside its retry and dead-letter machinery
+	// (R4-invitation-email-job-completed-before-delivery-is-attempted,
+	// review lineage review-f855997b550a986d). serve keeps the async
+	// contract, because there SMTP latency on the response is an
+	// account-existence timing oracle (D-N); here nothing is waiting on the
+	// response, and the job IS the retry.
+	return mail.Sync{AsyncMailer: m}, nil
 }

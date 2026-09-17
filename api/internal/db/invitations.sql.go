@@ -177,24 +177,6 @@ func (q *Queries) IncrementInvitationFailedAttempts(ctx context.Context, arg Inc
 	return err
 }
 
-const incrementInvitationSentCount = `-- name: IncrementInvitationSentCount :one
-UPDATE invitations SET sent_count = sent_count + 1, updated_at = now()
-WHERE id = $1 AND community_id = $2 AND status = 'pending'
-RETURNING sent_count
-`
-
-type IncrementInvitationSentCountParams struct {
-	ID          uuid.UUID `json:"id"`
-	CommunityID uuid.UUID `json:"community_id"`
-}
-
-func (q *Queries) IncrementInvitationSentCount(ctx context.Context, arg IncrementInvitationSentCountParams) (int32, error) {
-	row := q.db.QueryRow(ctx, incrementInvitationSentCount, arg.ID, arg.CommunityID)
-	var sent_count int32
-	err := row.Scan(&sent_count)
-	return sent_count, err
-}
-
 const insertInvitation = `-- name: InsertInvitation :one
 INSERT INTO invitations (id, community_id, unit_id, email, role, token_hash, short_code_hash, expires_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -304,6 +286,47 @@ func (q *Queries) RevokeInvitation(ctx context.Context, arg RevokeInvitationPara
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const rotateInvitationShortCode = `-- name: RotateInvitationShortCode :one
+UPDATE invitations SET short_code_hash = $3, sent_count = sent_count + 1, updated_at = now()
+WHERE id = $1 AND community_id = $2 AND status = 'pending'
+RETURNING id, email, sent_count
+`
+
+type RotateInvitationShortCodeParams struct {
+	ID            uuid.UUID `json:"id"`
+	CommunityID   uuid.UUID `json:"community_id"`
+	ShortCodeHash []byte    `json:"short_code_hash"`
+}
+
+type RotateInvitationShortCodeRow struct {
+	ID        uuid.UUID   `json:"id"`
+	Email     pgtype.Text `json:"email"`
+	SentCount int32       `json:"sent_count"`
+}
+
+// RotateInvitationShortCode backs POST /v1/invitations/:id/resend. It
+// re-issues the short code and counts the send in ONE statement, because the
+// two must never diverge: sent_count is the operator-visible evidence that a
+// delivery happened, and it used to be incremented by a resend that dispatched
+// nothing at all (R3-resend-invitation-dispatches-nothing, review lineage
+// review-f855997b550a986d).
+//
+// Re-issuing rather than redelivering is forced by the storage model and
+// chosen deliberately: only one-way digests of the code (an HMAC) and the
+// token are persisted, so the plaintext an invitation email renders is
+// unrecoverable here. See the handler for why a recoverable copy was rejected.
+//
+// Pending-only and tenant-scoped, exactly like RevokeInvitation: zero rows
+// means the invitation is no longer pending, which the handler maps to 409
+// rather than silently reporting a send. email is returned because the job
+// payload needs it and the caller has only the invitation id in hand.
+func (q *Queries) RotateInvitationShortCode(ctx context.Context, arg RotateInvitationShortCodeParams) (RotateInvitationShortCodeRow, error) {
+	row := q.db.QueryRow(ctx, rotateInvitationShortCode, arg.ID, arg.CommunityID, arg.ShortCodeHash)
+	var i RotateInvitationShortCodeRow
+	err := row.Scan(&i.ID, &i.Email, &i.SentCount)
+	return i, err
 }
 
 const sweepExpiredInvitations = `-- name: SweepExpiredInvitations :execrows

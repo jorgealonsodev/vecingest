@@ -166,3 +166,66 @@ func TestAsyncMailer_Close_DrainsPendingSends(t *testing.T) {
 		t.Fatalf("expected Close to have drained the one pending send, got %d messages", len(server.Messages()))
 	}
 }
+
+// R4-invitation-email-job-completed-before-delivery-is-attempted (review
+// lineage review-f855997b550a986d). SendRaw hands off to the bounded pool and
+// returns nil before SMTP is attempted, which is exactly right for the request
+// path it was built for and exactly wrong for a River worker: the job row is
+// marked COMPLETED on that nil, so every failure after the hand-off falls
+// outside River's retry and dead-letter machinery and the invitee silently
+// never receives the code.
+//
+// mail.Sync is the same mailer with the opposite contract. This asserts the
+// half that carries the guarantee: a send the SMTP server refuses must come
+// back as an error to the caller, not into a log line.
+func TestSync_SendRaw_ReportsDeliveryFailureToTheCaller(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration: dials an SMTP port")
+	}
+	// Port 1 is reserved and nothing listens on it, so the dial fails
+	// deterministically without depending on a stopped fixture server.
+	m, err := vecmail.New(vecmail.Config{
+		SMTPURL:     "smtp://127.0.0.1:1",
+		From:        "Vecingest <no-reply@example.com>",
+		SendTimeout: 2 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("mail.New: %v", err)
+	}
+	defer func() { _ = m.Close(context.Background()) }()
+
+	if err := m.SendRaw(context.Background(), "user@example.com", "subject", "body"); err != nil {
+		t.Fatalf("test premise: the async SendRaw accepts the message without dialling, got %v", err)
+	}
+	if err := (vecmail.Sync{AsyncMailer: m}).SendRaw(context.Background(), "user@example.com", "subject", "body"); err == nil {
+		t.Fatalf("expected the synchronous sender to report an undeliverable message as an error, so the job that called it is retried instead of recorded completed")
+	}
+}
+
+// The other half: a successful synchronous send must have ALREADY reached the
+// server when it returns, with no polling. waitForMessages exists precisely
+// because the async path cannot promise that; this path must not need it.
+func TestSync_SendRaw_DeliversBeforeReturning(t *testing.T) {
+	server := newFakeSMTPServer(t, 0)
+
+	m, err := vecmail.New(vecmail.Config{
+		SMTPURL: fmt.Sprintf("smtp://127.0.0.1:%d", server.PortNumber()),
+		From:    "Vecingest <no-reply@example.com>",
+	})
+	if err != nil {
+		t.Fatalf("mail.New: %v", err)
+	}
+	defer func() { _ = m.Close(context.Background()) }()
+
+	if err := (vecmail.Sync{AsyncMailer: m}).SendRaw(context.Background(), "invitee@example.com", "subject", "the-short-code"); err != nil {
+		t.Fatalf("Sync.SendRaw: %v", err)
+	}
+	msgs := server.Messages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected the message to have been delivered before SendRaw returned, got %d message(s)", len(msgs))
+	}
+	_, body := decodeDeliveredBody(t, msgs[0].MsgRequest())
+	if !strings.Contains(body, "the-short-code") {
+		t.Fatalf("expected the delivered body to carry the rendered content, got: %s", body)
+	}
+}

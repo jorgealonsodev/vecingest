@@ -99,7 +99,6 @@ type Querier interface {
 	// row (the caller always has it in hand at this point), so this is a
 	// genuine tenant filter, not merely a textual one.
 	IncrementInvitationFailedAttempts(ctx context.Context, arg IncrementInvitationFailedAttemptsParams) error
-	IncrementInvitationSentCount(ctx context.Context, arg IncrementInvitationSentCountParams) (int32, error)
 	IncrementOTPChallengeAttempts(ctx context.Context, id uuid.UUID) (int32, error)
 	// InsertAuditLog is the audit_log hash chain's single writer (D-O): the
 	// Semgrep rule single-writer-audit-log.yml (api/.semgrep/) fails the
@@ -176,6 +175,23 @@ type Querier interface {
 	RevokeInvitation(ctx context.Context, arg RevokeInvitationParams) (uuid.UUID, error)
 	RevokeSession(ctx context.Context, id uuid.UUID) error
 	RevokeSessionFamily(ctx context.Context, familyID uuid.UUID) error
+	// RotateInvitationShortCode backs POST /v1/invitations/:id/resend. It
+	// re-issues the short code and counts the send in ONE statement, because the
+	// two must never diverge: sent_count is the operator-visible evidence that a
+	// delivery happened, and it used to be incremented by a resend that dispatched
+	// nothing at all (R3-resend-invitation-dispatches-nothing, review lineage
+	// review-f855997b550a986d).
+	//
+	// Re-issuing rather than redelivering is forced by the storage model and
+	// chosen deliberately: only one-way digests of the code (an HMAC) and the
+	// token are persisted, so the plaintext an invitation email renders is
+	// unrecoverable here. See the handler for why a recoverable copy was rejected.
+	//
+	// Pending-only and tenant-scoped, exactly like RevokeInvitation: zero rows
+	// means the invitation is no longer pending, which the handler maps to 409
+	// rather than silently reporting a send. email is returned because the job
+	// payload needs it and the caller has only the invitation id in hand.
+	RotateInvitationShortCode(ctx context.Context, arg RotateInvitationShortCodeParams) (RotateInvitationShortCodeRow, error)
 	SetUserMFARecoveryCodes(ctx context.Context, arg SetUserMFARecoveryCodesParams) error
 	// SumParticipationCoefficientByCommunityID backs unit-management:
 	// Participation Coefficient Sum Is A Warning, Not A Block (§5.2) -- the

@@ -45,11 +45,22 @@ type invitationEmailJobArgs struct {
 
 func (invitationEmailJobArgs) Kind() string { return "invitation_email" }
 
-// RawSender is the minimal shape internal/mail.AsyncMailer and
+// RawSender is the minimal shape internal/mail.Sync and
 // internal/platform/mail.LogMailer both already satisfy, mirroring
 // internal/http/handlers.RawSender's identical structural interface --
 // declared separately here so this package needs no dependency on the
 // HTTP layer.
+//
+// CONTRACT, and it is the whole point of this port: SendRaw MUST NOT return
+// nil until delivery has actually been attempted and succeeded. Work below
+// returns that error verbatim, and River reads Work's return value as the
+// job's outcome -- so a SendRaw that returns nil on hand-off marks the row
+// COMPLETED before anything is sent, and every failure after that point is
+// outside retry and dead-lettering forever
+// (R4-invitation-email-job-completed-before-delivery-is-attempted, review
+// lineage review-f855997b550a986d). *mail.AsyncMailer satisfies this
+// interface STRUCTURALLY and violates it semantically; mail.Sync is the same
+// mailer with this contract, and it is what cmd/vecingest/worker.go wires.
 type RawSender interface {
 	SendRaw(ctx context.Context, to, subject, body string) error
 }

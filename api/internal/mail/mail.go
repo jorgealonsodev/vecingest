@@ -166,32 +166,75 @@ func (m *AsyncMailer) SendRaw(ctx context.Context, to, subject, body string) err
 	}
 }
 
+// SendRawSync performs the WHOLE SMTP transaction before returning and
+// reports its outcome, which is the opposite contract to SendRaw above and
+// exists for exactly one kind of caller: a River worker.
+//
+// A queue worker's return value is what marks its job row completed, so a
+// worker built on SendRaw records COMPLETED the moment the message is handed
+// to the pool -- before a single byte is dialled. Every failure after that
+// hand-off (a refused recipient, an unreachable server, a shutdown drain that
+// does not finish) then falls outside River's retry and dead-letter machinery
+// and is only logged, so an invitation that was never delivered is
+// indistinguishable from one that was
+// (R4-invitation-email-job-completed-before-delivery-is-attempted, review
+// lineage review-f855997b550a986d).
+//
+// The async pool is NOT wrong for the callers it was built for: a request
+// handler must never put SMTP latency on its response, because that latency
+// is an account-existence timing oracle (D-N). Both contracts are needed, so
+// both are offered, and the caller picks the one whose failure it can act on.
+//
+// ctx bounds the send, capped at sendTimeout: River cancels it on shutdown,
+// which fails the job and leaves it to be retried rather than losing it.
+func (m *AsyncMailer) SendRawSync(ctx context.Context, to, subject, body string) error {
+	ctx, cancel := context.WithTimeout(ctx, m.sendTimeout)
+	defer cancel()
+	return m.sendNow(ctx, sendJob{to: to, subject: subject, body: body})
+}
+
+// Sync adapts an *AsyncMailer to a Mailer whose SendRaw is the synchronous,
+// error-reporting one. The embedded pointer keeps Close (and every other
+// method) available, so a caller that needs the drain on shutdown still has
+// it; only SendRaw is overridden, which is the single method the queue
+// worker's RawSender port names.
+type Sync struct{ *AsyncMailer }
+
+func (s Sync) SendRaw(ctx context.Context, to, subject, body string) error {
+	return s.AsyncMailer.SendRawSync(ctx, to, subject, body)
+}
+
 func (m *AsyncMailer) worker() {
 	defer m.wg.Done()
 	for job := range m.jobs {
-		m.send(job)
+		ctx, cancel := context.WithTimeout(context.Background(), m.sendTimeout)
+		if err := m.sendNow(ctx, job); err != nil {
+			// The async contract has nowhere to return this to: the
+			// caller returned long ago. Logging it is the whole reason
+			// SendRawSync exists for callers that can do better.
+			m.logger.Error("mail: send failed", "error", err)
+		}
+		cancel()
 	}
 }
 
-func (m *AsyncMailer) send(job sendJob) {
+// sendNow is the single SMTP implementation both contracts share.
+func (m *AsyncMailer) sendNow(ctx context.Context, job sendJob) error {
 	msg := gomail.NewMsg()
 	if err := msg.From(m.from); err != nil {
-		m.logger.Error("mail: invalid From address", "error", err)
-		return
+		return fmt.Errorf("mail: invalid From address: %w", err)
 	}
 	if err := msg.To(job.to); err != nil {
-		// job.to itself is never logged -- PII (D-J).
-		m.logger.Error("mail: invalid To address")
-		return
+		// job.to itself is never in the error -- PII (D-J).
+		return errors.New("mail: invalid To address")
 	}
 	msg.Subject(job.subject)
 	msg.SetBodyString(gomail.TypeTextHTML, job.body)
 
-	ctx, cancel := context.WithTimeout(context.Background(), m.sendTimeout)
-	defer cancel()
 	if err := m.client.DialAndSendWithContext(ctx, msg); err != nil {
-		m.logger.Error("mail: send failed", "error", err)
+		return fmt.Errorf("mail: send: %w", err)
 	}
+	return nil
 }
 
 // Close stops accepting new sends and waits for the worker pool to

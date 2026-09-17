@@ -35,6 +35,9 @@ components:
           type: string
         token:
           type: string
+        totp_code:
+          description: Required only when the invited address already has an account with an active TOTP factor; a 403 AUTH_MFA_REQUIRED response means the account needs one.
+          type: string
       required:
         - name
         - password
@@ -998,8 +1001,11 @@ components:
         sent_count:
           format: int32
           type: integer
+        short_code:
+          type: string
       required:
         - sent_count
+        - short_code
       type: object
     ResetPasswordRequest:
       additionalProperties: false

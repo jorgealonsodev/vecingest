@@ -257,11 +257,6 @@ func buildServeDeps(cfg config.Config, holder *secrets.Holder, handlesDB db.Hand
 		// variable into a 100% failure rate at run time with no boot
 		// signal (review lineage review-e72754dc7521b57a).
 		Captcha: captcha.Turnstile{Secret: holder.TurnstileSecret()},
-		// CaptchaOutages is what lets forgot-password degrade open
-		// while siteverify is unreachable. Same in-process counter
-		// family as every other attempt counter here (phase B swaps
-		// all of them for Valkey at once).
-		CaptchaOutages: attempts.NewCounter(nil),
 	}
 	return deps, realMailer, nil
 }

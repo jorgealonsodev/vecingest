@@ -930,3 +930,237 @@ files and much of the rest is this codebase's dense comment style. The session
 explicitly waived the line budget for this work ("No line budget: correctness and
 honest tests come first"). Nothing was compressed, and no test was dropped, to
 approach a number: a `size:exception` is the honest classification.
+
+---
+
+## Correction round 5 — review lineage `review-f855997b550a986d`
+
+Seven findings, and **five of them were defects in round 4's own corrections**.
+That pattern is the finding underneath the findings: round 4 moved password work
+out of the transaction and it ended up running before any validity check; round 4
+made the captcha degradation reachable and it became globally poisonable; round 4
+wired the real mailer and the job then completed before delivery was attempted.
+
+Four of the seven landed in one function. `AcceptInvitation` had accumulated
+account lockout, invitation enumeration lockout, password policy, a network
+breach check, Argon2id, invitation validity, single-use enforcement, membership
+creation, session minting and now a second-factor concern — and every round
+reordered those pieces and broke an invariant somewhere else.
+
+**So this round did not write a seventh set of patches.** Two mechanisms were
+restructured and one was deleted.
+
+### C5.1 — `AcceptInvitation`: the ordering invariant, written down and enforced
+
+Closes `R1-accept-invitation-runs-argon2id-before-any-validity-check` and
+`R3-accept-invitation-status-checked-only-after-credential-work`, which are one
+root seen from two sides.
+
+The handler now carries a four-step ordering invariant as a doc comment, naming
+what each past inversion cost so the next person reordering it knows what they
+are breaking:
+
+1. **Establish the invitation is usable** — resolve, then `invitationUsable`
+   (pending, unexpired, not revoked, not consumed). Nothing expensive precedes it.
+2. **Throttle** — the IP enumeration counter, then the invited address's account
+   lockout (which needs the email step 1 resolved).
+3. **Only then the credential work** — password policy (HIBP), `password.Verify`
+   / `password.Hash`, the second-factor challenge.
+4. **Then the transaction**, holding the writes and nothing else.
+
+`invitationUsable` existed and was never called from accept. Rather than add the
+one call, preview's and accept's shared first leg became ONE function,
+`resolveUsableInvitation` — because the divergence between the two handlers is
+exactly what two consecutive rounds found, and a shared gate cannot diverge by
+editing one handler. A resolved-but-dead invitation now also advances the
+enumeration counter, since it answers the same generic 404 an unresolvable secret
+does and must therefore cost the same budget.
+
+Findings 2 and 3 are now structurally impossible rather than fixed: there is no
+ordering of the function in which credential work precedes the gate, because the
+gate returns the value every later step consumes.
+
+### C5.2 — accept-invitation challenges the second factor, exactly like login
+
+Closes `R1-accept-invitation-mints-a-session-without-the-totp-challenge`.
+
+Accept's linking branch now runs the SAME `challengeTOTP` that guards
+`POST /v1/auth/login`, and `issueSession` receives what that challenge
+established instead of a hardcoded `false`. It also refuses a superadmin account
+outright with the same enumeration-safe 401 login returns, because
+`auth_refresh.go` re-derives the superadmin claim from the users row, so one
+rotation of a session minted here would have handed back a superadmin token that
+never passed the code-gated superadmin route.
+
+`AcceptInvitationRequest` gained `totp_code`; `make gen` re-ran and is idempotent.
+
+### C5.3 — the captcha degradation is REMOVED, and forgot-password fails closed
+
+Closes `R3-captcha-outage-trigger-is-global-and-caller-influenceable` and
+`R4-captcha-degraded-window-accepts-actively-rejected-tokens`.
+
+**Design decision, and it is a removal.** Three implementations of degrade-open
+were reviewed and all three were wrong, in three different ways: the first could
+not engage in the outage shape it existed for; the second keyed on a
+process-global counter fed by two endpoints, so the caller that observed a
+failure and the caller that benefited were different callers; the third still
+decided on that counter rather than on the request's own verdict, so an open
+window also admitted tokens a reachable siteverify had explicitly REFUSED. None
+of it was observable: the counter error was discarded, the degraded response was
+byte-identical to the protected one, and no operator could tell that public-form
+protection had switched itself off.
+
+A keyed-on-own-outcome version (`if cerr != nil { degrade }`) would have been
+correct today. It was still rejected: a mechanism that turns a security control
+off precisely when an attacker may be arranging the condition is the wrong shape
+regardless of which bug you have just removed from it.
+
+- Deleted: `captchaOutageThreshold/Window/Key`, `recordCaptchaOutage`,
+  `captchaUnavailable`, the `Deps.CaptchaOutages` field and its wiring.
+- `ForgotPassword` refuses on `cerr != nil || !ok`, like login.
+- `verifyCaptcha`'s empty-token short-circuit is RESTORED. Round 4 removed it so
+  tokenless requests would feed the outage counter; with no counter its only
+  remaining effect would be to let any caller make this server issue an outbound
+  HTTPS request per request on two unauthenticated endpoints, to reach a refusal
+  the empty string already decides.
+- **Cost, stated:** during a genuine Cloudflare outage, password recovery is
+  unavailable for the outage's duration. What bounds abuse meanwhile is what
+  always did and never depended on Turnstile — `limiter.LoginReset`'s per-IP
+  budget, which wraps the whole group before the handler runs.
+
+### C5.4 — resend re-issues the code, and actually dispatches
+
+Closes `R3-resend-invitation-dispatches-nothing`.
+
+**Design decision.** Resend could not redeliver: only one-way digests are
+persisted (`short_code_hash` is an HMAC-SHA-256 under `ENCRYPTION_KEY`), so the
+plaintext the email renders does not exist at resend time. Two options:
+
+- *Persist a recoverable copy, sealed.* **Rejected.** `hashInviteShortCode`'s own
+  reasoning names the adversary holding this table and says the defence is that a
+  dump contains no usable credential. A decryptable copy of every pending code,
+  in that same table, for fourteen days, gives that adversary back exactly what
+  the digest denies them — unlike the job row, which is transient and only holds
+  codes in flight.
+- *Re-issue on resend, invalidating the previous code.* **Chosen.** It keeps
+  "only one-way digests are persisted" literally true, costs one `UPDATE`, and
+  matches every other credential redelivery here: a forgotten password does not
+  re-send the old reset token, it mints a new one.
+
+`RotateInvitationShortCode` (new sqlc query) rotates the digest and increments
+`sent_count` in one pending-only, tenant-scoped statement, replacing
+`IncrementInvitationSentCount`, which is deleted — it was the statement that
+recorded sends that never happened. The email job is enqueued on the SAME
+transaction (`river.InsertTx`), so the row can never carry a new code whose email
+was never queued. `ResendInvitationResponse` returns the new plaintext once, so
+design D-6's paper/voice delivery path still works.
+
+*Cost, stated:* a neighbour holding the first code on paper finds it stops
+working the moment an administrator resends. That is the honest reading of a
+resend. The opaque token is NOT rotated — the email carries the short code, so
+the token is a channel this endpoint does not redeliver; revoke, not resend, is
+how a leaked invitation is killed.
+
+### C5.5 — the invitation email job no longer completes before delivery
+
+Closes `R4-invitation-email-job-completed-before-delivery-is-attempted`.
+
+`AsyncMailer.SendRaw` returns nil when the bounded pool accepts the message,
+which is right for a request handler (SMTP latency on a response is an
+account-existence timing oracle, D-N) and wrong for a River worker, whose return
+value is what marks the job row completed.
+
+- `AsyncMailer.SendRawSync` performs the whole SMTP transaction and reports it,
+  bounded on the caller's context capped at `sendTimeout` — River cancels it on
+  shutdown, which fails the job and leaves it to be retried rather than lost.
+- `mail.Sync` is that same mailer with `SendRaw` carrying the synchronous
+  contract; `buildWorkerMailer` returns it.
+- `sendNow` is now the single SMTP implementation both contracts share.
+- `queue.RawSender` states the contract explicitly, including that
+  `*mail.AsyncMailer` satisfies it structurally and violates it semantically.
+- `runWorker`'s drain comment is corrected: no invitation job leaves anything in
+  that pool any more.
+
+### TDD Cycle Evidence
+
+| # | Finding | RED (assertion seen failing) | GREEN |
+|---|---|---|---|
+| C5.1 | argon2id / status-after-credential-work | `TestInvitation_AcceptDoesNoCredentialWorkForADeadInvitation` — `expected a revoked invitation to be refused 404 BEFORE any password work runs, got 422 body=map[code:AUTH_PASSWORD_TOO_SHORT_NO_MFA ...]` | pass |
+| C5.2 | TOTP bypass on accept | `TestInvitation_AcceptChallengesTheSecondFactorExactlyLikeLogin` — `expected accept-invitation to refuse a password-only accept ..., got 200 body=map[... "mfa":false ...]` | pass |
+| C5.3a | global/poisonable outage trigger | `TestPublicForm_ForgotPasswordStaysClosedThroughAVerifierOutage` — `round 2: expected forgot-password to stay fail-closed while the verifier is unreachable, got 200 accepted:true` | pass |
+| C5.3b | degraded window accepts rejected tokens | `TestPublicForm_ForgotPasswordNeverAcceptsAnActivelyRejectedToken` — `expected a token the verifier REACHED and REJECTED to be refused regardless of any earlier transport failure, got 200 accepted:true` | pass |
+| C5.4 | resend dispatches nothing | `TestInvitation_ResendRotatesTheCodeAndActuallyDispatches` — `expected resend to enqueue exactly one invitation_email job ... before=1 after=1` | pass |
+| C5.5 | job completed before delivery | `TestSync_SendRaw_ReportsDeliveryFailureToTheCaller` / `TestSync_SendRaw_DeliversBeforeReturning` — `expected the synchronous sender to report an undeliverable message as an error` / `expected the message to have been delivered before SendRaw returned, got 0 message(s)`; plus `TestWorker_DispatchesThroughARealSMTPSenderNotALogSink` — `got *mail.AsyncMailer` | pass |
+
+Every RED above is behavioural: the route was registered, the production logic
+was the one under test, and the failure landed on the assertion naming the
+scenario. C5.5's RED used a deliberate scaffold (`type Sync struct{ *AsyncMailer }`
+with no override, i.e. the defect itself) so the failure was observed on the
+assertion rather than on a compile error.
+
+### Two tests that asserted a vulnerability as correct behaviour
+
+- `TestPublicForm_ForgotPasswordDegradesOpenDuringAVerifierOutage` and
+  `TestPublicForm_ForgotPasswordDegradesOpenWhenClientsHoldNoTokenAtAll` asserted
+  that a verifier outage opens forgot-password for every caller — the finding,
+  written down as expected behaviour. Both are replaced by their inverses.
+- `TestWorker_DispatchesThroughARealSMTPSenderNotALogSink` required
+  `*mail.AsyncMailer` specifically, i.e. required the hand-off semantics that
+  complete the job before delivery. It now requires `mail.Sync`.
+
+### Verification
+
+- `cd api && go test -race ./...` → **all 39 packages `ok`, 0 failures**.
+- `gofumpt -l .` → clean. `golangci-lint run ./...` → **0 issues**.
+  `make lint-scope` → OK.
+- `make gen` → ran; a second run changed no generated artifact (md5-compared).
+- `pnpm --filter app test` → 40 passed / 10 suites.
+- `pnpm run lint` → **environmental failure, pre-existing**: the turbo lint task
+  dies with "Linter process terminated abnormally (possibly out of memory)".
+  Confirmed identical on the unmodified base (`git stash` + re-run), so it is not
+  caused by this work.
+
+### Migrations and configuration
+
+**No migration** (`00011` remains free) and **no new configuration variable**.
+`ENCRYPTION_KEY`, already required for `serve` and `worker`, keys the rotated
+short code's HMAC exactly as before.
+
+### Where this round most likely opened the next defect
+
+Stated in the same spirit the previous rounds should have been:
+
+1. **`ResendInvitation` now hands an admin a fresh plaintext code on demand.**
+   Before, the plaintext existed only in the creation response. An
+   admin/admin_staff can now refresh the code of an invitation they did not
+   create, repeatedly, within their own community. It adds no privilege they did
+   not have (they can create an invitation for any address), and the accept path
+   now demands the target account's password AND its second factor — but this is
+   the first place to look.
+2. **`resolveUsableInvitation` advances the IP enumeration counter on the
+   dead-invitation path for PREVIEW too**, which it did not before. A legitimate
+   user clicking an expired link repeatedly, or several users behind one NAT,
+   burn a shared 10-per-15-minute budget faster than they used to.
+3. **Rotation races an in-flight accept**: a resend while a neighbour is typing
+   their code turns their accept into a 404. Deliberate, documented, still a
+   behaviour change a user can hit.
+4. **The public invitation routes are still registered outside the rate-limited
+   login group** (`RegisterInvitationsPublic` on the bare API). The restructure
+   removed the expensive work these routes could be made to do, which was the
+   finding; it did not add the per-IP budget the other public auth routes have.
+   Left alone deliberately — `limiter.LoginReset`'s 10/min would collide with the
+   enumeration lockout's own threshold of 10/15min — but it remains a real gap.
+5. **`mail.Sync` still starts and holds the async pool** (four idle goroutines in
+   the worker) because it embeds `*AsyncMailer` for `Close`. Harmless, and
+   untidy.
+
+### Size
+
+~1067 authored changed lines (1155 total minus ~88 generated), of which ~456 are
+tests and a large share of the rest is this codebase's dense comment style — the
+ordering invariant and the two design decisions are written out where the next
+reader will hit them. The session's stated budget was 200 lines with
+"correctness wins": a restructure of `AcceptInvitation`, the removal of a whole
+mechanism and a second mailer contract do not fit it. `size:exception` is the
+honest classification. Nothing was compressed and no test was dropped to
+approach a number.

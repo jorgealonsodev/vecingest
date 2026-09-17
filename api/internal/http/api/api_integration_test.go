@@ -113,8 +113,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *handlers.Deps, db.Handles) 
 		// Every test not specifically exercising Turnstile injects the
 		// AlwaysPass double, so none of them depend on network access
 		// (design D-7; this session's explicit instruction).
-		Captcha:        captcha.AlwaysPass{},
-		CaptchaOutages: attempts.NewCounter(nil),
+		Captcha: captcha.AlwaysPass{},
 	}
 
 	registry := health.NewRegistry(health.PostgresCheck{DB: handlesDB.Write})

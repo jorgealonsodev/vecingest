@@ -59,8 +59,15 @@ func TestWorker_DispatchesThroughARealSMTPSenderNotALogSink(t *testing.T) {
 	if _, isLogSink := any(sender).(platmail.LogMailer); isLogSink {
 		t.Fatalf("the worker dispatches invitation email through a log sink: every job would complete without delivering anything")
 	}
-	if _, isReal := any(sender).(*mail.AsyncMailer); !isReal {
-		t.Fatalf("expected the worker's invitation-email sender to be the real SMTP mail.AsyncMailer, got %T", sender)
+	// Not *mail.AsyncMailer, which this assertion used to require:
+	// AsyncMailer.SendRaw returns nil as soon as the bounded pool accepts
+	// the message, so River marked the job COMPLETED before SMTP was
+	// attempted and every later failure fell outside its retry machinery
+	// (R4-invitation-email-job-completed-before-delivery-is-attempted,
+	// review lineage review-f855997b550a986d). The worker needs the
+	// synchronous contract; mail.Sync is the same SMTP mailer carrying it.
+	if _, isSync := any(sender).(mail.Sync); !isSync {
+		t.Fatalf("expected the worker's invitation-email sender to complete delivery before returning (mail.Sync), got %T: a job that completes on hand-off loses the retry the queue exists to provide", sender)
 	}
 }
 

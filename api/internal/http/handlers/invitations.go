@@ -169,10 +169,54 @@ func (d *Deps) ListInvitations(ctx context.Context, _ *dto.ListInvitationsInput,
 // (invitations: Resend And Revoke). Registered via scoped.Invitation:
 // community membership is resolved via the invitation's own
 // community_id (design D-4), never a caller-supplied community id.
+//
+// IT RE-ISSUES THE SHORT CODE. That is a contract change, and it is a design
+// decision rather than an implementation shortcut, so here is the whole of
+// it. Resend used to increment sent_count, write an audit row, return 200 and
+// dispatch nothing (R3-resend-invitation-dispatches-nothing, review lineage
+// review-f855997b550a986d) -- and it could not do otherwise: the invitation
+// row holds only one-way digests, short_code_hash being an HMAC-SHA-256 under
+// ENCRYPTION_KEY, so the plaintext the email template renders does not exist
+// anywhere at resend time.
+//
+// There were exactly two ways out, and they are not close:
+//
+//   - Persist a recoverable copy of the code (sealed the way the job payload
+//     is). REJECTED. hashInviteShortCode below spends fifty lines explaining
+//     that the named adversary is the one holding this table, and that the
+//     defence is that a table dump contains no usable credential. Adding a
+//     decryptable copy of every pending code to that same table, permanently,
+//     to save re-issuing one, gives that adversary back exactly what the
+//     digest was chosen to deny them -- and unlike the job row, which is
+//     transient and only ever holds codes in flight, invitations rows sit
+//     there for fourteen days.
+//   - Re-issue on resend, invalidating the previous code. CHOSEN. It keeps
+//     "only one-way digests are persisted" literally true, it costs one
+//     UPDATE, and it matches what every other credential redelivery in this
+//     codebase does: a forgotten password does not re-send the old reset
+//     token, it mints a new one.
+//
+// The cost is stated plainly: a neighbour who still has the first code, on
+// paper, finds it stops working the moment an administrator resends. That is
+// the honest reading of a resend -- the administrator is asserting the first
+// delivery did not arrive -- and it is strictly better than the alternative
+// this replaces, which was an endpoint reporting success while delivering
+// nothing at all.
+//
+// What resend does NOT rotate is the opaque token: the email carries the
+// short code (mail/templates/invitation.html), so the token is a separate
+// delivery channel that this endpoint does not re-deliver and therefore has
+// no reason to invalidate. Revoke, not resend, is how an invitation whose
+// secrets leaked is killed.
 func (d *Deps) ResendInvitation(ctx context.Context, in *dto.ResendInvitationInput, membership authz.Membership) (*dto.ResendInvitationOutput, error) {
 	invitationID, err := uuid.Parse(in.InvitationID)
 	if err != nil {
 		return nil, apperr.New(400, apperr.CodeValidation, "invalid id", nil)
+	}
+
+	rawShortCode, err := invitations.GenerateShortCode()
+	if err != nil {
+		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
 
 	tx, err := d.DB.Write.Begin(ctx)
@@ -182,8 +226,8 @@ func (d *Deps) ResendInvitation(ctx context.Context, in *dto.ResendInvitationInp
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := db.New(tx)
 
-	sentCount, err := q.IncrementInvitationSentCount(ctx, db.IncrementInvitationSentCountParams{
-		ID: invitationID, CommunityID: membership.CommunityID(),
+	rotated, err := q.RotateInvitationShortCode(ctx, db.RotateInvitationShortCodeParams{
+		ID: invitationID, CommunityID: membership.CommunityID(), ShortCodeHash: d.hashInviteShortCode(rawShortCode),
 	})
 	if err != nil {
 		if isNoRows(err) {
@@ -191,10 +235,28 @@ func (d *Deps) ResendInvitation(ctx context.Context, in *dto.ResendInvitationInp
 		}
 		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
+	if !rotated.Email.Valid {
+		return nil, apperr.New(422, apperr.CodeValidation, "this invitation has no email address to resend to", nil)
+	}
+
+	// The enqueue shares the transaction with the rotation (river.InsertTx,
+	// design D-6), so the row can never end up carrying a new code whose
+	// email was never queued, nor a queued email for a rotation that rolled
+	// back. This is the same coupling CreateInvitation has, and it is the
+	// thing whose ABSENCE here was the finding.
+	if d.Queue != nil {
+		if err := d.Queue.EnqueueInvitationEmail(ctx, tx, invitations.EmailArgs{
+			InvitationID: invitationID,
+			Email:        rotated.Email.String,
+			ShortCode:    rawShortCode,
+		}); err != nil {
+			return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+		}
+	}
 
 	callerID := membership.UserID()
 	communityID := membership.CommunityID()
-	after, _ := json.Marshal(map[string]any{"invitation_id": invitationID, "sent_count": sentCount})
+	after, _ := json.Marshal(map[string]any{"invitation_id": invitationID, "sent_count": rotated.SentCount, "short_code_rotated": true})
 	if _, err := audit.Append(ctx, tx, d.clock(), audit.Entry{
 		UserID: &callerID, CommunityID: &communityID, Action: "invitation.resend", Entity: "invitation", EntityID: &invitationID, After: after,
 	}); err != nil {
@@ -205,7 +267,10 @@ func (d *Deps) ResendInvitation(ctx context.Context, in *dto.ResendInvitationInp
 		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
 
-	return &dto.ResendInvitationOutput{Body: dto.ResendInvitationResponse{SentCount: sentCount}}, nil
+	return &dto.ResendInvitationOutput{Body: dto.ResendInvitationResponse{
+		SentCount: rotated.SentCount,
+		ShortCode: rawShortCode,
+	}}, nil
 }
 
 // RevokeInvitation implements DELETE /v1/invitations/:id (invitations:
@@ -265,24 +330,9 @@ func (d *Deps) PreviewInvitation(ctx context.Context, in *dto.PreviewInvitationI
 	}
 
 	q := db.New(d.DB.Write)
-	inv, err := d.resolveInvitationSecret(ctx, q, in.Body.Token, in.Body.ShortCode)
+	inv, err := d.resolveUsableInvitation(ctx, q, key, in.Body.Token, in.Body.ShortCode)
 	if err != nil {
-		if errors.Is(err, errInvitationSecretMissing) || errors.Is(err, errInvitationSecretAmbiguous) {
-			return nil, apperr.New(400, apperr.CodeValidation, "exactly one of token or short_code is required", nil)
-		}
-		if isNoRows(err) {
-			_, _ = d.InviteAttempts.Fail(ctx, key, inviteLockoutWindow)
-			return nil, invitationNotFound()
-		}
-		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
-	}
-	_ = q.IncrementInvitationFailedAttempts(ctx, db.IncrementInvitationFailedAttemptsParams{ID: inv.ID, CommunityID: inv.CommunityID})
-
-	if !invitationUsable(inv, d.clock().Now()) {
-		// design D-6: "Unresolvable, expired, revoked and blocked all
-		// return the same generic 404 body, so the endpoint is not an
-		// existence oracle."
-		return nil, invitationNotFound()
+		return nil, err
 	}
 
 	community, err := q.GetCommunityByID(ctx, inv.CommunityID)
@@ -303,6 +353,37 @@ func (d *Deps) PreviewInvitation(ctx context.Context, in *dto.PreviewInvitationI
 // (invitations: Accept Creates Or Links An Account Without Revealing
 // Prior Existence; Fourteen-Day Expiry And Single Use). It is
 // unauthenticated, exactly like PreviewInvitation.
+//
+// ORDERING INVARIANT -- read this before moving anything in this function.
+// Four review rounds have each reordered these steps and each broken a
+// different property doing it, so the order is the design, not an accident of
+// how it was written:
+//
+//  1. ESTABLISH THE INVITATION IS USABLE. Resolve the secret, then
+//     invitationUsable: pending, unexpired, not revoked, not consumed.
+//     NOTHING EXPENSIVE MAY PRECEDE THIS. Everything below it costs either a
+//     network round trip (HIBP), a deliberately slow memory-hard hash
+//     (Argon2id), or somebody else's lockout budget, on an endpoint any
+//     caller can reach.
+//  2. THROTTLE. The enumeration counter first (it keys on the address alone
+//     and gates step 1), then this invitation's own account lockout, which
+//     needs the email step 1 resolved.
+//  3. ONLY THEN THE CREDENTIAL WORK: password policy, password.Verify or
+//     password.Hash, and the second-factor challenge.
+//  4. THEN THE TRANSACTION, holding the writes and nothing else.
+//
+// What each inversion cost, so the next reader does not have to rediscover
+// it: credential work above step 1 made every revoked, expired or already-
+// consumed invitation an unbounded Argon2id-plus-HIBP amplifier and let a
+// DEAD invitation keep driving the invited account's lockout
+// (R1-accept-invitation-runs-argon2id-before-any-validity-check,
+// R3-accept-invitation-status-checked-only-after-credential-work); a
+// transaction above step 3 pinned a primary write connection and a row lock
+// across all of it (R3-accept-invitation-holds-write-tx-across-password-work).
+//
+// Single use still comes from the conditional UPDATE in step 4 and NOT from
+// step 1's read: step 1 is a cheap gate that rejects the dead invitations
+// early, the UPDATE is the authority that settles concurrent accepts.
 func (d *Deps) AcceptInvitation(ctx context.Context, in *dto.AcceptInvitationInput) (*dto.AcceptInvitationOutput, error) {
 	ip := clientIP(ctx)
 	key := inviteLockoutKey(ip)
@@ -318,35 +399,41 @@ func (d *Deps) AcceptInvitation(ctx context.Context, in *dto.AcceptInvitationInp
 		return nil, apperr.New(400, apperr.CodeValidation, "consent is required", nil)
 	}
 
-	// EVERYTHING up to the Begin below runs OUTSIDE a transaction, on
-	// purpose (R3-accept-invitation-holds-write-tx-across-password-work,
-	// review lineage review-c4efc3f92d076299). This endpoint is
-	// unauthenticated and public, and the work between here and the
-	// transaction is the expensive kind: a password policy whose
-	// production wiring reaches HIBP over the network, plus Argon2id,
-	// which is slow by design. The handler used to open the transaction
-	// first and take the invitation row lock via the failed-attempts
-	// UPDATE before any of it, so each request pinned a primary write
-	// connection and a row lock for that whole duration -- a cheap
-	// denial of service against the primary pool that needed nothing
-	// but a valid short code.
-	//
-	// Nothing here writes, so there is nothing to roll back; the
-	// transaction below still covers every write as one unit.
+	// Step 1. Nothing writes between here and the transaction below, so
+	// there is nothing to roll back; d.DB.Write is used for the reads only
+	// because this flow must read its own writes.
 	readQ := db.New(d.DB.Write)
-
-	inv, err := d.resolveInvitationSecret(ctx, readQ, in.Body.Token, in.Body.ShortCode)
+	inv, err := d.resolveUsableInvitation(ctx, readQ, key, in.Body.Token, in.Body.ShortCode)
 	if err != nil {
-		if errors.Is(err, errInvitationSecretMissing) || errors.Is(err, errInvitationSecretAmbiguous) {
-			return nil, apperr.New(400, apperr.CodeValidation, "exactly one of token or short_code is required", nil)
-		}
-		if isNoRows(err) {
-			_, _ = d.InviteAttempts.Fail(ctx, key, inviteLockoutWindow)
-			return nil, invitationNotFound()
-		}
-		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+		return nil, err
+	}
+	unitID, ok := pgtypeUUIDValue(inv.UnitID)
+	if !ok {
+		return nil, apperr.New(500, apperr.CodeInternal, "invitation has no unit assigned", nil)
 	}
 
+	// Step 2, second leg. The invited address is the invitation's, never the
+	// caller's, and the linking branch below is a credential-guessing
+	// surface, so it is throttled by the SAME account lockout
+	// POST /v1/auth/login uses -- keyed on email+IP, with its escalating
+	// block window and its victim alert -- alongside the invitation
+	// enumeration counter. Both run: they protect different things
+	// (invitation-secret enumeration vs. this account's credentials).
+	// Checking it HERE rather than after the account lookup means a locked
+	// account stops costing an HIBP round trip per attempt.
+	accountLocked, lerr := d.Lockout.IsLocked(ctx, inv.Email.String, ip)
+	if lerr != nil {
+		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+	}
+	if accountLocked {
+		return nil, apperr.New(429, apperr.CodeTooManyAttempts, "too many attempts, try again later", nil)
+	}
+
+	// Step 3. The policy runs on BOTH branches, deliberately: running it
+	// only where a new password is being set would make a policy-violating
+	// password answer 422 for an unknown address and 401 for a known one,
+	// which is precisely the prior-existence disclosure this endpoint's
+	// requirement forbids.
 	if perr := d.PasswordPolicy.Validate(ctx, in.Body.Password, false); perr != nil {
 		var pe *password.PolicyError
 		if errors.As(perr, &pe) {
@@ -355,17 +442,12 @@ func (d *Deps) AcceptInvitation(ctx context.Context, in *dto.AcceptInvitationInp
 		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
 
-	unitID, ok := pgtypeUUIDValue(inv.UnitID)
-	if !ok {
-		return nil, apperr.New(500, apperr.CodeInternal, "invitation has no unit assigned", nil)
-	}
-
 	// Resolve WHICH account this accept is for, and prove the caller may
-	// use it, before taking any lock. newPasswordHash is non-empty only
-	// on the create branch.
+	// use it. newPasswordHash is non-empty only on the create branch.
 	var (
-		userID          uuid.UUID
-		newPasswordHash string
+		userID           uuid.UUID
+		newPasswordHash  string
+		mfaAuthenticated bool
 	)
 	existing, err := readQ.GetUserByEmail(ctx, inv.Email.String)
 	switch {
@@ -376,29 +458,9 @@ func (d *Deps) AcceptInvitation(ctx context.Context, in *dto.AcceptInvitationInp
 		// admin/admin_staff mint a session for an arbitrary existing
 		// account (review lineage review-0e1833930adf141a). Linking an
 		// existing account therefore requires that account's OWN
-		// password, verified through the SAME primitive Login uses.
+		// credentials, verified through the SAME primitives Login uses.
 		// A mismatch returns before any write happens at all, so the
-		// invitation stays usable for the genuine owner's next attempt
-		// -- the same guarantee the old rollback gave, now without
-		// needing a rollback.
-		//
-		// Because the short code stays replayable either way, this
-		// branch is a credential-guessing surface and MUST be
-		// throttled by the SAME account lockout POST /v1/auth/login
-		// uses -- keyed on email+IP, with its escalating block window
-		// and its victim alert -- not by the invitation enumeration
-		// counter alone, which is per-address, coarser, silent, and
-		// blind to which account is being guessed (review lineage
-		// review-e72754dc7521b57a). Both counters run: they protect
-		// different things (invitation-secret enumeration vs. this
-		// account's credentials).
-		accountLocked, lerr := d.Lockout.IsLocked(ctx, inv.Email.String, ip)
-		if lerr != nil {
-			return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
-		}
-		if accountLocked {
-			return nil, apperr.New(429, apperr.CodeTooManyAttempts, "too many attempts, try again later", nil)
-		}
+		// invitation stays usable for the genuine owner's next attempt.
 		if ok, _ := password.Verify(ctx, existing.PasswordHash, in.Body.Password); !ok {
 			_, _ = d.InviteAttempts.Fail(ctx, key, inviteLockoutWindow)
 			// accountExists is unconditionally true here: this branch
@@ -406,10 +468,33 @@ func (d *Deps) AcceptInvitation(ctx context.Context, in *dto.AcceptInvitationInp
 			_, _ = d.Lockout.RecordFailure(ctx, inv.Email.String, ip, true)
 			return nil, invalidCredentials()
 		}
+		if existing.IsSuperadmin {
+			// Enumeration-safe, and the same refusal Login makes for the
+			// same reason: a superadmin has no path through this endpoint
+			// to satisfy the separate, code-gated superadmin login, and
+			// auth_refresh re-derives the superadmin claim from the users
+			// row, so one rotation of a session minted here would hand
+			// back a superadmin token that never passed that route.
+			_, _ = d.Lockout.RecordFailure(ctx, inv.Email.String, ip, true)
+			return nil, invalidCredentials()
+		}
+		// The second factor, through the SAME challengeTOTP that guards
+		// POST /v1/auth/login. Accept issues a full session, so an account
+		// with an ACTIVE factor must present its code here too -- otherwise
+		// the two session-minting routes disagree and a caller holding a
+		// stolen password gets through the door that does not ask
+		// (R1-accept-invitation-mints-a-session-without-the-totp-challenge,
+		// review lineage review-f855997b550a986d). An account with no
+		// factor is untouched, exactly as on login.
+		mfaAuthenticated, err = d.challengeTOTP(ctx, readQ, existing, in.Body.TOTPCode)
+		if err != nil {
+			return nil, err
+		}
 		userID = existing.ID
 	case isNoRows(err):
 		// Argon2id, deliberately slow -- which is exactly why it runs
-		// here and not inside the transaction below.
+		// here and not inside the transaction below, and why nothing
+		// reaches it until the invitation has been proven usable.
 		newPasswordHash, err = password.Hash(in.Body.Password)
 		if err != nil {
 			return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
@@ -418,7 +503,7 @@ func (d *Deps) AcceptInvitation(ctx context.Context, in *dto.AcceptInvitationInp
 		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
 
-	// --- From here on, and only from here on, a write transaction. It
+	// Step 4. From here on, and only from here on, a write transaction. It
 	// covers the single-use claim, the account/membership writes and the
 	// audit entry as one unit, and nothing slow runs inside it.
 	tx, err := d.DB.Write.Begin(ctx)
@@ -428,18 +513,12 @@ func (d *Deps) AcceptInvitation(ctx context.Context, in *dto.AcceptInvitationInp
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := db.New(tx)
 
-	if err := q.IncrementInvitationFailedAttempts(ctx, db.IncrementInvitationFailedAttemptsParams{ID: inv.ID, CommunityID: inv.CommunityID}); err != nil {
-		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
-	}
-
 	// design D-6: "Single use is enforced by the write, not by a prior
 	// read" -- this conditional UPDATE is what actually rejects a second
-	// accept or an accept past expiry; zero rows ⇒ 409. It is unaffected
-	// by the reordering above precisely because the guarantee never came
-	// from how long the transaction was held: a concurrent accept that
-	// read the same row before either transaction opened still loses
-	// here, and TestInvitation_ConcurrentAcceptsOfTheSameCodeYieldExactly
-	// OneSuccess proves it.
+	// accept or an accept past expiry; zero rows ⇒ 409. A concurrent accept
+	// that passed step 1 against the same row still loses here, and
+	// TestInvitation_ConcurrentAcceptsOfTheSameCodeYieldExactlyOneSuccess
+	// proves it.
 	if _, err := q.AcceptInvitation(ctx, db.AcceptInvitationParams{ID: inv.ID, CommunityID: inv.CommunityID}); err != nil {
 		if isNoRows(err) {
 			return nil, apperr.New(409, apperr.CodeConflict, "invitation is no longer available", nil)
@@ -493,17 +572,58 @@ func (d *Deps) AcceptInvitation(ctx context.Context, in *dto.AcceptInvitationInp
 		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
 
-	// mfaAuthenticated is false: accepting an invitation proves a
-	// password (or creates one), never a second factor. An invitation
-	// only ever grants owner or tenant (invitations.role CHECK), roles
-	// the mandatory-TOTP gate does not apply to, so this costs the new
-	// member nothing -- and if one of them is later made an admin, the
-	// gate correctly makes them log in again with a code.
-	sessionOut, err := d.issueSession(ctx, db.New(d.DB.Write), userID, false, false, in.Body.DeviceName, in.Body.Platform, ip)
+	// mfaAuthenticated is whatever the challenge above established: true
+	// when this accept presented a valid code, false on the create branch
+	// (a brand-new account has no factor yet) and for an existing account
+	// that has none. It is never hardcoded, because the session this issues
+	// is an ordinary session and the mandatory-TOTP gate reads exactly this
+	// fact off it.
+	sessionOut, err := d.issueSession(ctx, db.New(d.DB.Write), userID, false, mfaAuthenticated, in.Body.DeviceName, in.Body.Platform, ip)
 	if err != nil {
 		return nil, err
 	}
 	return &dto.AcceptInvitationOutput{SetCookie: sessionOut.SetCookie, Body: sessionOut.Body}, nil
+}
+
+// resolveUsableInvitation is step 1 of AcceptInvitation's ordering invariant,
+// and PreviewInvitation's identical first leg: resolve exactly one of
+// token/short_code to its row, record the resolution, and reject anything that
+// is not still pending and unexpired.
+//
+// It exists as ONE function because the asymmetry between these two handlers
+// is what the last two review rounds found: preview checked invitationUsable
+// immediately after resolution and accept never called it at all, so the
+// expensive endpoint was the unguarded one. A shared gate makes that
+// divergence impossible to reintroduce by editing one handler.
+//
+// A resolved-but-dead invitation advances the enumeration counter, exactly
+// like an unresolvable secret: both answer the same generic 404 (design D-6 --
+// the endpoint is not an existence oracle), so both must cost the caller the
+// same budget, or replaying one known-dead code is free forever.
+func (d *Deps) resolveUsableInvitation(ctx context.Context, q *db.Queries, key, rawToken, rawShortCode string) (db.Invitation, error) {
+	inv, err := d.resolveInvitationSecret(ctx, q, rawToken, rawShortCode)
+	if err != nil {
+		if errors.Is(err, errInvitationSecretMissing) || errors.Is(err, errInvitationSecretAmbiguous) {
+			return db.Invitation{}, apperr.New(400, apperr.CodeValidation, "exactly one of token or short_code is required", nil)
+		}
+		if isNoRows(err) {
+			_, _ = d.InviteAttempts.Fail(ctx, key, inviteLockoutWindow)
+			return db.Invitation{}, invitationNotFound()
+		}
+		return db.Invitation{}, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+	}
+
+	// Gate evidence, not the gate: the lockout itself is the IP-scoped
+	// AttemptCounter above (design D-6, IncrementInvitationFailedAttempts'
+	// own doc comment). Best-effort, so a bookkeeping failure never decides
+	// whether a valid invitation may be used.
+	_ = q.IncrementInvitationFailedAttempts(ctx, db.IncrementInvitationFailedAttemptsParams{ID: inv.ID, CommunityID: inv.CommunityID})
+
+	if !invitationUsable(inv, d.clock().Now()) {
+		_, _ = d.InviteAttempts.Fail(ctx, key, inviteLockoutWindow)
+		return db.Invitation{}, invitationNotFound()
+	}
+	return inv, nil
 }
 
 // inviteLocked reports whether key has already reached the enumeration
