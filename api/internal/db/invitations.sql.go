@@ -13,12 +13,109 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const getInvitationByID = `-- name: GetInvitationByID :one
-SELECT id, community_id, unit_id, email, role, token_hash, short_code_hash, status, expires_at, accepted_at, sent_count, failed_attempts, created_at, updated_at FROM invitations WHERE id = $1
+const acceptInvitation = `-- name: AcceptInvitation :one
+UPDATE invitations SET status = 'accepted', accepted_at = now(), updated_at = now()
+WHERE id = $1 AND community_id = $2 AND status = 'pending' AND expires_at > now()
+RETURNING id
 `
 
-func (q *Queries) GetInvitationByID(ctx context.Context, id uuid.UUID) (Invitation, error) {
-	row := q.db.QueryRow(ctx, getInvitationByID, id)
+type AcceptInvitationParams struct {
+	ID          uuid.UUID `json:"id"`
+	CommunityID uuid.UUID `json:"community_id"`
+}
+
+// AcceptInvitation implements design D-6's single-use write: the status
+// transition only succeeds when the invitation is still pending and
+// unexpired, so a concurrent or repeated accept observes zero rows
+// rather than racing a prior read.
+func (q *Queries) AcceptInvitation(ctx context.Context, arg AcceptInvitationParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, acceptInvitation, arg.ID, arg.CommunityID)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const getInvitationByID = `-- name: GetInvitationByID :one
+SELECT id, community_id, unit_id, email, role, token_hash, short_code_hash, status, expires_at, accepted_at, sent_count, failed_attempts, created_at, updated_at FROM invitations WHERE id = $1 AND community_id = $2
+`
+
+type GetInvitationByIDParams struct {
+	ID          uuid.UUID `json:"id"`
+	CommunityID uuid.UUID `json:"community_id"`
+}
+
+// GetInvitationByID is tenant-scoped by both id and community_id: the
+// caller's community membership was already resolved and role-checked
+// by scoped.Community/scoped.Invitation before this query ever runs,
+// but the explicit community_id predicate is the same defense-in-depth
+// unit_members.sql's three-bound queries already establish.
+func (q *Queries) GetInvitationByID(ctx context.Context, arg GetInvitationByIDParams) (Invitation, error) {
+	row := q.db.QueryRow(ctx, getInvitationByID, arg.ID, arg.CommunityID)
+	var i Invitation
+	err := row.Scan(
+		&i.ID,
+		&i.CommunityID,
+		&i.UnitID,
+		&i.Email,
+		&i.Role,
+		&i.TokenHash,
+		&i.ShortCodeHash,
+		&i.Status,
+		&i.ExpiresAt,
+		&i.AcceptedAt,
+		&i.SentCount,
+		&i.FailedAttempts,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getInvitationByShortCodeHash = `-- name: GetInvitationByShortCodeHash :one
+SELECT id, community_id, unit_id, email, role, token_hash, short_code_hash, status, expires_at,
+    accepted_at, sent_count, failed_attempts, created_at, updated_at
+FROM invitations WHERE short_code_hash = $1
+`
+
+func (q *Queries) GetInvitationByShortCodeHash(ctx context.Context, shortCodeHash []byte) (Invitation, error) {
+	row := q.db.QueryRow(ctx, getInvitationByShortCodeHash, shortCodeHash)
+	var i Invitation
+	err := row.Scan(
+		&i.ID,
+		&i.CommunityID,
+		&i.UnitID,
+		&i.Email,
+		&i.Role,
+		&i.TokenHash,
+		&i.ShortCodeHash,
+		&i.Status,
+		&i.ExpiresAt,
+		&i.AcceptedAt,
+		&i.SentCount,
+		&i.FailedAttempts,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getInvitationByTokenHash = `-- name: GetInvitationByTokenHash :one
+SELECT id, community_id, unit_id, email, role, token_hash, short_code_hash, status, expires_at,
+    accepted_at, sent_count, failed_attempts, created_at, updated_at
+FROM invitations WHERE token_hash = $1
+`
+
+// GetInvitationByTokenHash and GetInvitationByShortCodeHash back the
+// unauthenticated preview/accept flow (invitations spec: "Preview
+// Endpoint Is POST"; "Accept Creates Or Links An Account"). Both are
+// global-uniqueness lookups by design (token_hash/short_code_hash are
+// each UNIQUE across every community), so neither takes a tenant
+// parameter -- the caller has no community context yet at this point in
+// the flow, which is exactly why the invitation row itself is what
+// supplies it (authz.ResolveCommunityViaInvitation, used by the
+// AUTHENTICATED resend/revoke routes, is a completely separate path).
+func (q *Queries) GetInvitationByTokenHash(ctx context.Context, tokenHash []byte) (Invitation, error) {
+	row := q.db.QueryRow(ctx, getInvitationByTokenHash, tokenHash)
 	var i Invitation
 	err := row.Scan(
 		&i.ID,
@@ -43,13 +140,59 @@ const getInvitationCommunityID = `-- name: GetInvitationCommunityID :one
 SELECT community_id FROM invitations WHERE id = $1
 `
 
-// Invitation resolver (design D-4): an {invitationId} route resolves
-// community membership via the invitation's own owning community_id.
+// Invitation resolver (design D-4): a {invitationId} route resolves
+// community membership via the invitation's own owning community_id,
+// never a caller-supplied value. Returns the community_id regardless of
+// status: a revoked/accepted/blocked invitation is still tied to a real
+// community for cross-tenant isolation purposes.
 func (q *Queries) GetInvitationCommunityID(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, getInvitationCommunityID, id)
 	var community_id uuid.UUID
 	err := row.Scan(&community_id)
 	return community_id, err
+}
+
+const incrementInvitationFailedAttempts = `-- name: IncrementInvitationFailedAttempts :exec
+UPDATE invitations SET failed_attempts = failed_attempts + 1, updated_at = now() WHERE id = $1 AND community_id = $2
+`
+
+type IncrementInvitationFailedAttemptsParams struct {
+	ID          uuid.UUID `json:"id"`
+	CommunityID uuid.UUID `json:"community_id"`
+}
+
+// IncrementInvitationFailedAttempts records that a preview/accept call
+// RESOLVED to this real invitation row (design D-6: "invitations.
+// failed_attempts is still incremented, but only when the code resolved
+// to a real invitation, and it is gate evidence rather than the
+// mechanism"). It is called unconditionally on resolution, independent
+// of whether the call goes on to succeed -- the enumeration lockout
+// itself is enforced entirely by the IP+device AttemptCounter, never by
+// this column (invitations spec: "failed_attempts alone does not
+// enforce the lockout"). community_id is bound from the JUST-RESOLVED
+// row (the caller always has it in hand at this point), so this is a
+// genuine tenant filter, not merely a textual one.
+func (q *Queries) IncrementInvitationFailedAttempts(ctx context.Context, arg IncrementInvitationFailedAttemptsParams) error {
+	_, err := q.db.Exec(ctx, incrementInvitationFailedAttempts, arg.ID, arg.CommunityID)
+	return err
+}
+
+const incrementInvitationSentCount = `-- name: IncrementInvitationSentCount :one
+UPDATE invitations SET sent_count = sent_count + 1, updated_at = now()
+WHERE id = $1 AND community_id = $2 AND status = 'pending'
+RETURNING sent_count
+`
+
+type IncrementInvitationSentCountParams struct {
+	ID          uuid.UUID `json:"id"`
+	CommunityID uuid.UUID `json:"community_id"`
+}
+
+func (q *Queries) IncrementInvitationSentCount(ctx context.Context, arg IncrementInvitationSentCountParams) (int32, error) {
+	row := q.db.QueryRow(ctx, incrementInvitationSentCount, arg.ID, arg.CommunityID)
+	var sent_count int32
+	err := row.Scan(&sent_count)
+	return sent_count, err
 }
 
 const insertInvitation = `-- name: InsertInvitation :one
@@ -138,4 +281,51 @@ func (q *Queries) ListInvitationsByCommunityID(ctx context.Context, communityID 
 		return nil, err
 	}
 	return items, nil
+}
+
+const revokeInvitation = `-- name: RevokeInvitation :one
+UPDATE invitations SET status = 'revoked', updated_at = now()
+WHERE id = $1 AND community_id = $2 AND status = 'pending'
+RETURNING id
+`
+
+type RevokeInvitationParams struct {
+	ID          uuid.UUID `json:"id"`
+	CommunityID uuid.UUID `json:"community_id"`
+}
+
+// RevokeInvitation implements DELETE /v1/invitations/:id (invitations
+// spec: "Resend And Revoke"). Only a still-pending invitation can be
+// revoked; zero rows returned means it was already accepted/revoked/
+// blocked, which the handler maps to a 409 rather than silently
+// reporting success.
+func (q *Queries) RevokeInvitation(ctx context.Context, arg RevokeInvitationParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, revokeInvitation, arg.ID, arg.CommunityID)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const sweepExpiredInvitations = `-- name: SweepExpiredInvitations :execrows
+UPDATE invitations SET status = 'blocked', updated_at = now()
+WHERE status = 'pending' AND expires_at <= now()
+`
+
+// SweepExpiredInvitations implements the daily invitations.expire job
+// (design D-6; PRD §7.4 job table; task 6.18/6.19). It transitions
+// past-expiry pending rows to 'blocked' -- the only CHECK-permitted
+// terminal value left once 'accepted' and 'revoked' are excluded, since
+// the invitations_status_check constraint (00008_invitations.sql) does
+// not include an 'expired' value: expiry is reported at READ time via
+// derivation (status='pending' AND expires_at<=now() reads as
+// "expired"), and this sweep is the bookkeeping step that makes the
+// stored column converge for reporting once the derivation window has
+// passed, matching design D-6's "expired is derived at read time and
+// never stored, and the daily invitations.expire job sweeps."
+func (q *Queries) SweepExpiredInvitations(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, sweepExpiredInvitations)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

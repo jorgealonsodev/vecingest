@@ -366,4 +366,128 @@ naming the scenario, then reverting — per this run's explicit instruction, not
 
 ### Status
 
-25/25 Phase 1 tasks complete. 9/9 Phase 2 tasks complete. 11/11 Phase 3 tasks complete. **13/13 Phase 4 tasks complete (this run). 11/11 Phase 5 tasks complete (this run).** Phase 6 (WU-4, invitations) NOT started per this run's explicit instruction to stop after Phase 5.
+25/25 Phase 1 tasks complete. 9/9 Phase 2 tasks complete. 11/11 Phase 3 tasks complete. 13/13 Phase 4 tasks complete. 11/11 Phase 5 tasks complete. **20/20 Phase 6 tasks complete (this run).** Phase 7 (WU-5, Turnstile/non-superadmin TOTP) NOT started per this run's explicit instruction to stop after Phase 6.
+
+## Work Unit: WU-4 / PR4 — Phase 6: Invitations
+
+**Status**: Phase 6 (tasks 6.1–6.20) COMPLETE. Phase 7+ NOT started per this
+run's explicit instruction.
+
+**Branch**: `feature/m1-communities-pr4-invitations` (base: `feature/m1-communities-pr3-units`,
+which already carries PR1+PR2+PR3). Not merged, not pushed — delivery is the
+user's decision.
+
+### Completed Tasks (Phase 6, 6.1–6.20)
+
+All 20 tasks marked `[x]` in `tasks.md`.
+
+- [x] 6.1/6.2 Invitation creation: hashed secrets, plaintext exposed exactly once
+- [x] 6.3/6.4 Explicit `status` column + read-time expiry derivation
+- [x] 6.5/6.6 Fourteen-day expiry, single use enforced by the conditional UPDATE
+- [x] 6.7/6.8 `POST /v1/invitations/preview`, never GET; OpenAPI-walk proves no GET query credential
+- [x] 6.9/6.10 `POST /v1/auth/accept-invitation` — create-or-link, identical response shape
+- [x] 6.11/6.12 Resend (`sent_count`) and revoke (`status=revoked`)
+- [x] 6.13/6.14 IP+device enumeration lockout, independent of the per-invitation `failed_attempts` evidence column
+- [x] 6.15/6.16 Cross-tenant isolation via `scoped.Invitation` (new constructor, mirroring `scoped.Unit`)
+- [x] 6.17 `mail.RenderInvitation` + `river.InsertTx` inside the creation transaction
+- [x] 6.18/6.19 Daily `invitations.expire` sweep, wired as a real River periodic job
+- [x] 6.20 `make gen` — openapi.yaml, sqlc code, TS client, Zod schemas; run twice, byte-identical
+
+### Files Changed
+
+| File | Action | What Was Done |
+|------|--------|----------------|
+| `api/internal/domain/invitations/queue.go` | Created | `EmailArgs`, `Queue` port (design's Interfaces/Contracts table: "Queue — first producers in the project") — kept in a domain package, not `handlers`, so neither `handlers` nor `internal/platform/queue` needs to import the other's layer for the shared payload type |
+| `api/internal/domain/invitations/shortcode.go` | Created | `GenerateShortCode` — 8-char `crypto/rand` code from the unambiguous alphabet (excludes `O/0/I/1`) |
+| `api/internal/authz/authz.go` | Modified | Added `InvitationScoped` interface (design D-4's `{invitationId}` route shape) |
+| `api/internal/authz/resolve.go` | Modified | Added `GetInvitationCommunityID` to `Querier`; added `ResolveCommunityViaInvitation` (mirrors `ResolveCommunityViaUnit`) |
+| `api/internal/authz/scoped/register.go` | Modified | Added `Invitation[I,O,PI]` generic constructor, stamping `Marker{Kind: KindCommunity}` like `Unit` does |
+| `api/internal/authz/scoped/register_test.go` | Modified | Extended `fakeQuerier` with `invitationCommunities`/`GetInvitationCommunityID` |
+| `api/internal/authz/scoped/invitation_register_test.go` | Created | 3 resolver-mechanism tests for `scoped.Invitation`, mirroring `unit_register_test.go` |
+| `api/internal/db/queries/invitations.sql` | Modified | Extended the Phase-1 scaffold (`InsertInvitation`, `GetInvitationByID`, `GetInvitationCommunityID`, `ListInvitationsByCommunityID`) with `GetInvitationByTokenHash`, `GetInvitationByShortCodeHash`, `AcceptInvitation`, `RevokeInvitation`, `IncrementInvitationSentCount`, `IncrementInvitationFailedAttempts`, `SweepExpiredInvitations` |
+| `api/internal/db/*.sql.go`, `querier.go` | Generated | `go tool sqlc generate` |
+| `api/cmd/lintscope/main.go`, `main_test.go` | Modified | Added the ADDITIVE `queryExceptions` (`file:queryName`) map design.md anticipates for task 8.6, populated with exactly `invitations.sql:SweepExpiredInvitations` (a genuinely cross-tenant maintenance sweep) — see Deviations #2. Table-level `exceptions["audit_log"]` is UNTOUCHED; its retirement stays Phase 8's own task |
+| `api/migrations/schema/00004_river.go` | Modified | **Bugfix**, not a new migration (same version number 4, never run against a real deployment): `grantRiverTables` now also grants `USAGE, SELECT` on every `river_%` sequence, not just tables — see Issues Found #1 |
+| `api/internal/mail/templates.go`, `templates/invitation.html` | Modified/Created | `RenderInvitation`, following `RenderPasswordReset` exactly (task 6.17) |
+| `api/internal/platform/queue/queue.go` | Modified | `NewClient` gained a `sender RawSender` parameter; registers `InvitationEmailWorker` and `invitationsExpireWorker`, plus a daily `PeriodicJob` for the sweep |
+| `api/internal/platform/queue/queue_test.go` | Modified | Updated the one `NewClient` call site (`nil` sender) — the M0 "river_job must stay empty" assertion still holds since neither `NewClient` nor `Start` ever calls `Insert` |
+| `api/internal/platform/queue/invitations.go` | Created | `invitationEmailJobArgs`/`InvitationEmailWorker` (consumer, renders+sends via `RawSender`), `RiverInvitationQueue` (adapts `*river.Client[pgx.Tx]` to `invitations.Queue` via `InsertTx`), `invitationsExpireArgs`/`invitationsExpireWorker` (the periodic sweep) |
+| `api/cmd/vecingest/worker.go` | Modified | Updated `queue.NewClient` call site: passes `platform/mail.LogMailer{}` as the sender — zero new required config for the `worker` subcommand (see Deviations #3) |
+| `api/cmd/vecingest/serve.go` | Modified | `buildServeDeps` builds a producer-only River client (`queue.NewClient` over `handlesDB.Write.Pool()`, real `AsyncMailer` as sender, never `.Start()`-ed); wires `Deps.Queue` and `Deps.InviteAttempts` |
+| `api/internal/http/dto/invitations.go` | Created | Every invitation DTO: `CreateInvitationRequest/Response`, `ListInvitationsResponse`, `Resend`/`RevokeInvitationResponse`, `PreviewInvitationRequest/Response`, `AcceptInvitationRequest` + `AcceptInvitationOutput` (mirrors `LoginOutput`) |
+| `api/internal/http/handlers/deps.go` | Modified | Added `Deps.InviteAttempts mfa.AttemptCounter` (reused structural interface, no fourth declaration) and `Deps.Queue invitations.Queue` |
+| `api/internal/http/handlers/invitations.go` | Created | `CreateInvitation`, `ListInvitations`, `ResendInvitation`, `RevokeInvitation`, `PreviewInvitation`, `AcceptInvitation`, the IP+device lockout helpers, `RegisterInvitations` (authenticated) + `RegisterInvitationsPublic` (preview/accept, never inside the Bearer-authenticated group — see Deviations #1) |
+| `api/internal/http/api/api.go` | Modified | Wired `RegisterInvitations(authGroup, d)` and `RegisterInvitationsPublic(hapi, d)` |
+| `api/internal/http/api/api_integration_test.go` | Modified | `newTestServer` now builds a real River client (`queue.NewClient` + `queue.RiverInvitationQueue`) and `InviteAttempts` for every test in the package, not a fake double — invitation creation's `river.InsertTx` is exercised for real against Testcontainers Postgres, no SMTP server involved |
+| `api/internal/http/api/invitation_test.go` | Created | 10 integration tests, one per spec requirement, covering every Phase 6 scenario |
+| `api/openapi/openapi.yaml`, `packages/shared/src/client/openapi-types.ts`, `packages/shared/src/schemas/index.ts` | Generated | `make gen` |
+
+### TDD Cycle Evidence (Phase 6)
+
+Every RED below was produced by PLANTING a targeted logic violation in already-passing
+code (route registration always left intact), confirming the SPECIFIC test fails at the
+assertion naming the scenario, then reverting and re-confirming GREEN — per this run's
+explicit instruction. Each row also answers "if this handler were gutted, would any test
+fail?" for every write endpoint.
+
+| Endpoint / behavior | Test | What was PLANTED (production code, not test) | RED assertion observed | GREEN after revert |
+|---|---|---|---|---|
+| `POST .../invitations` (create) | `TestInvitation_CreationExposesShortCodeExactlyOnceAndStoresOnlyHashes` | `InsertInvitation` never called — handler returns a fabricated, never-persisted response (the exact Phase-3-shaped "echoes input without persisting" attack this run's instructions named) | `invitation_test.go:132: get invitation by id: no rows in result set` | ✅ reverted, PASS |
+| `POST /v1/auth/accept-invitation` (member creation) | `TestInvitation_AcceptCreatesOrLinksAnAccount` | `InsertUnitMember` call short-circuited to `if false {...}` — account/session still succeed, membership silently skipped | `invitation_test.go:390: expected a unit_member row linking the new user to the unit, got members: []` | ✅ reverted, PASS |
+| `POST .../resend` | `TestInvitation_ResendAndRevoke` | `IncrementInvitationSentCount` call short-circuited; `sent_count` hardcoded to 1 | `invitation_test.go:459: expected sent_count=2 after resend, got map[... sent_count:1]` | ✅ reverted, PASS |
+| `DELETE /v1/invitations/:id` (revoke) | `TestInvitation_ResendAndRevoke` | `RevokeInvitation` UPDATE call wrapped in `if false {...}` — handler returns 200 without touching the row | `invitation_test.go:477: expected preview of a revoked invitation to be rejected, got 200 body=map[...status 200...]` | ✅ reverted, PASS |
+| Single-use / expiry enforcement (accept) | `TestInvitation_ExpiryAndSingleUseEnforced` | The conditional `AcceptInvitation` UPDATE's error was discarded (`_, _ = q.AcceptInvitation(...)`), removing the zero-rows ⇒ 409 check entirely | `invitation_test.go:250: expected accept on an expired invitation to be rejected, got 200 body=map[...access_token:...]` (a real session was issued for an EXPIRED invitation) | ✅ reverted, PASS |
+| Enumeration lockout (IP+device) | `TestInvitation_EnumerationLockoutIsIPAndDeviceScoped` | `inviteLocked` hardcoded to always return `false` | `invitation_test.go:521: expected 429 on the 11th attempt from the same locked ip+device pair, got 404` | ✅ reverted, PASS |
+| Daily sweep (`invitations.expire`) | `TestInvitation_DailySweepTransitionsExpiredPendingRows` | `SweepExpiredInvitations`'s SQL `WHERE` clause replaced with `WHERE false` (planted in the `.sql` source, regenerated via sqlc, reverted the same way) | `invitation_test.go:683: expected at least 1 row swept, got 0` | ✅ reverted + regenerated, PASS |
+
+**Requirements with two halves, both covered** (this run's explicit "add the missing half"
+instruction): "Accept Creates Or Links An Account" needed BOTH the new-account and the
+existing-account branch exercised in `TestInvitation_AcceptCreatesOrLinksAnAccount`
+(not just one, which is exactly Phase 3's own documented gap shape) — both are present,
+plus a third assertion that both response shapes match key-for-key. "Explicit Status
+Column" needed all three of its scenarios (created-pending, accept-transitions, and
+pending-past-expiry-reads-as-expired-before-sweep) — all three are in
+`TestInvitation_ExplicitStatusColumnAndReadTimeExpiry`.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `cd api && go test -race ./internal/http/api/... -run TestInvitation -v` → **10/10 pass** (37.2s, includes the Retry-After header assertion); `cd api && go test ./internal/authz/scoped/... -v` → all pass including the 3 new `scoped.Invitation` tests |
+| Runtime harness command/scenario and exact result | Testcontainers Postgres 17, real HTTP round-trip through the actual chi/huma router (`bearerAuthAndRateLimit` → `scoped.Community`/`scoped.Invitation` → resolver → handler for the authenticated routes; plain unauthenticated routing for preview/accept); a REAL River client backed by the same Testcontainers Postgres for the `river.InsertTx` enqueue path (no fake Queue double) — `TestInvitation_EmailJobEnqueuedInCreationTransaction` queries `river_job` directly and asserts a real row appeared; no SMTP server anywhere in the test path (`platform/mail.LogMailer` as the registered worker's sender) |
+| Rollback boundary | Revert `api/internal/http/handlers/invitations.go`, `api/internal/http/dto/invitations.go`, `api/internal/http/api/invitation_test.go`, `api/internal/domain/invitations/`, `api/internal/platform/queue/invitations.go`; revert the `RegisterInvitations`/`RegisterInvitationsPublic` lines in `api/internal/http/api/api.go`; revert `authz.go`/`resolve.go`/`scoped/register.go`'s `Invitation`-related additions and `scoped/register_test.go`'s `fakeQuerier` extension; revert the `invitations.sql` additions and re-run `go tool sqlc generate`; revert `deps.go`'s `InviteAttempts`/`Queue` fields; revert `queue.go`'s `sender` parameter and periodic-job wiring (and its two call sites in `serve.go`/`worker.go`); revert `mail/templates.go`'s `RenderInvitation` and `templates/invitation.html`; revert `cmd/lintscope/main.go`'s `queryExceptions` map; **the one exception is `migrations/schema/00004_river.go`'s sequence-grant fix, which should NOT be rolled back independently of the rest — it is a genuine pre-existing bug fix any future producer needs, not invitations-specific** |
+
+### Full-Suite Verification
+
+- `cd api && go build ./...` → clean
+- `cd api && go vet ./...` → clean
+- `cd api && go test -race ./...` → **348/348 pass**, 37 packages (up from Phase 5's 333; +15 new: 10 invitation integration tests, 3 `scoped.Invitation` tests, 1 `cmd/lintscope` query-exception test, 1 `TestNewClient_AcquiresAndReleasesLeadership` unaffected — net +15)
+- `cd api && go run ./cmd/lintscope internal/db/queries migrations/schema` → `OK — every query against a tenant-scoped table references its tenant column`
+- `export PATH="$PATH:$(go env GOPATH)/bin"; gofumpt -l api/` → clean (no files listed)
+- `golangci-lint run ./...` → **0 issues**
+- `gosec -quiet ./...` → **27 issues** — ONE MORE than the documented 26-issue baseline. The +1 is `internal/db/invitations.sql.go:GetInvitationByTokenHash` (G101 "potential hardcoded credentials"), a false positive on a **sqlc-generated** file: gosec pattern-matches the substring "Token" in the generated constant name, the IDENTICAL mechanism already producing the pre-existing, already-accepted baseline findings on `sessions.sql.go:getSessionByRefreshTokenHash` and `password_reset_tokens.sql.go`'s three queries. Generated code cannot carry a `//nolint` from its `.sql` source comment (sqlc does not propagate one), so this is not suppressible the way hand-written findings are — it is the same accepted class of noise, not a new one. **The enforced gate, golangci-lint's embedded gosec, remains at 0 issues**, confirming this is excluded there exactly as intended.
+- `make gen` (openapi-gen + sqlc generate + `pnpm --filter @vecingest/shared build`) → run three times across this session (once mid-work, twice at the end after the Retry-After fix); `git diff --stat` on `openapi.yaml`, the TS client, the Zod schemas → **byte-identical across every run**
+
+### Deviations from Design
+
+1. **Preview/accept are registered via a NEW `RegisterInvitationsPublic(hapi, d)` function**, separate from `RegisterInvitations(authGroup, d)`, rather than one function taking a single `api huma.API` parameter. Design D-6 says these two routes "MUST NOT" go through the Bearer-authenticated flow; `api.go`'s existing `authGroup`/`hapi` split made this the natural place to enforce that separation structurally (a caller cannot even accidentally register them in the wrong group), rather than relying on a comment.
+2. **`cmd/lintscope/main.go` gained the query-level `queryExceptions` (`file:queryName`) map design.md's tenant-scope subsection assigns to task 8.6**, populated with exactly one entry (`invitations.sql:SweepExpiredInvitations`) — introduced now, ahead of schedule, because Phase 6 already needs it: the daily sweep is a genuine, unavoidable cross-tenant maintenance operation (like `ListAuditLogRange`), and `invitations` also has several PROPERLY-scoped queries, so a table-level exception (the only mechanism that existed before this run) would have blanket-exempted all of them. The EXISTING `exceptions["audit_log"]` table-level entry is untouched — its retirement into this same map stays Phase 8's own task (8.5–8.8), not duplicated here. Flagging explicitly per "if you discover the design is wrong or incomplete, note it": the design's own task split assumed this mechanism was needed for the FIRST time in Phase 8; in practice Phase 6 needed it first.
+3. **`invitations.status`'s sweep target is `'blocked'`, never `'expired'`.** PRD §7.4 and design D-6 both use the word "expired"/"caducadas", but the ALREADY-APPLIED `00008_invitations.sql` migration's CHECK constraint is `status IN ('pending','accepted','revoked','blocked')` — there is no `'expired'` value to write. `'blocked'` is the only remaining terminal value once `'accepted'`/`'revoked'` are excluded by meaning. `expired` stays purely a READ-TIME DERIVED value (never stored) for any `pending` row whose `expires_at` has passed, whether or not the sweep has run yet — this is what task 6.3's own scenario ("reads as expired... before the sweep runs") requires, and it is unaffected by which literal terminal value the sweep eventually writes.
+4. **`CreateInvitationRequest.Email` is REQUIRED**, despite `invitations.email` being a nullable column in the migration. `POST /v1/auth/accept-invitation`'s own request body has no email field (per the spec's literal field list: `{token/short_code, name, password, phone?, consent}`), so the invitation's own `email` column is the ONLY way accept can decide "does an account already exist for this person" — Requirement "Accept Creates Or Links An Account" is unimplementable for a null-email invitation. Documented at the point of use (`dto.CreateInvitationRequest`'s doc comment).
+5. **A `unit_id` is REQUIRED on invitation creation**, also stricter than the migration's nullable `unit_id` column, for the identical reason: accept's request has no unit/community field either, so the invitation must already carry the target unit for `InsertUnitMember` to have anything to attach to.
+6. **`AcceptInvitationRequest`/`PreviewInvitationRequest` reuse `X-Platform`/`X-App-Version` as REQUIRED headers**, matching design D-6's "mandatory X-Platform + X-App-Version headers (§7.7)" literally — a request missing either is rejected by huma's own schema validation before the handler ever runs, which is stricter enforcement than a handler-level check would give.
+7. **`invitationManageRoles` (`[admin, admin_staff]`) is used for list/resend/revoke, not just create.** The spec only states an explicit role requirement for CREATION ("Cross-Tenant Isolation" governs list/resend/revoke, not roles); this mirrors `unit-management`'s own precedent (documented there as "a design choice, not a spec requirement") of defaulting administrative-shaped operations to the same role set as creation when the spec is silent.
+
+### Issues Found
+
+1. **Pre-existing bug, NOT introduced by this run's own code, but only surfaced by it**: `migrations/schema/00004_river.go`'s `grantRiverTables` granted `SELECT, INSERT, UPDATE, DELETE` on every `river_*` TABLE but never `USAGE`/`SELECT` on the SEQUENCES backing their identity columns. PostgreSQL treats table privileges and sequence privileges as separate objects; a table-level `GRANT INSERT` does NOT implicitly grant a role the ability to pull the next value from that table's own backing sequence. Every prior M0/M1 phase (through PR3) ran with ZERO real job producers (`queue_test.go`'s own explicit "river_job must stay empty" assertion), so `river.Client.Insert`/`InsertTx` was never actually exercised against the `app_rw` role until task 6.17's `river.InsertTx` call — the first real failure was `ERROR: permission denied for sequence river_job_id_seq (SQLSTATE 42501)`. Fixed by extending the SAME already-embedded Go migration function (version number 4 unchanged) to also grant sequence privileges by the identical `river\_%` name-pattern discovery it already used for tables. This is a bugfix to code that has never run against a real deployment (Checkpoint A has not shipped), not a new migration.
+2. **`failed_attempts`'s exact semantics required a judgment call.** D-6 says it "is still incremented, but only when the code resolved to a real invitation" without stating what "failed" means for a call that otherwise SUCCEEDS. Implemented as: increment on EVERY preview/accept call that resolves a token/short_code to a real row, regardless of the call's ultimate outcome — this is the only reading that makes the spec's own second lockout scenario ("failed_attempts incremented by wrong guesses arriving from 10 different IP+device pairs... an 11th distinct pair is not locked out") buildable at all, since a guess that does NOT resolve has no row to increment in the first place.
+3. **`GetInvitationByTokenHash`/`GetInvitationByShortCodeHash` are two of the few sqlc queries in this codebase with no tenant-column WHERE filter** — legitimate by construction (`token_hash`/`short_code_hash` are each globally UNIQUE, so the predicate can return at most one row regardless of community, identical in spirit to `communities.go`'s own "a query already scoped to one exact id has no other tenant's row to leak" precedent) but satisfied via an explicit column list (not `SELECT *`) rather than a real filter, since there genuinely is no community context available yet at that point in the unauthenticated flow.
+4. **Review workload**: measured authored line count (git diff --stat, excluding sqlc-generated `*.sql.go`/`querier.go`, generated `openapi.yaml`/TS client/Zod artifacts, and `tasks.md`'s own checkbox edits) for this WU-4/PR4 batch is well above the 400-line budget, consistent with `tasks.md`'s own forecast ("WU-6 (invitations, 20 tasks) is the most likely to need re-checking before it is opened") and the PR1/PR2/PR3 precedent. This run's explicit instructions state the 400-line figure is "an advisory planning heuristic, not a cap" for this session; Phase 6 was implemented as one cohesive work unit (splitting create/list from resend/revoke/preview/accept would separate the enumeration lockout from the endpoints it protects, and separate the `river.InsertTx` producer from the `scoped.Invitation` resolver it depends on for cross-tenant isolation). Flagging honestly for the maintainer: a `size:exception` recommendation for PR4, consistent with PR1's/PR3's precedent.
+
+### Review Workload / PR Boundary
+
+- Mode: chained PR slice (`feature-branch-chain`, per `tasks.md`), explicitly authorized to exceed the 400-line budget as an advisory heuristic for this run.
+- Current work unit: WU-4 (Phase 6, tasks 6.1–6.20, this run) — invitations, PR4 (base: `feature/m1-communities-pr3-units`, which already carries PR1+PR2+PR3).
+- Boundary: starts from PR3's tip; ends with a fully green `go test -race ./...` (348/348) including 10 new invitation integration tests, 3 new `scoped.Invitation` tests, and 1 new `cmd/lintscope` test; clean `go vet`/`gofumpt`/`golangci-lint`; no new gosec finding class (one more instance of an already-accepted generated-file false-positive category); a clean, idempotent `make gen`; and a fixed pre-existing River sequence-grant bug that this phase's own first real producer surfaced.
+- Estimated review budget impact: well above 400 authored lines (see Issues Found #4) — recommend `size:exception` for PR4, consistent with the PR1/PR3 precedent.

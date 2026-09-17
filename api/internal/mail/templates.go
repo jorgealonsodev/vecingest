@@ -19,7 +19,33 @@ var templateFS embed.FS
 var (
 	passwordResetTemplate = template.Must(template.ParseFS(templateFS, "templates/password_reset.html"))
 	loginLockoutTemplate  = template.Must(template.ParseFS(templateFS, "templates/login_lockout.html"))
+	invitationTemplate    = template.Must(template.ParseFS(templateFS, "templates/invitation.html"))
 )
+
+// InvitationSubject is the invitation email's fixed subject line
+// (design D-6, following RenderPasswordReset's PasswordResetSubject
+// pattern).
+const InvitationSubject = "You've been invited to Vecingest"
+
+// InvitationData is what invitation.html renders. ShortCode is the
+// plaintext, one-time-visible secret (invitations spec: "the response
+// contains the plaintext short code, and no later read of that
+// invitation returns the plaintext again") -- it reaches this template
+// only via the in-memory background-job payload, never persisted
+// anywhere but the job's own row.
+type InvitationData struct {
+	ShortCode string
+}
+
+// RenderInvitation renders the invitation email body, following
+// RenderPasswordReset exactly (task 6.17).
+func RenderInvitation(data InvitationData) (subject, body string, err error) {
+	var buf bytes.Buffer
+	if err := invitationTemplate.Execute(&buf, data); err != nil {
+		return "", "", fmt.Errorf("mail: render invitation.html: %w", err)
+	}
+	return InvitationSubject, buf.String(), nil
+}
 
 // PasswordResetSubject is the password-reset email's fixed subject
 // line (D-N). The login-lockout alert has no equivalent constant here:

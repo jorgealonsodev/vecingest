@@ -1,5 +1,46 @@
 components:
   schemas:
+    AcceptInvitationRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/AcceptInvitationRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        consent:
+          type: boolean
+        device_name:
+          maxLength: 255
+          type: string
+        name:
+          maxLength: 255
+          minLength: 1
+          type: string
+        password:
+          minLength: 12
+          type: string
+        phone:
+          maxLength: 32
+          type: string
+        platform:
+          enum:
+            - ios
+            - android
+            - web
+          type: string
+        short_code:
+          type: string
+        token:
+          type: string
+      required:
+        - name
+        - password
+        - consent
+        - platform
+      type: object
     AddOfficeMemberRequest:
       additionalProperties: false
       properties:
@@ -245,6 +286,85 @@ components:
         - office_id
         - name
       type: object
+    CreateInvitationRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/CreateInvitationRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        email:
+          format: email
+          type: string
+        role:
+          enum:
+            - owner
+            - tenant
+          type: string
+        unit_id:
+          format: uuid
+          type: string
+      required:
+        - unit_id
+        - email
+        - role
+      type: object
+    CreateInvitationResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/CreateInvitationResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        accepted_at:
+          format: date-time
+          type: string
+        community_id:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        email:
+          type: string
+        expires_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        role:
+          type: string
+        sent_count:
+          format: int32
+          type: integer
+        short_code:
+          type: string
+        status:
+          type: string
+        token:
+          type: string
+        unit_id:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+        - short_code
+        - token
+        - id
+        - community_id
+        - role
+        - status
+        - expires_at
+        - sent_count
+        - created_at
+        - updated_at
+      type: object
     CreateOfficeRequest:
       additionalProperties: false
       properties:
@@ -418,6 +538,46 @@ components:
       required:
         - accepted
       type: object
+    InvitationResponse:
+      additionalProperties: false
+      properties:
+        accepted_at:
+          format: date-time
+          type: string
+        community_id:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        email:
+          type: string
+        expires_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        role:
+          type: string
+        sent_count:
+          format: int32
+          type: integer
+        status:
+          type: string
+        unit_id:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+        - id
+        - community_id
+        - role
+        - status
+        - expires_at
+        - sent_count
+        - created_at
+        - updated_at
+      type: object
     ListCommunitiesResponse:
       additionalProperties: false
       properties:
@@ -436,6 +596,25 @@ components:
             - "null"
       required:
         - communities
+      type: object
+    ListInvitationsResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/ListInvitationsResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        invitations:
+          items:
+            $ref: "#/components/schemas/InvitationResponse"
+          type:
+            - array
+            - "null"
+      required:
+        - invitations
       type: object
     ListOfficeMembersResponse:
       additionalProperties: false
@@ -669,6 +848,48 @@ components:
         - cif
         - created_at
       type: object
+    PreviewInvitationRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/PreviewInvitationRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        short_code:
+          type: string
+        token:
+          type: string
+      type: object
+    PreviewInvitationResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/PreviewInvitationResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        community_id:
+          type: string
+        community_name:
+          type: string
+        expires_at:
+          format: date-time
+          type: string
+        role:
+          type: string
+        unit_id:
+          type: string
+      required:
+        - community_id
+        - community_name
+        - role
+        - expires_at
+      type: object
     ReadyResponse:
       additionalProperties: false
       properties:
@@ -696,6 +917,22 @@ components:
           type: string
         refresh_token:
           type: string
+      type: object
+    ResendInvitationResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/ResendInvitationResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        sent_count:
+          format: int32
+          type: integer
+      required:
+        - sent_count
       type: object
     ResetPasswordRequest:
       additionalProperties: false
@@ -730,6 +967,21 @@ components:
           type: boolean
       required:
         - accepted
+      type: object
+    RevokeInvitationResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/RevokeInvitationResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        status:
+          type: string
+      required:
+        - status
       type: object
     SessionSummary:
       additionalProperties: false
@@ -1071,6 +1323,45 @@ paths:
       summary: Create an office and its first admin user (superadmin only)
       tags:
         - offices
+  /v1/auth/accept-invitation:
+    post:
+      operationId: acceptInvitation
+      parameters:
+        - in: header
+          name: X-Platform
+          schema:
+            type: string
+        - in: header
+          name: X-App-Version
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AcceptInvitationRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+          description: OK
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Accept an invitation, creating or linking an account (public, unauthenticated)
+      tags:
+        - auth
+        - invitations
   /v1/auth/forgot-password:
     post:
       operationId: forgotPassword
@@ -1379,6 +1670,63 @@ paths:
       summary: Update a community (admin/admin_staff only)
       tags:
         - communities
+  /v1/communities/{id}/invitations:
+    get:
+      operationId: listInvitations
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: uuid
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListInvitationsResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: List a community's invitations (admin/admin_staff only)
+      tags:
+        - invitations
+    post:
+      operationId: createInvitation
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: uuid
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInvitationRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateInvitationResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Invite a resident to a community (admin/admin_staff only)
+      tags:
+        - invitations
   /v1/communities/{id}/units:
     post:
       operationId: createUnit
@@ -1518,6 +1866,92 @@ paths:
       summary: Readiness probe
       tags:
         - health
+  /v1/invitations/preview:
+    post:
+      operationId: previewInvitation
+      parameters:
+        - in: header
+          name: X-Platform
+          schema:
+            type: string
+        - in: header
+          name: X-App-Version
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PreviewInvitationRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreviewInvitationResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Preview an invitation by token or short code (public, unauthenticated)
+      tags:
+        - invitations
+  /v1/invitations/{id}:
+    delete:
+      operationId: revokeInvitation
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: uuid
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RevokeInvitationResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Revoke an invitation (admin/admin_staff only)
+      tags:
+        - invitations
+  /v1/invitations/{id}/resend:
+    post:
+      operationId: resendInvitation
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: uuid
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResendInvitationResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Resend an invitation (admin/admin_staff only)
+      tags:
+        - invitations
   /v1/me:
     get:
       operationId: getMe

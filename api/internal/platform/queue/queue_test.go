@@ -24,7 +24,7 @@ func TestNewClient_AcquiresAndReleasesLeadership(t *testing.T) {
 	}
 	handles, superuserDB := testhelpers.AppRWHandles(t)
 
-	client, err := queue.NewClient(handles.Write.Pool(), nil)
+	client, err := queue.NewClient(handles.Write.Pool(), nil, nil)
 	if err != nil {
 		t.Fatalf("queue.NewClient: %v", err)
 	}

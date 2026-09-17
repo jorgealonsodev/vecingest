@@ -8,6 +8,7 @@ import (
 
 	"github.com/jorgealonsodev/vecingest/internal/config"
 	"github.com/jorgealonsodev/vecingest/internal/db"
+	platmail "github.com/jorgealonsodev/vecingest/internal/platform/mail"
 	"github.com/jorgealonsodev/vecingest/internal/platform/queue"
 )
 
@@ -35,7 +36,16 @@ func runWorker(ctx context.Context, _ []string, stdout io.Writer, lookup config.
 	}
 	defer workerDB.Close()
 
-	client, err := queue.NewClient(workerDB.Pool(), nil)
+	// LogMailer, not a real SMTP sender: CommandWorker's config
+	// requirement set (internal/config) deliberately declares no
+	// SMTP_URL/MAIL_FROM -- the worker subcommand has never needed mail
+	// credentials, and M1 does not depend on production SMTP (the paper
+	// short-code path works without a mail server). A deployment that
+	// wants the worker to actually dispatch invitation email wires a
+	// real sender here once that config requirement is added; until
+	// then this keeps the worker's zero-new-required-config contract
+	// intact while still exercising the real render+log path.
+	client, err := queue.NewClient(workerDB.Pool(), nil, platmail.LogMailer{})
 	if err != nil {
 		return fmt.Errorf("worker: build River client: %w", err)
 	}

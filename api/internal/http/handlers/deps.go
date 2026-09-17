@@ -15,6 +15,7 @@ import (
 	"github.com/jorgealonsodev/vecingest/internal/domain/auth/password"
 	"github.com/jorgealonsodev/vecingest/internal/domain/auth/session"
 	"github.com/jorgealonsodev/vecingest/internal/domain/auth/token"
+	"github.com/jorgealonsodev/vecingest/internal/domain/invitations"
 	"github.com/jorgealonsodev/vecingest/internal/platform/cache"
 )
 
@@ -52,6 +53,22 @@ type Deps struct {
 
 	ResetRequester password.ResetRequester
 	TokenIssuer    password.TokenIssuer
+
+	// InviteAttempts is the invitation enumeration-lockout counter
+	// (design D-6: "existing AttemptCounter seam ... key
+	// invite:{ip}:{deviceHash}"). Reuses mfa.AttemptCounter's identical
+	// Fail/Count/Reset shape rather than declaring a fourth structurally
+	// identical interface -- Go's structural typing means
+	// internal/platform/attempts.Counter satisfies all of them with no
+	// adapter, exactly as it already does for Lockout.Counter and
+	// MFACounter.
+	InviteAttempts mfa.AttemptCounter
+	// Queue is the phase-A/B background-job seam invitations touches
+	// for the first time as a real producer (design's Interfaces/
+	// Contracts table). nil is a legitimate value only in a test that
+	// does not exercise invitation creation; production wiring
+	// (buildServeDeps) always sets it.
+	Queue invitations.Queue
 }
 
 func (d *Deps) clock() Clock {

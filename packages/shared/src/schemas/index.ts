@@ -26,6 +26,24 @@ const OfficeResponse = z.object({
   name: z.string(),
   phone: z.string().optional(),
 });
+const AcceptInvitationRequest = z.object({
+  $schema: z.string().url().optional(),
+  consent: z.boolean(),
+  device_name: z.string().max(255).optional(),
+  name: z.string().min(1).max(255),
+  password: z.string().min(12),
+  phone: z.string().max(32).optional(),
+  platform: z.enum(["ios", "android", "web"]),
+  short_code: z.string().optional(),
+  token: z.string().optional(),
+});
+const LoginResponse = z.object({
+  $schema: z.string().url().optional(),
+  access_token: z.string(),
+  csrf_token: z.string().optional(),
+  expires_in: z.number().int(),
+  refresh_token: z.string().optional(),
+});
 const ForgotPasswordRequest = z.object({
   $schema: z.string().url().optional(),
   email: z.string().email(),
@@ -40,13 +58,6 @@ const LoginRequest = z.object({
   email: z.string().email(),
   password: z.string().min(12),
   platform: z.enum(["ios", "android", "web"]),
-});
-const LoginResponse = z.object({
-  $schema: z.string().url().optional(),
-  access_token: z.string(),
-  csrf_token: z.string().optional(),
-  expires_in: z.number().int(),
-  refresh_token: z.string().optional(),
 });
 const RefreshRequest = z
   .object({ $schema: z.string().url(), refresh_token: z.string() })
@@ -145,6 +156,45 @@ const UpdateCommunityRequest = z
     secretary_is_office: z.boolean(),
   })
   .partial();
+const InvitationResponse = z.object({
+  accepted_at: z.string().datetime({ offset: true }).optional(),
+  community_id: z.string(),
+  created_at: z.string().datetime({ offset: true }),
+  email: z.string().optional(),
+  expires_at: z.string().datetime({ offset: true }),
+  id: z.string(),
+  role: z.string(),
+  sent_count: z.number().int(),
+  status: z.string(),
+  unit_id: z.string().optional(),
+  updated_at: z.string().datetime({ offset: true }),
+});
+const ListInvitationsResponse = z.object({
+  $schema: z.string().url().optional(),
+  invitations: z.union([z.array(InvitationResponse), z.null()]),
+});
+const CreateInvitationRequest = z.object({
+  $schema: z.string().url().optional(),
+  email: z.string().email(),
+  role: z.enum(["owner", "tenant"]),
+  unit_id: z.string().uuid(),
+});
+const CreateInvitationResponse = z.object({
+  $schema: z.string().url().optional(),
+  accepted_at: z.string().datetime({ offset: true }).optional(),
+  community_id: z.string(),
+  created_at: z.string().datetime({ offset: true }),
+  email: z.string().optional(),
+  expires_at: z.string().datetime({ offset: true }),
+  id: z.string(),
+  role: z.string(),
+  sent_count: z.number().int(),
+  short_code: z.string(),
+  status: z.string(),
+  token: z.string(),
+  unit_id: z.string().optional(),
+  updated_at: z.string().datetime({ offset: true }),
+});
 const UnitMemberCreateRequest = z.object({
   consent_text_version: z.string().optional(),
   electronic_notifications_consent: z.boolean().optional(),
@@ -220,6 +270,29 @@ const LiveResponse = z.object({
 const ReadyResponse = z.object({
   $schema: z.string().url().optional(),
   ok: z.boolean(),
+});
+const PreviewInvitationRequest = z
+  .object({
+    $schema: z.string().url(),
+    short_code: z.string(),
+    token: z.string(),
+  })
+  .partial();
+const PreviewInvitationResponse = z.object({
+  $schema: z.string().url().optional(),
+  community_id: z.string(),
+  community_name: z.string(),
+  expires_at: z.string().datetime({ offset: true }),
+  role: z.string(),
+  unit_id: z.string().optional(),
+});
+const RevokeInvitationResponse = z.object({
+  $schema: z.string().url().optional(),
+  status: z.string(),
+});
+const ResendInvitationResponse = z.object({
+  $schema: z.string().url().optional(),
+  sent_count: z.number().int(),
 });
 const MeResponse = z.object({
   $schema: z.string().url().optional(),
@@ -306,10 +379,11 @@ const ErrorModel = z
 export const schemas = {
   CreateOfficeRequest,
   OfficeResponse,
+  AcceptInvitationRequest,
+  LoginResponse,
   ForgotPasswordRequest,
   ForgotPasswordResponse,
   LoginRequest,
-  LoginResponse,
   RefreshRequest,
   CSRFTokenResponse,
   ResetPasswordRequest,
@@ -320,6 +394,10 @@ export const schemas = {
   CreateCommunityRequest,
   CommunityDetailResponse,
   UpdateCommunityRequest,
+  InvitationResponse,
+  ListInvitationsResponse,
+  CreateInvitationRequest,
+  CreateInvitationResponse,
   UnitMemberCreateRequest,
   CreateUnitRequest,
   UnitMemberResponse,
@@ -328,6 +406,10 @@ export const schemas = {
   UnitImportResponse,
   LiveResponse,
   ReadyResponse,
+  PreviewInvitationRequest,
+  PreviewInvitationResponse,
+  RevokeInvitationResponse,
+  ResendInvitationResponse,
   MeResponse,
   SessionSummary,
   ListSessionsResponse,

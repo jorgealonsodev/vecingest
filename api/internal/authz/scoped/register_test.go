@@ -32,10 +32,22 @@ type fakeQuerier struct {
 	// unitCommunities maps unitID -> communityID for GetUnitCommunityID
 	// (design D-4: the {unitId} route shape resolves via units.community_id).
 	unitCommunities map[uuid.UUID]uuid.UUID
+	// invitationCommunities maps invitationID -> communityID for
+	// GetInvitationCommunityID (design D-4: the {invitationId} route
+	// shape resolves via invitations.community_id).
+	invitationCommunities map[uuid.UUID]uuid.UUID
 }
 
 func (f *fakeQuerier) GetUnitCommunityID(_ context.Context, unitID uuid.UUID) (uuid.UUID, error) {
 	communityID, ok := f.unitCommunities[unitID]
+	if !ok {
+		return uuid.UUID{}, pgx.ErrNoRows
+	}
+	return communityID, nil
+}
+
+func (f *fakeQuerier) GetInvitationCommunityID(_ context.Context, invitationID uuid.UUID) (uuid.UUID, error) {
+	communityID, ok := f.invitationCommunities[invitationID]
 	if !ok {
 		return uuid.UUID{}, pgx.ErrNoRows
 	}
