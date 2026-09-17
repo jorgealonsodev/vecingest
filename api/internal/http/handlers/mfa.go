@@ -22,6 +22,10 @@ import (
 // everyone else, and the ONLY way an admin/admin_staff without TOTP can
 // ever satisfy the mandatory-TOTP gate (authz.resolve.go), since this
 // route is NOT under a scoped prefix and therefore never itself gated.
+// That last property is also why the gate is an enrollment
+// precondition rather than second-factor authentication: a
+// password-only session reaches this route and can enroll itself past
+// the gate. See requireMFAForAdminRoles' KNOWN INCOMPLETE note.
 // Re-enrolling an ALREADY-ACTIVE factor is refused (409): silently
 // replacing a live secret would strand the caller's current
 // authenticator app with no warning.
@@ -91,16 +95,27 @@ func (d *Deps) VerifyMFA(ctx context.Context, in *dto.MFAVerifyInput) (*dto.MFAV
 	}
 
 	if !row.EnabledAt.Valid {
-		return d.confirmMFAEnrollment(ctx, q, userID, in.Body.Code)
+		return d.confirmMFAEnrollment(ctx, userID, in.Body.Code)
 	}
 	return d.verifyActiveMFA(ctx, row, userID, in.Body.Code)
 }
 
-// confirmMFAEnrollment handles VerifyMFA's first-activation branch:
-// mfa.ConfirmEnrollment, then (only on success) recovery-code
-// generation and the mfa.enroll audit entry.
-func (d *Deps) confirmMFAEnrollment(ctx context.Context, q *db.Queries, userID uuid.UUID, code string) (*dto.MFAVerifyOutput, error) {
-	ok, err := mfa.ConfirmEnrollment(ctx, d.DB.Write, d.clock(), d.MFAKey, userID, code)
+// confirmMFAEnrollment handles VerifyMFA's first-activation branch.
+// The enabled_at write, recovery-code persistence and the mfa.enroll
+// audit entry are ONE transaction (review lineage
+// review-0e1833930adf141a): as three separate writes, a failure after
+// activation left the account with a live second factor, an empty
+// recovery-code set, and no way back -- the retry took the
+// already-active branch, which never issues codes. Rolling activation
+// back instead keeps the retry on this branch.
+func (d *Deps) confirmMFAEnrollment(ctx context.Context, userID uuid.UUID, code string) (*dto.MFAVerifyOutput, error) {
+	tx, err := d.DB.Write.Begin(ctx)
+	if err != nil {
+		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	ok, err := mfa.ConfirmEnrollment(ctx, tx, d.clock(), d.MFAKey, userID, code)
 	if err != nil {
 		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
@@ -108,21 +123,15 @@ func (d *Deps) confirmMFAEnrollment(ctx context.Context, q *db.Queries, userID u
 		return nil, apperr.New(401, apperr.CodeTOTPInvalid, "invalid TOTP code", nil)
 	}
 
-	rawCodes, hashedCodes, err := mfa.GenerateRecoveryCodes()
+	rawCodes, hashedCodes, err := d.recoveryCodes()
 	if err != nil {
 		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
-	if err := q.SetUserMFARecoveryCodes(ctx, db.SetUserMFARecoveryCodesParams{
+	if err := db.New(tx).SetUserMFARecoveryCodes(ctx, db.SetUserMFARecoveryCodesParams{
 		UserID: userID, RecoveryCodesHashed: hashedCodes,
 	}); err != nil {
 		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
-
-	tx, err := d.DB.Write.Begin(ctx)
-	if err != nil {
-		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
 
 	before, _ := json.Marshal(map[string]any{"enabled": false})
 	after, _ := json.Marshal(map[string]any{"enabled": true})

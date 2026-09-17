@@ -2,8 +2,6 @@ package handlers
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -42,9 +40,9 @@ var invitationManageRoles = []authz.Role{authz.RoleAdmin, authz.RoleAdminStaff}
 // deadlines/majorities/percentages).
 const invitationExpiry = 14 * 24 * time.Hour
 
-// inviteLockoutThreshold/Window implement the IP+device enumeration
-// lockout (invitations spec: "Enumeration Lockout Is IP+Device Scoped,
-// Not Per-Invitation"; design D-6: "Threshold 10 per 15 minutes").
+// inviteLockoutThreshold/Window implement the enumeration lockout
+// (invitations spec: "Enumeration Lockout Is IP+Device Scoped, Not
+// Per-Invitation"; design D-6: "Threshold 10 per 15 minutes").
 const (
 	inviteLockoutThreshold = 10
 	inviteLockoutWindow    = 15 * time.Minute
@@ -254,7 +252,7 @@ func (d *Deps) RevokeInvitation(ctx context.Context, in *dto.RevokeInvitationInp
 // separately by TestInvitations_NoGetOperationAcceptsATokenOrShortCodeQueryParameter).
 func (d *Deps) PreviewInvitation(ctx context.Context, in *dto.PreviewInvitationInput) (*dto.PreviewInvitationOutput, error) {
 	ip := clientIP(ctx)
-	key := inviteLockoutKey(ip, in.XPlatform, in.XAppVersion)
+	key := inviteLockoutKey(ip)
 
 	locked, err := d.inviteLocked(ctx, key)
 	if err != nil {
@@ -305,7 +303,7 @@ func (d *Deps) PreviewInvitation(ctx context.Context, in *dto.PreviewInvitationI
 // unauthenticated, exactly like PreviewInvitation.
 func (d *Deps) AcceptInvitation(ctx context.Context, in *dto.AcceptInvitationInput) (*dto.AcceptInvitationOutput, error) {
 	ip := clientIP(ctx)
-	key := inviteLockoutKey(ip, in.XPlatform, in.XAppVersion)
+	key := inviteLockoutKey(ip)
 
 	locked, err := d.inviteLocked(ctx, key)
 	if err != nil {
@@ -367,6 +365,19 @@ func (d *Deps) AcceptInvitation(ctx context.Context, in *dto.AcceptInvitationInp
 	existing, err := q.GetUserByEmail(ctx, inv.Email.String)
 	switch {
 	case err == nil:
+		// The invitation secret proves the CHANNEL, never the identity:
+		// its creator chose the email freely and got the plaintext short
+		// code back, so linking on the secret alone would let any
+		// admin/admin_staff mint a session for an arbitrary existing
+		// account (review lineage review-0e1833930adf141a). Linking an
+		// existing account therefore requires that account's OWN
+		// password, verified through the SAME primitive Login uses.
+		// The whole accept rolls back on mismatch, so the invitation
+		// stays usable for the genuine owner's next attempt.
+		if ok, _ := password.Verify(ctx, existing.PasswordHash, in.Body.Password); !ok {
+			_, _ = d.InviteAttempts.Fail(ctx, key, inviteLockoutWindow)
+			return nil, invalidCredentials()
+		}
 		userID = existing.ID
 	case isNoRows(err):
 		hash, herr := password.Hash(in.Body.Password)
@@ -438,14 +449,17 @@ func (d *Deps) inviteLocked(ctx context.Context, key string) (bool, error) {
 	return count >= inviteLockoutThreshold, nil
 }
 
-// inviteLockoutKey builds the IP+device lockout key (design D-6:
-// "invite:{ip}:{deviceHash}, where deviceHash is a SHA-256 of the
-// mandatory X-Platform + X-App-Version headers"). The device leg is
-// client-supplied and spoofable by design (D-6): it only narrows
-// collateral damage behind a shared NAT, the IP leg is load-bearing.
-func inviteLockoutKey(ip, platform, appVersion string) string {
-	sum := sha256.Sum256([]byte(platform + ":" + appVersion))
-	return "invite:" + ip + ":" + hex.EncodeToString(sum[:])
+// inviteLockoutKey builds the enumeration lockout key from the ADDRESS
+// leg alone. D-6 originally appended a hash of the X-Platform +
+// X-App-Version headers, but that same text calls the device leg
+// spoofable and the address leg load-bearing: mixing a client-chosen
+// value into the key let one caller mint a fresh zero counter per
+// request simply by varying its app version, which defeated the
+// threshold outright (review lineage review-0e1833930adf141a). Those
+// headers stay on the request as evidence/telemetry; they never key
+// the counter.
+func inviteLockoutKey(ip string) string {
+	return "invite:" + ip
 }
 
 // invitationsQuerier is the narrow subset of *db.Queries the invitation

@@ -97,6 +97,24 @@ func isNoRows(err error) bool { return errors.Is(err, pgx.ErrNoRows) }
 // ({communityId}, {officeId}, {unitId} or {invitationId} all end up
 // here). owner/tenant (and any role neither admin nor admin_staff) are
 // untouched -- TOTP stays optional for them.
+//
+// KNOWN INCOMPLETE -- do not read this as second-factor authentication
+// (review lineage review-0e1833930adf141a,
+// R1-mandatory-totp-gate-ineffective). IsUserMFAEnabled is a DURABLE
+// per-account flag (user_mfa.enabled_at IS NOT NULL), not per-session
+// evidence, and POST /v1/auth/login accepts no TOTP code for a
+// non-superadmin. An attacker holding only an admin's PASSWORD
+// therefore gets a session that satisfies this gate whenever the
+// victim has enrolled; where the victim has not enrolled, the ungated
+// /v1/me/mfa/enroll + /v1/me/mfa/verify pair lets that same
+// password-only session enroll a fresh factor and pass. What this gate
+// does enforce is an enrollment PRECONDITION: an admin/admin_staff
+// cannot use their scope until a second factor exists on the account.
+// Closing it requires carrying the second-factor fact on the session
+// (a login TOTP challenge or an explicit step-up, an mfa claim on the
+// access token, and this check reading that claim). That work is NOT
+// in this correction; it was deferred over its 200-line budget and is
+// documented here rather than left looking effective.
 func requireMFAForAdminRoles(ctx context.Context, role Role, userID uuid.UUID) error {
 	if role != RoleAdmin && role != RoleAdminStaff {
 		return nil

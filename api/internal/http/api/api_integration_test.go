@@ -39,14 +39,21 @@ const (
 )
 
 // xffTransport injects a two-hop X-Forwarded-For header on every
-// request so the dev-only ClientIPFromXFFTrustedProxies(1) fallback
-// resolves a stable, realistic "client" IP (203.0.113.9) instead of ""
-// -- exercising the exact D-H mechanism a real reverse-proxy deployment
-// would, not a bypass of it.
+// request that does not already carry one, so the dev-only
+// ClientIPFromXFFTrustedProxies(1) fallback resolves a stable,
+// realistic "client" IP (203.0.113.9) instead of "" -- exercising the
+// exact D-H mechanism a real reverse-proxy deployment would, not a
+// bypass of it. It must NOT overwrite a header the caller set: it used
+// to, which silently collapsed every doFromIPClient "distinct address"
+// onto one address and left the address leg of the invitation
+// enumeration lockout untested (review lineage
+// review-0e1833930adf141a).
 type xffTransport struct{ base http.RoundTripper }
 
 func (t xffTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	r.Header.Set("X-Forwarded-For", "10.0.0.1, 203.0.113.9")
+	if r.Header.Get("X-Forwarded-For") == "" {
+		r.Header.Set("X-Forwarded-For", "10.0.0.1, 203.0.113.9")
+	}
 	return t.base.RoundTrip(r)
 }
 

@@ -391,7 +391,12 @@ func TestInvitation_AcceptCreatesOrLinksAnAccount(t *testing.T) {
 	}
 
 	// Scenario 2: accept with an existing account links the membership
-	// without duplicating the user.
+	// without duplicating the user. REWRITTEN as part of the review
+	// lineage review-0e1833930adf141a correction: this scenario used to
+	// assert that the linking branch succeeds on ANY policy-valid
+	// password, which is exactly the account-takeover the review found.
+	// The password field is now load-bearing -- a wrong one is refused
+	// and mints nothing, and only the account's OWN password links it.
 	existingEmail := "invite-accept-existing@example.com"
 	existingUserID := createUser(t, handlesDB, existingEmail, false)
 	unitID2 := seedUnit(t, handlesDB, communityID)
@@ -400,9 +405,18 @@ func TestInvitation_AcceptCreatesOrLinksAnAccount(t *testing.T) {
 	}, auth)
 	code2, _ := createBody2["short_code"].(string)
 
+	resp, wrongBody := doFromIPClient(t, client, srv.URL+"/v1/auth/accept-invitation", http.MethodPost, "203.0.113.72",
+		map[string]any{
+			"short_code": code2, "name": "Existing Account User", "password": "a-different-valid-password-1",
+			"consent": true, "platform": "ios",
+		}, inviteHeaders("android", "2.0.0"))
+	if resp.StatusCode < 400 || wrongBody["access_token"] != nil {
+		t.Fatalf("expected accept for an existing account with the WRONG password to be refused with no session, got %d body=%v", resp.StatusCode, wrongBody)
+	}
+
 	resp, body2 := doFromIPClient(t, client, srv.URL+"/v1/auth/accept-invitation", http.MethodPost, "203.0.113.71",
 		map[string]any{
-			"short_code": code2, "name": "Existing Account User", "password": "correct-horse-battery-staple-1",
+			"short_code": code2, "name": "Existing Account User", "password": testPassword,
 			"consent": true, "platform": "ios",
 		}, inviteHeaders("android", "2.0.0"))
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
@@ -700,5 +714,95 @@ func TestInvitation_DailySweepTransitionsExpiredPendingRows(t *testing.T) {
 	}
 	if futureRow.Status != "pending" {
 		t.Fatalf("expected the still-valid pending invitation to remain untouched by the sweep, got %s", futureRow.Status)
+	}
+}
+
+// invitations (security correction, review lineage
+// review-0e1833930adf141a: R1-accept-invitation-account-takeover /
+// R3-accept-links-existing-account-without-credential-proof). An
+// invitation secret alone MUST NOT mint a session for a pre-existing
+// account: invitation creation takes a fully caller-supplied email and
+// hands the creating admin the plaintext short code back, so linking
+// without credential proof turns any admin/admin_staff into a
+// cross-tenant account-takeover primitive.
+func TestInvitation_AcceptRequiresTheExistingAccountsOwnPassword(t *testing.T) {
+	srv, deps, handlesDB := newTestServer(t)
+	client := newClient(srv, nil)
+
+	officeID, adminID := seedOfficeWithAdmin(t, handlesDB, "invite-takeover-admin@example.com")
+	communityID := seedCommunity(t, handlesDB, officeID, "Invite Takeover Community")
+	unitID := seedUnit(t, handlesDB, communityID)
+	adminToken := mintAccessToken(t, deps, handlesDB, adminID, false)
+	auth := map[string]string{"Authorization": "Bearer " + adminToken}
+
+	victimEmail := "invite-takeover-victim@example.com"
+	victimID := createUser(t, handlesDB, victimEmail, false)
+
+	_, createBody := doJSON(t, client, http.MethodPost, srv.URL+"/v1/communities/"+communityID.String()+"/invitations", map[string]any{
+		"unit_id": unitID.String(), "email": victimEmail, "role": "owner",
+	}, auth)
+	shortCode, _ := createBody["short_code"].(string)
+
+	// The exploit: the invitation's creator accepts it themselves,
+	// supplying a password of their own choosing.
+	resp, body := doFromIPClient(t, client, srv.URL+"/v1/auth/accept-invitation", http.MethodPost, "203.0.113.60",
+		map[string]any{
+			"short_code": shortCode, "name": "Attacker", "password": "attacker-chosen-password-1",
+			"consent": true, "platform": "ios",
+		}, inviteHeaders("ios", "1.0.0"))
+	if resp.StatusCode < 400 {
+		t.Fatalf("expected accept for a pre-existing account WITHOUT that account's password to be rejected, got %d body=%v", resp.StatusCode, body)
+	}
+	if body["access_token"] != nil || body["refresh_token"] != nil {
+		t.Fatalf("expected NO session to be minted for the victim account, got tokens in %v", body)
+	}
+	members, err := db.New(handlesDB.Write).ListUnitMembersByUnitID(t.Context(), db.ListUnitMembersByUnitIDParams{UnitID: unitID, CommunityID: communityID})
+	if err != nil {
+		t.Fatalf("list unit members: %v", err)
+	}
+	for _, m := range members {
+		if m.UserID == victimID {
+			t.Fatalf("expected the rejected accept to leave the victim account unlinked, got membership %v", m)
+		}
+	}
+
+	// The rejected attempt rolled back rather than consuming the
+	// invitation, so the real account owner can still accept it.
+	resp, body = doFromIPClient(t, client, srv.URL+"/v1/auth/accept-invitation", http.MethodPost, "203.0.113.61",
+		map[string]any{
+			"short_code": shortCode, "name": "Victim", "password": testPassword,
+			"consent": true, "platform": "ios",
+		}, inviteHeaders("ios", "1.0.0"))
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected accept with the account's OWN password to succeed, got %d body=%v", resp.StatusCode, body)
+	}
+	if body["access_token"] == nil {
+		t.Fatalf("expected the legitimate owner's accept to still issue a session, got %v", body)
+	}
+}
+
+// invitations (security correction, review lineage
+// review-0e1833930adf141a: R3-enumeration-lockout-keyed-on-client-
+// controlled-headers). The lockout key must be keyed on the address
+// leg alone: the device leg is fully client-supplied, so including it
+// let a single caller reset the counter on every request.
+func TestInvitation_EnumerationLockoutIgnoresClientControlledDeviceHeaders(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	client := newClient(srv, nil)
+
+	ip := "203.0.113.150"
+	for i := 0; i < 10; i++ {
+		resp, body := doFromIPClient(t, client, srv.URL+"/v1/invitations/preview", http.MethodPost, ip,
+			map[string]any{"short_code": fmt.Sprintf("ROTATE%02d", i)},
+			inviteHeaders("ios", fmt.Sprintf("%d.0.0", i)))
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("expected 404 for guess %d against a nonexistent code, got %d body=%v", i, resp.StatusCode, body)
+		}
+	}
+
+	resp, body := doFromIPClient(t, client, srv.URL+"/v1/invitations/preview", http.MethodPost, ip,
+		map[string]any{"short_code": "ROTATE99"}, inviteHeaders("android", "99.0.0"))
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected the 11th attempt from the SAME address to be locked out despite a different X-Platform/X-App-Version pair on every request, got %d body=%v", resp.StatusCode, body)
 	}
 }

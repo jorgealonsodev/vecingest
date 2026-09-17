@@ -1,7 +1,9 @@
 package api_test
 
 import (
+	"errors"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -9,6 +11,7 @@ import (
 	"github.com/pquerna/otp/totp"
 
 	"github.com/jorgealonsodev/vecingest/internal/db"
+	"github.com/jorgealonsodev/vecingest/internal/domain/auth/mfa"
 )
 
 // validTOTPCode computes a real, currently-valid TOTP code for
@@ -236,5 +239,74 @@ func TestMFA_AdminWithoutTOTPBlockedFromAdminScopedRoute(t *testing.T) {
 	}, auth)
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		t.Fatalf("expected success once TOTP is active, got %d body=%v", resp.StatusCode, body)
+	}
+}
+
+// auth-mfa-totp (security correction, review lineage
+// review-0e1833930adf141a: R3-mfa-activation-not-atomic-with-recovery-
+// codes). Activation and recovery-code issuance are ONE unit: a
+// failure after the enabled_at write must roll it back, so the retry
+// still takes the activating branch and still hands the caller its
+// codes. Otherwise the account keeps an active second factor with an
+// empty recovery-code set and no endpoint that can ever refill it.
+func TestMFA_ActivationIsAtomicWithRecoveryCodeIssuance(t *testing.T) {
+	srv, deps, handlesDB := newTestServer(t)
+	client := newClient(srv, nil)
+
+	userID := createUser(t, handlesDB, "mfa-atomic@example.com", false)
+	accessToken := mintAccessToken(t, deps, handlesDB, userID, false)
+	auth := map[string]string{"Authorization": "Bearer " + accessToken}
+
+	// Installed before ANY request so the field itself is never written
+	// concurrently with a server goroutine reading it; the failure is
+	// toggled through the atomic flag instead.
+	var failRecoveryCodes atomic.Bool
+	deps.RecoveryCodes = func() (raw, hashed []string, err error) {
+		if failRecoveryCodes.Load() {
+			return nil, nil, errors.New("injected recovery-code failure")
+		}
+		return mfa.GenerateRecoveryCodes()
+	}
+
+	_, body := doJSON(t, client, http.MethodPost, srv.URL+"/v1/me/mfa/enroll", nil, auth)
+	secret, _ := body["secret"].(string)
+	if secret == "" {
+		t.Fatalf("expected a base32 secret from enroll, got %v", body)
+	}
+
+	failRecoveryCodes.Store(true)
+	resp, body := doJSON(t, client, http.MethodPost, srv.URL+"/v1/me/mfa/verify", map[string]any{
+		"code": validTOTPCode(t, secret),
+	}, auth)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected 500 when recovery-code issuance fails, got %d body=%v", resp.StatusCode, body)
+	}
+
+	q := db.New(handlesDB.Write)
+	row, err := q.GetUserMFA(t.Context(), userID)
+	if err != nil {
+		t.Fatalf("get user_mfa: %v", err)
+	}
+	if row.EnabledAt.Valid {
+		t.Fatalf("expected TOTP to remain INACTIVE after a failed activation, got enabled_at=%v -- the account now has an active factor and no recovery path", row.EnabledAt.Time)
+	}
+
+	failRecoveryCodes.Store(false)
+	resp, body = doJSON(t, client, http.MethodPost, srv.URL+"/v1/me/mfa/verify", map[string]any{
+		"code": validTOTPCode(t, secret),
+	}, auth)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected the retry to activate TOTP, got %d body=%v", resp.StatusCode, body)
+	}
+	codes, _ := body["recovery_codes"].([]any)
+	if len(codes) == 0 {
+		t.Fatalf("expected the retry to still hand out recovery codes, got %v", body)
+	}
+	row, err = q.GetUserMFA(t.Context(), userID)
+	if err != nil {
+		t.Fatalf("get user_mfa after retry: %v", err)
+	}
+	if !row.EnabledAt.Valid || len(row.RecoveryCodesHashed) != len(codes) {
+		t.Fatalf("expected an active factor with %d persisted recovery-code hashes, got enabled=%v hashes=%d", len(codes), row.EnabledAt.Valid, len(row.RecoveryCodesHashed))
 	}
 }
