@@ -62,10 +62,16 @@ func (noopWorker) Work(context.Context, *river.Job[noopArgs]) error { return nil
 // depend on production SMTP), and a producer-only client (built by
 // serve, which never calls Start) never invokes Work at all regardless
 // of what sender it was given.
-func NewClient(pool *pgxpool.Pool, logger *slog.Logger, sender RawSender) (*river.Client[pgx.Tx], error) {
+//
+// encryptionKey is ENCRYPTION_KEY: InvitationEmailWorker opens the
+// sealed short code in its job payload with it (the payload never holds
+// the plaintext -- review lineage review-e72754dc7521b57a). A
+// producer-only client never opens anything, but takes the same
+// parameter so there is one wiring shape, not two.
+func NewClient(pool *pgxpool.Pool, logger *slog.Logger, sender RawSender, encryptionKey [32]byte) (*river.Client[pgx.Tx], error) {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &noopWorker{})
-	river.AddWorker(workers, &InvitationEmailWorker{Sender: sender})
+	river.AddWorker(workers, &InvitationEmailWorker{Sender: sender, Key: encryptionKey})
 	river.AddWorker(workers, &invitationsExpireWorker{pool: pool})
 
 	driver := riverpgxv5.New(pool)

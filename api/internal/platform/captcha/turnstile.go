@@ -20,10 +20,15 @@ import (
 // API surface, not a secret).
 const siteVerifyURL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
 
-// defaultTimeout bounds how long a single verification call may block a
-// request -- a slow or hung Cloudflare response must never turn into an
-// indefinitely hanging login/forgot-password request.
-const defaultTimeout = 5 * time.Second
+// verifyTimeout bounds how long a single verification call may block a
+// request. It is applied to the request CONTEXT, not only to the
+// default client, so an injected Client with no Timeout of its own is
+// bounded too -- and it is deliberately short: during a siteverify
+// outage every one of these holds a request slot on an endpoint that is
+// already a credential-stuffing target, and the caller's degraded path
+// (handlers.captchaUnavailable) only starts once the call has returned
+// (review lineage review-e72754dc7521b57a).
+const verifyTimeout = 2 * time.Second
 
 // Turnstile implements captcha.Verifier against Cloudflare's real HTTP
 // API. Secret is TURNSTILE_SECRET (internal/config, config.go:67) and is
@@ -39,7 +44,7 @@ func (t Turnstile) client() *http.Client {
 	if t.Client != nil {
 		return t.Client
 	}
-	return &http.Client{Timeout: defaultTimeout}
+	return &http.Client{Timeout: verifyTimeout}
 }
 
 type siteVerifyResponse struct {
@@ -52,6 +57,9 @@ type siteVerifyResponse struct {
 // a false "fail" -- so a caller can distinguish "rejected" from
 // "verification service unavailable" and fail closed on the latter.
 func (t Turnstile) Verify(ctx context.Context, token, remoteIP string) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, verifyTimeout)
+	defer cancel()
+
 	form := url.Values{}
 	form.Set("secret", t.Secret)
 	form.Set("response", token)

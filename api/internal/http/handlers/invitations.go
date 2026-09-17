@@ -374,8 +374,29 @@ func (d *Deps) AcceptInvitation(ctx context.Context, in *dto.AcceptInvitationInp
 		// password, verified through the SAME primitive Login uses.
 		// The whole accept rolls back on mismatch, so the invitation
 		// stays usable for the genuine owner's next attempt.
+		//
+		// Because that rollback also leaves the short code replayable,
+		// this branch is a credential-guessing surface and MUST be
+		// throttled by the SAME account lockout POST /v1/auth/login
+		// uses -- keyed on email+IP, with its escalating block window
+		// and its victim alert -- not by the invitation enumeration
+		// counter alone, which is per-address, coarser, silent, and
+		// blind to which account is being guessed (review lineage
+		// review-e72754dc7521b57a). Both counters run: they protect
+		// different things (invitation-secret enumeration vs. this
+		// account's credentials).
+		accountLocked, lerr := d.Lockout.IsLocked(ctx, inv.Email.String, ip)
+		if lerr != nil {
+			return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+		}
+		if accountLocked {
+			return nil, apperr.New(429, apperr.CodeTooManyAttempts, "too many attempts, try again later", nil)
+		}
 		if ok, _ := password.Verify(ctx, existing.PasswordHash, in.Body.Password); !ok {
 			_, _ = d.InviteAttempts.Fail(ctx, key, inviteLockoutWindow)
+			// accountExists is unconditionally true here: this branch
+			// is reached only because GetUserByEmail returned a row.
+			_, _ = d.Lockout.RecordFailure(ctx, inv.Email.String, ip, true)
 			return nil, invalidCredentials()
 		}
 		userID = existing.ID

@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -31,6 +32,11 @@ import (
 	"github.com/jorgealonsodev/vecingest/internal/platform/queue"
 	"github.com/jorgealonsodev/vecingest/internal/testhelpers"
 )
+
+// testEncryptionKey stands in for ENCRYPTION_KEY, under which the
+// invitation-email job payload's short code is sealed by the producer
+// and opened by the worker (never persisted in plaintext).
+var testEncryptionKey = sha256.Sum256([]byte("vecingest-integration-test-encryption-key"))
 
 const (
 	testCookieDomain = "127.0.0.1"
@@ -64,7 +70,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *handlers.Deps, db.Handles) 
 	}
 
 	handlesDB, _ := testhelpers.AppRWHandles(t)
-	authz.Configure(db.New(handlesDB.Read))
+	authz.ConfigureFromHandles(handlesDB)
 
 	accessSecret := []byte("test-jwt-secret-32-bytes-long-enough")
 	refreshSecret := []byte("test-jwt-refresh-secret-32-bytes-ok")
@@ -81,7 +87,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *handlers.Deps, db.Handles) 
 	// invitation creation's river.InsertTx call is exercised for real
 	// -- no fake Queue double, and no real SMTP server (task 6.17: "M1
 	// does not depend on production SMTP").
-	riverClient, err := queue.NewClient(handlesDB.Write.Pool(), nil, logMailer)
+	riverClient, err := queue.NewClient(handlesDB.Write.Pool(), nil, logMailer, testEncryptionKey)
 	if err != nil {
 		t.Fatalf("build river client: %v", err)
 	}
@@ -103,11 +109,12 @@ func newTestServer(t *testing.T) (*httptest.Server, *handlers.Deps, db.Handles) 
 		ResetRequester:  handlers.DBResetRequester{DB: handlesDB.Write, Sender: logMailer},
 		TokenIssuer:     handlers.OpaqueTokenIssuer{},
 		InviteAttempts:  attempts.NewCounter(nil),
-		Queue:           queue.RiverInvitationQueue{Client: riverClient},
+		Queue:           queue.RiverInvitationQueue{Client: riverClient, Key: testEncryptionKey},
 		// Every test not specifically exercising Turnstile injects the
 		// AlwaysPass double, so none of them depend on network access
 		// (design D-7; this session's explicit instruction).
-		Captcha: captcha.AlwaysPass{},
+		Captcha:        captcha.AlwaysPass{},
+		CaptchaOutages: attempts.NewCounter(nil),
 	}
 
 	registry := health.NewRegistry(health.PostgresCheck{DB: handlesDB.Write})

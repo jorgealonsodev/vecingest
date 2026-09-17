@@ -24,10 +24,17 @@ import (
 // transaction"). ShortCode is the plaintext, one-time-visible secret:
 // it lives only long enough to render and dispatch the email -- it is
 // never written back to the invitations table (design D-6: "MUST
-// persist only token_hash/short_code_hash"). The job row itself
-// (River's own river_job table) is an accepted internal operational
-// detail, distinct from the invitations table's hashed-only storage
-// rule.
+// persist only token_hash/short_code_hash").
+//
+// This struct is an IN-MEMORY port value and never reaches a durable
+// row as it stands: internal/platform/queue seals the short code under
+// ENCRYPTION_KEY before river.InsertTx and the worker opens it at send
+// time. An earlier revision let the plaintext through into river_job,
+// where every pending and retained-completed row held a directly usable
+// credential for anyone with SELECT on that table, a backup or a read
+// replica -- exactly the guarantee short_code_hash exists to provide
+// (review lineage review-e72754dc7521b57a). Do not reintroduce a
+// producer that persists this field verbatim.
 type EmailArgs struct {
 	InvitationID uuid.UUID
 	Email        string

@@ -151,7 +151,15 @@ func requirementSet(cmd Command) map[string]requiredFunc {
 		envPort:              always,
 		envDatabaseURLRead:   nil, // optional (D-R)
 		envSentryDSN:         nil, // optional
-		envTurnstileSecret:   nil, // optional
+		// TURNSTILE_SECRET: required outside development. An empty
+		// secret is never valid at Cloudflare, so leaving this optional
+		// turned a forgotten variable into 100% of forgot-password
+		// requests answering AUTH_CAPTCHA_REQUIRED at RUN time, with no
+		// boot signal at all (review lineage review-e72754dc7521b57a).
+		// Development is exempt for the same reason PROXY_IP is: there
+		// is no real Turnstile site behind a local run, and every test
+		// injects a verifier double.
+		envTurnstileSecret: unlessDevelopment,
 	}
 
 	switch cmd {
@@ -168,8 +176,15 @@ func requirementSet(cmd Command) map[string]requiredFunc {
 		return out
 	case CommandWorker:
 		return map[string]requiredFunc{
-			envDatabaseURL:       always,
-			envAppEnv:            always,
+			envDatabaseURL: always,
+			envAppEnv:      always,
+			// ENCRYPTION_KEY: the invitation-email job payload carries
+			// its short code sealed under it, and the worker is what
+			// opens it to render the email (review lineage
+			// review-e72754dc7521b57a). A worker without the key can
+			// never dispatch an invitation, so this fails at boot
+			// rather than one retry-forever job at a time.
+			envEncryptionKey:     always,
 			envDatabaseURLWorker: nil, // optional (D-R)
 		}
 	case CommandSeed:

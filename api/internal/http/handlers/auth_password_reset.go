@@ -20,11 +20,25 @@ func (d *Deps) ForgotPassword(ctx context.Context, in *dto.ForgotPasswordInput) 
 	// public-form-protection: Turnstile Always Required On Forgot-
 	// Password -- unconditional, unlike login's failure-count branch,
 	// and checked before any user lookup runs.
+	//
+	// DEGRADED PATH, deliberate (review lineage
+	// review-e72754dc7521b57a): cerr means the VERIFIER is unreachable,
+	// which is categorically different from it rejecting a token. This
+	// endpoint fails OPEN on that, because the alternative -- what the
+	// code did before -- is that a Cloudflare outage denies password
+	// recovery to every user for its whole duration. What protects the
+	// endpoint meanwhile is unchanged: limiter.LoginReset's per-IP
+	// budget wraps the whole group BEFORE this handler runs and is
+	// entirely independent of Turnstile, and the response is
+	// enumeration-safe either way. Login makes the opposite call
+	// (auth_login.go) and says why there.
 	ok, cerr := d.verifyCaptcha(ctx, in.Body.TurnstileToken, clientIP(ctx))
 	if cerr != nil {
-		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
-	}
-	if !ok {
+		d.recordCaptchaOutage(ctx)
+	} else if !ok && !d.captchaUnavailable(ctx) {
+		// A recorded, still-open outage also covers the tokenless
+		// requests an outage necessarily produces: with the widget
+		// down the client has no token to send.
 		return nil, captchaRequired()
 	}
 

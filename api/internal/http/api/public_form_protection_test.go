@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -172,5 +173,94 @@ func TestPublicForm_NoRegisterCompanyOrContactFormInAPISurface(t *testing.T) {
 	resp2, _ := doJSON(t, client, http.MethodPost, srv.URL+"/v1/auth/register-company", map[string]any{}, nil)
 	if resp2.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected 404 for a nonexistent register-company route, got %d", resp2.StatusCode)
+	}
+}
+
+// preOutageToken is the fixture token a client minted before the outage
+// began: unavailableVerifier never looks at it, and no real Turnstile
+// endpoint is ever contacted.
+const preOutageToken = "minted-before-the-outage" //nolint:gosec // G101: a fake Turnstile response-token fixture, never a credential
+
+// unavailableVerifier stands in for a Cloudflare siteverify OUTAGE: a
+// transport failure or a non-200, which Turnstile.Verify reports as an
+// error -- categorically different from the (false, nil) it returns for
+// a token it actually rejected.
+type unavailableVerifier struct{}
+
+func (unavailableVerifier) Verify(context.Context, string, string) (bool, error) {
+	return false, errors.New("captcha: turnstile request: dial tcp: connection refused")
+}
+
+// R4-captcha-hard-dependency-no-degradation (review lineage
+// review-e72754dc7521b57a). Password recovery was hard-coupled to a
+// third-party HTTP service with no degraded path: during a siteverify
+// outage every POST /v1/auth/forgot-password held a request slot for
+// the client timeout and then answered 500, so nobody could recover a
+// password until Cloudflare came back. The deliberate decision is to
+// FAIL OPEN on forgot-password when the verifier itself is
+// unreachable -- never when it rejects a token -- because the per-IP
+// rate limit is independent of Turnstile and still applies, while
+// login stays fail-closed.
+func TestPublicForm_ForgotPasswordDegradesOpenDuringAVerifierOutage(t *testing.T) {
+	srv, deps, handlesDB := newTestServer(t)
+	deps.Captcha = unavailableVerifier{}
+	client := newClient(srv, nil)
+
+	email := "captcha-outage@example.com"
+	createUser(t, handlesDB, email, false)
+
+	// A client that minted its token before the outage began: the
+	// verifier error is proof the SERVICE is down, not that the token
+	// is bad.
+	resp, body := doJSON(t, client, http.MethodPost, srv.URL+"/v1/auth/forgot-password", map[string]any{
+		"email": email, "turnstile_token": preOutageToken,
+	}, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected forgot-password to degrade open while the verifier is unreachable, got %d body=%v", resp.StatusCode, body)
+	}
+
+	// Past the outage threshold (3 observed failures in the window) a
+	// client that cannot mint a token AT ALL -- the normal case during
+	// an outage, since the widget itself is down -- is also let through.
+	for range 2 {
+		doJSON(t, client, http.MethodPost, srv.URL+"/v1/auth/forgot-password", map[string]any{
+			"email": email, "turnstile_token": preOutageToken,
+		}, nil)
+	}
+	resp, body = doJSON(t, client, http.MethodPost, srv.URL+"/v1/auth/forgot-password", map[string]any{
+		"email": email,
+	}, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected forgot-password to accept a tokenless request during a recorded verifier outage, got %d body=%v", resp.StatusCode, body)
+	}
+}
+
+// The other half of that decision, stated as a test so it cannot drift:
+// login does NOT degrade open. A caller already past two failures is
+// exactly the credential-stuffing shape the captcha is there for, and
+// they have a remedy the locked-out password-recovery user does not --
+// waiting out the window.
+func TestPublicForm_LoginStaysFailClosedDuringAVerifierOutage(t *testing.T) {
+	srv, deps, handlesDB := newTestServer(t)
+	deps.Captcha = unavailableVerifier{}
+	client := newClient(srv, nil)
+
+	email := "captcha-outage-login@example.com"
+	createUser(t, handlesDB, email, false)
+
+	for i := range 2 {
+		resp, body := doJSON(t, client, http.MethodPost, srv.URL+"/v1/auth/login", map[string]any{
+			"email": email, "password": "wrong-password-here-12345", "platform": "web",
+		}, nil)
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: expected 401, got %d body=%v", i+1, resp.StatusCode, body)
+		}
+	}
+
+	resp, body := doJSON(t, client, http.MethodPost, srv.URL+"/v1/auth/login", map[string]any{
+		"email": email, "password": testPassword, "platform": "web", "turnstile_token": preOutageToken,
+	}, nil)
+	if resp.StatusCode == http.StatusOK || body["access_token"] != nil {
+		t.Fatalf("expected login to stay fail-closed while the verifier is unreachable, got %d body=%v", resp.StatusCode, body)
 	}
 }

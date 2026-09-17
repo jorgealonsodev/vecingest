@@ -673,3 +673,158 @@ against the unfixed code before any production change.
 4. `TestInvitation_AcceptCreatesOrLinksAnAccount` scenario 2 encoded the
    vulnerable behaviour (any policy-valid password linked an existing account).
    Rewritten to assert the fixed behaviour. No test was weakened or deleted.
+
+---
+
+## Correction round 2 — adversarial review lineage `review-e72754dc7521b57a`
+
+Branch `feature/m1-communities-pr5-turnstile`. Four of five findings fixed.
+`R1-mandatory-totp-gate-is-only-an-enrollment-flag` was explicitly excluded from
+this round: it is being handled as separate work with its own design, and its
+KNOWN INCOMPLETE note in `authz/resolve.go` and on task 7.14 is untouched.
+
+Strict TDD: every fix has a behavioural RED observed against the unfixed code
+with the route still registered.
+
+### C2.1 `R4-authz-resolves-from-read-replica-no-read-your-writes`
+
+- Defect: `serve.go` wired the scoped resolvers' `Querier` to `handlesDB.Read`
+  while every membership write commits on the primary and hands the caller a
+  session in the same response, so replication lag rendered a just-granted
+  membership as `ErrNoMembership` → 404, indistinguishable from a foreign
+  resource.
+- Fix: new `authz.ResolverDBTX(db.Handles) db.DBTX` returning `h.Write`, plus
+  `authz.ConfigureFromHandles` as the single `Configure` call site. `serve.go`
+  and the HTTP integration harness both go through it.
+- Test: `internal/authz/wiring_test.go` —
+  `TestResolverDBTX_IsThePrimaryNeverTheReadReplica` and
+  `TestConfigureFromHandles_InstallsTheQuerier`.
+- RED observed (defect preserved verbatim in the extracted function):
+  `authz resolvers are wired to the READ REPLICA: a membership just granted on
+  the primary is invisible to the very next authorization decision`.
+- Honest limitation: this is a wiring assertion, not a simulated replica lag.
+  The integration harness runs a single Postgres whose `Read` and `Write`
+  handles share one DSN, so a genuine lag test needs a second migrated database
+  built in the container; that was judged not worth ~60 of this round's budget
+  for a one-line production defect. `TestConfigureFromHandles_InstallsTheQuerier`
+  guards the companion failure mode (a wiring function that installs nothing).
+
+### C2.2 `R1-accept-invitation-bypasses-login-lockout`
+
+- Defect: the (correct) password check added in round 1 routed its failures
+  through the invitation enumeration counter only. That counter is per-address,
+  has no escalating block and sends no victim alert, so accept-invitation was an
+  unauthenticated password-guessing oracle against any chosen account, replayable
+  because a wrong password rolls the accept back and leaves the invitation
+  pending.
+- Fix (`handlers/invitations.go`): the linking branch now consults
+  `d.Lockout.IsLocked(email, ip)` before verifying and calls
+  `d.Lockout.RecordFailure(email, ip, true)` on a mismatch — the same service,
+  keys, escalation and alert `/v1/auth/login` uses. The invitation counter stays:
+  the two protect different things.
+- Test: `TestInvitation_AcceptWrongPasswordLocksTheAccountLikeLogin`
+  (`internal/http/api/invitation_test.go`). Five wrong passwords replaying one
+  short code, then a login with the CORRECT password from a DIFFERENT client
+  address (so the assertion is on the email leg, not the attacker's own IP
+  budget), then an accept with the correct password.
+- RED observed: `expected login with the CORRECT password to be locked out (429)
+  after 5 wrong passwords through accept-invitation, got 200 body=map[... access_token:eyJ...]`
+  — the victim's session was issued as normal.
+
+### C2.3 `R1-plaintext-short-code-persisted-in-job-row`
+
+- Defect: `EmailArgs.ShortCode` crossed into the River job payload in plaintext,
+  so every pending and retained-completed `river_job` row held a directly usable
+  invitation credential for anyone with SELECT on that table, a backup or a
+  replica — defeating `invitations.short_code_hash`.
+- Fix: the seal is applied at the exact boundary where an in-memory port value
+  becomes a durable row. `internal/platform/queue`'s `invitationEmailJobArgs` is
+  now its own shape carrying `short_code_encrypted []byte`, sealed by
+  `RiverInvitationQueue` with `mfa.EncryptSecret` (AES-256-GCM, `v1:` prefix,
+  `ENCRYPTION_KEY`) and opened by `InvitationEmailWorker` at send time. The
+  domain port keeps the plaintext field because it never reaches a row.
+- Consequence: `queue.NewClient` takes the key, and `ENCRYPTION_KEY` is now a
+  `CommandWorker` config requirement — a worker without it can never dispatch an
+  invitation, so it fails at boot instead of one retry-forever job at a time.
+  `docker-compose.yml` needs no change: `worker` merges the `x-app-image` anchor
+  and therefore the same `env_file`.
+- Tests: `TestInvitation_JobRowNeverPersistsThePlaintextShortCode` (negative:
+  the persisted row; positive: the stored bytes open to exactly the issued code,
+  so simply dropping the field cannot pass) and, in package `queue`,
+  `TestInvitationEmailWorker_OpensTheSealedShortCodeBeforeSending` /
+  `TestInvitationEmailWorker_RefusesAnUnopenablePayload`.
+- RED observed: `the persisted river_job row holds the plaintext short code, a
+  directly usable credential: {"Email":...,"ShortCode":"…"}`. Worker side, with
+  the decrypt gutted: `expected the invitation email to carry the opened short
+  code "K7M2P9QZ", got body: … v1:HuOvuYiuG5g0GGT44+Jgz…`.
+
+### C2.4 `R4-captcha-hard-dependency-no-degradation`
+
+Three separable defects, three deliberate decisions:
+
+1. Boot: `TURNSTILE_SECRET` is now `unlessDevelopment` in `CommandServe`'s
+   requirement set. An empty secret is never valid at Cloudflare, so leaving it
+   optional turned a forgotten variable into 100% of forgot-password answering
+   `AUTH_CAPTCHA_REQUIRED` at run time with no boot signal. Development is exempt
+   for the same reason `PROXY_IP` is. Side effect, accepted: `CommandMigrate` is
+   a superset of `CommandServe` (because `serve --migrate` reuses it), so
+   standalone `migrate` now also requires the variable it does not use —
+   consistent with `JWT_SECRET`/`SMTP_URL`, which it already required.
+2. Timeout: `Turnstile.Verify` now bounds the REQUEST CONTEXT at `verifyTimeout`
+   = 2s (down from a 5s client-only timeout), so an injected `http.Client` with
+   no `Timeout` of its own is bounded too. Deliberately short: during an outage
+   each call holds a request slot on an endpoint that is already a
+   credential-stuffing target.
+3. Degradation — the decision, stated explicitly: **forgot-password fails OPEN
+   on an unreachable verifier; login stays fail-CLOSED.** A verifier error means
+   the service is unreachable, categorically different from it rejecting a token.
+   Denying password recovery to every user for the duration of a third-party
+   outage is a worse outcome than letting recovery through, because the per-IP
+   rate limit wraps the whole group before the handler runs and is entirely
+   independent of Turnstile, and the response is enumeration-safe either way. A
+   caller already past `captchaAfterFailures` login failures is the exact
+   credential-stuffing shape the check exists for and has a remedy the
+   locked-out user does not — waiting out the window — so login does not
+   degrade. Mechanism: a new `Deps.CaptchaOutages` `AttemptCounter` (same seam
+   as every other counter) records transport failures; three within 60s also
+   admits TOKENLESS forgot-password requests, which an outage necessarily
+   produces because the widget itself is down.
+- Tests: `TestLoad_TurnstileSecretRequiredUnlessDevelopment` (+ a
+  `serve missing TURNSTILE_SECRET` and a `worker missing ENCRYPTION_KEY` case in
+  the per-subcommand table), `TestTurnstile_HungSiteverifyIsBoundedEvenWithATimeoutlessClient`,
+  `TestPublicForm_ForgotPasswordDegradesOpenDuringAVerifierOutage`, and
+  `TestPublicForm_LoginStaysFailClosedDuringAVerifierOutage` as the control that
+  the degradation did not leak into login.
+- RED observed: `expected TURNSTILE_SECRET to be required under APP_ENV=staging,
+  got: <nil>`; `expected the verification call to be bounded well below the hang
+  of 6s, it took 6.005884913s`; `expected forgot-password to degrade open while
+  the verifier is unreachable, got 500 body=map[code:INTERNAL_ERROR ...]`.
+
+### Verification
+
+- `cd api && go test -race ./...` → **385 passed, 0 failed** (371 before this
+  round; +14 from the nine new tests and their subtests).
+- `gofumpt -l .` → clean. `golangci-lint run ./...` → `0 issues.`
+- `make gen` run twice → no generated artifact changed.
+- Migrations: **none added.** No schema change was needed; `00009` remains the
+  highest applied version and nothing under `api/migrations/` was touched.
+- Changed lines: 694 added + 40 deleted = **734**, against a 200-line budget.
+  Of the additions, 351 are code, 283 comment (house style in these files) and
+  60 blank. Reported, not compressed: no comment, test or blank line was removed
+  to approach the number.
+- Rollback boundary: the single commit on
+  `feature/m1-communities-pr5-turnstile`. Reverting it restores the
+  pre-correction behaviour and removes no other work.
+
+### Deviations and follow-ups recorded
+
+1. `public-form-protection` spec, "Turnstile Always Required On Forgot-Password":
+   no longer literally always — an unreachable verifier is now a degraded pass.
+   The spec text needs a degradation clause.
+2. `CommandWorker`'s documented "zero new required config" contract now includes
+   `ENCRYPTION_KEY`. `worker.go`'s own comment is updated in place.
+3. Existing `river_job` rows enqueued before this change still hold plaintext
+   short codes and would fail to decode; the queue is empty at this milestone,
+   but a deployment carrying pending invitation jobs must purge them.
+4. C2.1's test is a wiring assertion, not a replication-lag simulation (see
+   above). A genuine lag test remains open work.

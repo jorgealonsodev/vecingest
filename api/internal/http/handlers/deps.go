@@ -84,6 +84,14 @@ type Deps struct {
 	// (captcha.go): a deployment that forgets to wire it fails CLOSED,
 	// never open.
 	Captcha captcha.Verifier
+	// CaptchaOutages counts recent Turnstile TRANSPORT failures, so
+	// forgot-password can degrade open while the verification service
+	// is unreachable instead of denying password recovery to every
+	// user for the duration of a third-party outage (review lineage
+	// review-e72754dc7521b57a). Reuses the same AttemptCounter seam as
+	// Lockout.Counter/MFACounter/InviteAttempts; nil disables
+	// degradation entirely (the pre-existing fail-closed behaviour).
+	CaptchaOutages mfa.AttemptCounter
 }
 
 // recoveryCodes resolves d.RecoveryCodes against its production

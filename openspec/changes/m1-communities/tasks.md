@@ -196,6 +196,17 @@ through PR1/PR2.
 - [x] 7.14 GREEN: implement the TOTP-gate check in the office/community resolver path — 403 with a distinguishable code when `user_mfa.enabled_at IS NULL` for `admin`/`admin_staff` scope only — NOTE (review lineage review-0e1833930adf141a, R1-mandatory-totp-gate-ineffective): the task is done AS WRITTEN, but the check it specifies is an enrollment precondition, not second-factor authentication. `IsUserMFAEnabled` is a durable per-account flag and `/v1/auth/login` issues a non-superadmin session with no TOTP challenge, so a stolen admin password still reaches every admin-scoped route. Closing it needs the second-factor fact carried on the session; deferred over the correction's 200-line budget and documented as KNOWN INCOMPLETE in `authz/resolve.go`
 - [x] 7.15 Run `make gen`; commit regenerated artifacts for the MFA DTOs
 
+### Correction round 2 — review lineage review-e72754dc7521b57a
+
+Four of five findings fixed on top of the delivered Phase 6/7 code. No new
+task was added: each fix corrects code a task above already marked `[x]`.
+
+- [x] C2.1 `R4-authz-resolves-from-read-replica-no-read-your-writes` — the scoped resolvers' Querier now reads the PRIMARY (`authz.ResolverDBTX`/`ConfigureFromHandles`), so a membership granted on the write path is visible to the caller's very next authorization decision instead of lagging into a 404
+- [x] C2.2 `R1-accept-invitation-bypasses-login-lockout` — a failed password on accept-invitation's linking branch now advances (and honours) the SAME `d.Lockout` account lockout `/v1/auth/login` uses, keyed on email+IP, alongside the invitation enumeration counter
+- [x] C2.3 `R1-plaintext-short-code-persisted-in-job-row` — the short code crosses into `river_job` sealed with AES-256-GCM under `ENCRYPTION_KEY` (`mfa.EncryptSecret`) and is opened only by the worker at send time; `ENCRYPTION_KEY` is now a `CommandWorker` requirement
+- [x] C2.4 `R4-captcha-hard-dependency-no-degradation` — `TURNSTILE_SECRET` is required outside development (fails at boot, not at first use), `Turnstile.Verify` is bounded on the request context at 2s regardless of the injected client, and forgot-password degrades OPEN on an unreachable verifier while login deliberately stays fail-closed
+- [ ] C2.5 `R1-mandatory-totp-gate-is-only-an-enrollment-flag` — NOT attempted in this round: handled as separate work with its own design. The KNOWN INCOMPLETE note on task 7.14 and in `authz/resolve.go` stands unchanged
+
 ## Phase 8: GET /v1/me Memberships, lint-scope, Permission Matrix (WU-6, PR6 — TDD)
 
 - [ ] 8.1 RED: a non-superadmin user with no memberships gets an empty `memberships` array; a superadmin gets `is_superadmin: true`; a user with one office and one community membership gets both typed entries (GET /v1/me Response Shape, all three scenarios)

@@ -45,7 +45,15 @@ func runWorker(ctx context.Context, _ []string, stdout io.Writer, lookup config.
 	// real sender here once that config requirement is added; until
 	// then this keeps the worker's zero-new-required-config contract
 	// intact while still exercising the real render+log path.
-	client, err := queue.NewClient(workerDB.Pool(), nil, platmail.LogMailer{})
+	// ENCRYPTION_KEY is now a worker requirement (internal/config,
+	// CommandWorker): the invitation-email job payload carries its
+	// short code SEALED, so the worker that renders the email is the
+	// only place it is opened again (review lineage
+	// review-e72754dc7521b57a).
+	var encryptionKey [32]byte
+	copy(encryptionKey[:], holder.EncryptionKey())
+
+	client, err := queue.NewClient(workerDB.Pool(), nil, platmail.LogMailer{}, encryptionKey)
 	if err != nil {
 		return fmt.Errorf("worker: build River client: %w", err)
 	}

@@ -44,6 +44,15 @@ func (d *Deps) Login(ctx context.Context, in *dto.LoginInput) (*dto.LoginOutput,
 	if failures >= captchaAfterFailures {
 		ok, cerr := d.verifyCaptcha(ctx, in.Body.TurnstileToken, ip)
 		if cerr != nil {
+			// Login stays FAIL-CLOSED on an unreachable verifier, the
+			// opposite of forgot-password's deliberate degradation
+			// (review lineage review-e72754dc7521b57a): a caller
+			// already past captchaAfterFailures failures is the exact
+			// credential-stuffing shape this check exists for, and
+			// they have a remedy a locked-out password-recovery user
+			// does not -- waiting out the window. The failure is still
+			// recorded, so forgot-password can see the outage.
+			d.recordCaptchaOutage(ctx)
 			return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 		}
 		if !ok {

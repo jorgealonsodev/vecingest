@@ -72,6 +72,11 @@ func TestRunMigrate_AppliesBootstrapAndSchemaSets(t *testing.T) {
 	t.Setenv("PROXY_IP", "172.18.0.2")
 	t.Setenv("PORT", "3000")
 	t.Setenv("CORS_ORIGINS", "https://app.example.com")
+	// CommandMigrate is a superset of CommandServe's requirement set
+	// (serve --migrate reuses it), and TURNSTILE_SECRET is now required
+	// outside development -- like JWT_SECRET/SMTP_URL above, migrate
+	// never uses it, it just has to be present.
+	t.Setenv("TURNSTILE_SECRET", "test-turnstile-secret")
 
 	stdout := &strings.Builder{}
 	if err := runMigrate(ctx, nil, stdout, os.LookupEnv); err != nil {
@@ -160,6 +165,11 @@ func TestRunMigrate_SchemaSetOwnershipIsRestricted(t *testing.T) {
 	t.Setenv("PROXY_IP", "172.18.0.2")
 	t.Setenv("PORT", "3000")
 	t.Setenv("CORS_ORIGINS", "https://app.example.com")
+	// CommandMigrate is a superset of CommandServe's requirement set
+	// (serve --migrate reuses it), and TURNSTILE_SECRET is now required
+	// outside development -- like JWT_SECRET/SMTP_URL above, migrate
+	// never uses it, it just has to be present.
+	t.Setenv("TURNSTILE_SECRET", "test-turnstile-secret")
 
 	stdout := &strings.Builder{}
 	if err := runMigrate(ctx, nil, stdout, os.LookupEnv); err != nil {
@@ -310,6 +320,11 @@ func TestRunMigrate_AppDBPasswordCannotInjectSQL(t *testing.T) {
 	t.Setenv("PROXY_IP", "172.18.0.2")
 	t.Setenv("PORT", "3000")
 	t.Setenv("CORS_ORIGINS", "https://app.example.com")
+	// CommandMigrate is a superset of CommandServe's requirement set
+	// (serve --migrate reuses it), and TURNSTILE_SECRET is now required
+	// outside development -- like JWT_SECRET/SMTP_URL above, migrate
+	// never uses it, it just has to be present.
+	t.Setenv("TURNSTILE_SECRET", "test-turnstile-secret")
 
 	stdout := &strings.Builder{}
 	if err := runMigrate(ctx, nil, stdout, os.LookupEnv); err != nil {

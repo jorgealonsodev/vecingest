@@ -14,6 +14,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/jorgealonsodev/vecingest/internal/db"
+	"github.com/jorgealonsodev/vecingest/internal/domain/auth/lockout"
+	"github.com/jorgealonsodev/vecingest/internal/domain/auth/mfa"
 )
 
 // uuidPgtype/pgtypeText adapt uuid.UUID/string to the pgtype.UUID/
@@ -804,5 +806,131 @@ func TestInvitation_EnumerationLockoutIgnoresClientControlledDeviceHeaders(t *te
 		map[string]any{"short_code": "ROTATE99"}, inviteHeaders("android", "99.0.0"))
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("expected the 11th attempt from the SAME address to be locked out despite a different X-Platform/X-App-Version pair on every request, got %d body=%v", resp.StatusCode, body)
+	}
+}
+
+// R1-accept-invitation-bypasses-login-lockout (review lineage
+// review-e72754dc7521b57a). POST /v1/auth/accept-invitation runs a full
+// password check against a pre-existing account chosen freely by
+// whoever created the invitation, and a wrong password rolls the whole
+// accept back -- the invitation stays pending and the same short code
+// is replayable indefinitely. Routing those failures through the
+// per-address invitation counter alone leaves an unauthenticated
+// password-guessing oracle that never locks the victim's account and
+// never raises the alert the login path raises. Repeated wrong
+// passwords here MUST lock the account exactly as they would through
+// POST /v1/auth/login.
+func TestInvitation_AcceptWrongPasswordLocksTheAccountLikeLogin(t *testing.T) {
+	srv, deps, handlesDB := newTestServer(t)
+	client := newClient(srv, nil)
+
+	officeID, adminID := seedOfficeWithAdmin(t, handlesDB, "invite-lockout-admin@example.com")
+	communityID := seedCommunity(t, handlesDB, officeID, "Invite Lockout Community")
+	unitID := seedUnit(t, handlesDB, communityID)
+	adminToken := mintAccessToken(t, deps, handlesDB, adminID, false)
+
+	// The victim is an arbitrary pre-existing account: the creation DTO
+	// takes the email verbatim, so the attacker picks the target.
+	victimEmail := "invite-lockout-victim@example.com"
+	createUser(t, handlesDB, victimEmail, false)
+
+	_, createBody := doJSON(t, client, http.MethodPost, srv.URL+"/v1/communities/"+communityID.String()+"/invitations", map[string]any{
+		"unit_id": unitID.String(), "email": victimEmail, "role": "owner",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	shortCode, _ := createBody["short_code"].(string)
+	if shortCode == "" {
+		t.Fatalf("test setup: expected a short_code from invitation creation, got %v", createBody)
+	}
+
+	const attackerIP = "203.0.113.90"
+	accept := func(pw string) (*http.Response, map[string]any) {
+		return doFromIPClient(t, client, srv.URL+"/v1/auth/accept-invitation", http.MethodPost, attackerIP,
+			map[string]any{
+				"short_code": shortCode, "name": "Guesser", "password": pw,
+				"consent": true, "platform": "ios",
+			}, inviteHeaders("ios", "1.0.0"))
+	}
+
+	// Exactly the login path's own budget of wrong guesses, replaying
+	// the one short code (each failure rolls the accept back).
+	for i := range lockout.Threshold {
+		resp, body := accept(fmt.Sprintf("wrong-password-guess-number-%d", i))
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("guess %d: expected 401 invalid credentials, got %d body=%v", i+1, resp.StatusCode, body)
+		}
+	}
+
+	// The victim's ACCOUNT must now be locked, exactly as it would be
+	// after the same number of failed logins -- proven from a DIFFERENT
+	// client address, so this is the email-scoped leg of d.Lockout and
+	// not merely the attacker's own IP budget.
+	resp, body := doFromIPClient(t, client, srv.URL+"/v1/auth/login", http.MethodPost, "203.0.113.91",
+		map[string]any{"email": victimEmail, "password": testPassword, "platform": "web"}, nil)
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected login with the CORRECT password to be locked out (429) after %d wrong passwords through accept-invitation, got %d body=%v", lockout.Threshold, resp.StatusCode, body)
+	}
+
+	// And accept-invitation itself must honour that same lock, or the
+	// oracle simply continues on the endpoint that opened it.
+	resp, body = accept(testPassword)
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected accept-invitation to refuse a locked-out account with 429, got %d body=%v", resp.StatusCode, body)
+	}
+}
+
+// R1-plaintext-short-code-persisted-in-job-row (review lineage
+// review-e72754dc7521b57a). The invitation email job is inserted with
+// river.InsertTx inside the creation transaction, so its payload is a
+// DURABLE row in river_job -- pending, and retained after completion.
+// Carrying the short code there in plaintext hands a directly usable
+// credential to anyone with SELECT on that table, a database backup or
+// a read replica, which is exactly the guarantee
+// invitations.short_code_hash exists to provide. The email genuinely
+// needs the plaintext to send it, so the payload carries it SEALED with
+// ENCRYPTION_KEY (the same AES-256-GCM primitive user_mfa's TOTP
+// secrets use) and the worker opens it at send time.
+func TestInvitation_JobRowNeverPersistsThePlaintextShortCode(t *testing.T) {
+	srv, deps, handlesDB := newTestServer(t)
+	client := newClient(srv, nil)
+
+	officeID, adminID := seedOfficeWithAdmin(t, handlesDB, "invite-jobrow-admin@example.com")
+	communityID := seedCommunity(t, handlesDB, officeID, "Invite Job Row Community")
+	unitID := seedUnit(t, handlesDB, communityID)
+	adminToken := mintAccessToken(t, deps, handlesDB, adminID, false)
+
+	_, createBody := doJSON(t, client, http.MethodPost, srv.URL+"/v1/communities/"+communityID.String()+"/invitations", map[string]any{
+		"unit_id": unitID.String(), "email": "invite-jobrow@example.com", "role": "owner",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	shortCode, _ := createBody["short_code"].(string)
+	if shortCode == "" {
+		t.Fatalf("test setup: expected a short_code from invitation creation, got %v", createBody)
+	}
+
+	var args []byte
+	if err := handlesDB.Write.QueryRow(t.Context(),
+		`SELECT args FROM river_job WHERE kind = 'invitation_email' ORDER BY id DESC LIMIT 1`,
+	).Scan(&args); err != nil {
+		t.Fatalf("read the persisted invitation_email job row: %v", err)
+	}
+
+	if strings.Contains(string(args), shortCode) {
+		t.Fatalf("the persisted river_job row holds the plaintext short code, a directly usable credential: %s", args)
+	}
+
+	// ... and it must still be the REAL code, sealed -- dropping it
+	// would satisfy the assertion above while silently breaking every
+	// invitation email.
+	var payload struct {
+		ShortCodeEncrypted []byte `json:"short_code_encrypted"`
+	}
+	if err := json.Unmarshal(args, &payload); err != nil {
+		t.Fatalf("decode the persisted job payload: %v", err)
+	}
+	opened, err := mfa.DecryptSecret(testEncryptionKey, payload.ShortCodeEncrypted)
+	if err != nil {
+		t.Fatalf("expected the persisted job payload to carry the short code sealed under ENCRYPTION_KEY: %v", err)
+	}
+	if string(opened) != shortCode {
+		t.Fatalf("expected the sealed payload to open to the issued short code %q, got %q", shortCode, opened)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/jorgealonsodev/vecingest/internal/platform/captcha"
 )
@@ -123,5 +124,36 @@ func TestAlwaysPass_DefaultAcceptsAndFailFlagRejects(t *testing.T) {
 	ok, err = fail.Verify(context.Background(), "anything", "203.0.113.9")
 	if err != nil || ok {
 		t.Fatalf("expected AlwaysPass{Fail: true} to reject, got ok=%v err=%v", ok, err)
+	}
+}
+
+// A hung siteverify must never hold a login or forgot-password request
+// open for as long as Cloudflare feels like taking (review lineage
+// review-e72754dc7521b57a). The bound lives on the request CONTEXT, not
+// only on the default client, so an injected Client with no Timeout of
+// its own -- clientTo above, and whatever a future caller wires -- is
+// bounded too.
+func TestTurnstile_HungSiteverifyIsBoundedEvenWithATimeoutlessClient(t *testing.T) {
+	const hang = 6 * time.Second
+
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(hang):
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	verifier := captcha.Turnstile{Secret: "test-secret", Client: clientTo(srv.URL)}
+
+	start := time.Now()
+	ok, err := verifier.Verify(t.Context(), "some-token", "203.0.113.1")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatalf("expected a hung siteverify to be reported as an error (never a silent pass), got ok=%v", ok)
+	}
+	if elapsed >= hang {
+		t.Fatalf("expected the verification call to be bounded well below the hang of %s, it took %s", hang, elapsed)
 	}
 }
