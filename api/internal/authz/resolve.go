@@ -22,6 +22,16 @@ import (
 // never partial data (design D-4: "Foreign resource → 404").
 var ErrNoMembership = errors.New("authz: no membership for this resource")
 
+// ErrMFARequired is returned when the caller's resolved role is admin or
+// admin_staff and TOTP is not yet active on their account
+// (auth-mfa-totp delta: Mandatory TOTP For Admin And Admin_staff Scope
+// Access; design D-7). It is DISTINCT from ErrNoMembership: the caller
+// genuinely has the membership, they just cannot use it until they
+// enroll -- scoped.* renders this as its own 403 code
+// (apperr.CodeMFAEnrollmentRequired), never the generic 404 a foreign
+// resource gets.
+var ErrMFARequired = errors.New("authz: TOTP enrollment required for this role")
+
 // errNotConfigured is returned when a resolver runs before Configure
 // was ever called (a boot-wiring bug, not a caller error).
 var errNotConfigured = errors.New("authz: not configured (Configure was never called)")
@@ -61,6 +71,11 @@ type Querier interface {
 	// for cross-tenant isolation purposes (invitations spec:
 	// "Cross-Tenant Isolation Proven By Test").
 	GetInvitationCommunityID(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
+	// IsUserMFAEnabled backs the mandatory-TOTP gate for admin/
+	// admin_staff roles (auth-mfa-totp delta). It always returns exactly
+	// one row (true/false), never pgx.ErrNoRows -- a caller who never
+	// enrolled resolves cleanly to false.
+	IsUserMFAEnabled(ctx context.Context, userID uuid.UUID) (bool, error)
 }
 
 var queries Querier
@@ -74,6 +89,27 @@ func Configure(q Querier) { queries = q }
 // distinguishing "caller has no membership" from a real infrastructure
 // failure.
 func isNoRows(err error) bool { return errors.Is(err, pgx.ErrNoRows) }
+
+// requireMFAForAdminRoles implements the mandatory-TOTP gate (design
+// D-7; auth-mfa-totp delta: Mandatory TOTP For Admin And Admin_staff
+// Scope Access) at the ONE point every community/office resolution
+// passes through, regardless of which route shape got there
+// ({communityId}, {officeId}, {unitId} or {invitationId} all end up
+// here). owner/tenant (and any role neither admin nor admin_staff) are
+// untouched -- TOTP stays optional for them.
+func requireMFAForAdminRoles(ctx context.Context, role Role, userID uuid.UUID) error {
+	if role != RoleAdmin && role != RoleAdminStaff {
+		return nil
+	}
+	enabled, err := queries.IsUserMFAEnabled(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if !enabled {
+		return ErrMFARequired
+	}
+	return nil
+}
 
 // ResolveCommunity resolves the caller's membership for communityID via
 // office_members ∪ unit_members for that community_id (design D-4):
@@ -90,6 +126,9 @@ func ResolveCommunity(ctx context.Context, communityID, userID uuid.UUID) (Membe
 		UserID:      userID,
 	})
 	if err == nil {
+		if merr := requireMFAForAdminRoles(ctx, Role(role), userID); merr != nil {
+			return Membership{}, merr
+		}
 		return Membership{userID: userID, scope: scope{kind: KindCommunity, id: communityID}, role: Role(role), valid: true}, nil
 	}
 	if !isNoRows(err) {
@@ -101,6 +140,9 @@ func ResolveCommunity(ctx context.Context, communityID, userID uuid.UUID) (Membe
 		UserID:      userID,
 	})
 	if err == nil {
+		if merr := requireMFAForAdminRoles(ctx, Role(role), userID); merr != nil {
+			return Membership{}, merr
+		}
 		return Membership{userID: userID, scope: scope{kind: KindCommunity, id: communityID}, role: Role(role), valid: true}, nil
 	}
 	if isNoRows(err) {
@@ -125,6 +167,9 @@ func ResolveOffice(ctx context.Context, officeID, userID uuid.UUID) (Membership,
 			return Membership{}, ErrNoMembership
 		}
 		return Membership{}, err
+	}
+	if merr := requireMFAForAdminRoles(ctx, Role(row.Role), userID); merr != nil {
+		return Membership{}, merr
 	}
 	return Membership{userID: userID, scope: scope{kind: KindOffice, id: officeID}, role: Role(row.Role), valid: true}, nil
 }

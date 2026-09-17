@@ -20,3 +20,13 @@ UPDATE user_mfa SET recovery_codes_hashed = $2, updated_at = now() WHERE user_id
 -- name: ConsumeUserMFARecoveryCode :execrows
 UPDATE user_mfa SET recovery_codes_hashed = array_remove(recovery_codes_hashed, $2), updated_at = now()
 WHERE user_id = $1 AND $2 = ANY(recovery_codes_hashed);
+
+-- name: IsUserMFAEnabled :one
+-- auth-mfa-totp delta: Mandatory TOTP For Admin And Admin_staff Scope
+-- Access. Always returns exactly one row (true/false), never
+-- pgx.ErrNoRows, so a caller who never enrolled resolves cleanly to
+-- false instead of a "no rows" error the resolver would have to special
+-- -case.
+SELECT EXISTS (
+  SELECT 1 FROM user_mfa WHERE user_id = $1 AND enabled_at IS NOT NULL
+);

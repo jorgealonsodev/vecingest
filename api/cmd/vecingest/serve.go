@@ -28,6 +28,7 @@ import (
 	"github.com/jorgealonsodev/vecingest/internal/mail"
 	"github.com/jorgealonsodev/vecingest/internal/platform/attempts"
 	"github.com/jorgealonsodev/vecingest/internal/platform/cache"
+	"github.com/jorgealonsodev/vecingest/internal/platform/captcha"
 	"github.com/jorgealonsodev/vecingest/internal/platform/hibp"
 	"github.com/jorgealonsodev/vecingest/internal/platform/queue"
 )
@@ -245,6 +246,12 @@ func buildServeDeps(cfg config.Config, holder *secrets.Holder, handlesDB db.Hand
 		TokenIssuer:    handlers.OpaqueTokenIssuer{},
 		InviteAttempts: attempts.NewCounter(nil),
 		Queue:          queue.RiverInvitationQueue{Client: riverClient},
+		// public-form-protection: CaptchaVerifier (new, 6th seam).
+		// TURNSTILE_SECRET is optional at the config layer (config.go:67
+		// -- "optional"); an unconfigured secret makes every Turnstile
+		// call fail closed at Cloudflare (an empty secret is never
+		// valid), never silently bypasses verification.
+		Captcha: captcha.Turnstile{Secret: holder.TurnstileSecret()},
 	}
 	return deps, realMailer, nil
 }

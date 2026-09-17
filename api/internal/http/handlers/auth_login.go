@@ -33,6 +33,24 @@ func (d *Deps) Login(ctx context.Context, in *dto.LoginInput) (*dto.LoginOutput,
 		return nil, apperr.New(429, apperr.CodeTooManyAttempts, "too many attempts, try again later", nil)
 	}
 
+	// public-form-protection: Turnstile Required After The Third Login
+	// Failure. Checked BEFORE any credential lookup or RecordFailure
+	// call, so a captcha-rejected attempt never itself advances the
+	// lockout counters and never runs any protected-form logic.
+	failures, err := d.Lockout.FailureCount(ctx, in.Body.Email, ip)
+	if err != nil {
+		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+	}
+	if failures >= captchaAfterFailures {
+		ok, cerr := d.verifyCaptcha(ctx, in.Body.TurnstileToken, ip)
+		if cerr != nil {
+			return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+		}
+		if !ok {
+			return nil, captchaRequired()
+		}
+	}
+
 	q := db.New(d.DB.Write)
 	user, err := q.GetUserByEmail(ctx, in.Body.Email)
 	if err != nil {

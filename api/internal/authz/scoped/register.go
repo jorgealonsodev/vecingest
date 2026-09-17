@@ -166,6 +166,13 @@ func resolveErrorResponse(err error) error {
 	if errors.Is(err, authz.ErrNoMembership) {
 		return apperr.New(404, apperr.CodeNotFound, "not found", nil)
 	}
+	if errors.Is(err, authz.ErrMFARequired) {
+		// Distinguishable from the generic forbidden() (design D-7;
+		// auth-mfa-totp delta: Mandatory TOTP For Admin And Admin_staff
+		// Scope Access) -- the SAME code superadmin login already uses
+		// for its own mandatory-TOTP branch.
+		return apperr.New(403, apperr.CodeMFAEnrollmentRequired, "TOTP enrollment required for this role", nil)
+	}
 	return apperr.New(500, apperr.CodeInternal, "internal error", nil)
 }
 

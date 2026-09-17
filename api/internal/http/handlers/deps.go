@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/jorgealonsodev/vecingest/internal/db"
+	"github.com/jorgealonsodev/vecingest/internal/domain/auth/captcha"
 	"github.com/jorgealonsodev/vecingest/internal/domain/auth/lockout"
 	"github.com/jorgealonsodev/vecingest/internal/domain/auth/mfa"
 	"github.com/jorgealonsodev/vecingest/internal/domain/auth/password"
@@ -69,6 +70,12 @@ type Deps struct {
 	// does not exercise invitation creation; production wiring
 	// (buildServeDeps) always sets it.
 	Queue invitations.Queue
+	// Captcha is the CaptchaVerifier seam (public-form-protection: new,
+	// 6th seam) wired into login-after-third-failure and forgot-
+	// password. nil is treated as "never passes" by verifyCaptcha
+	// (captcha.go): a deployment that forgets to wire it fails CLOSED,
+	// never open.
+	Captcha captcha.Verifier
 }
 
 func (d *Deps) clock() Clock {

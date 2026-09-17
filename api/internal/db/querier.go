@@ -135,6 +135,12 @@ type Querier interface {
 	// caller is expected to load the existing row (GetUserByEmail) and, for
 	// bootstrap-superadmin only, ensure is_superadmin via EnsureSuperadmin.
 	InsertUserIgnoreConflict(ctx context.Context, arg InsertUserIgnoreConflictParams) (int64, error)
+	// auth-mfa-totp delta: Mandatory TOTP For Admin And Admin_staff Scope
+	// Access. Always returns exactly one row (true/false), never
+	// pgx.ErrNoRows, so a caller who never enrolled resolves cleanly to
+	// false instead of a "no rows" error the resolver would have to special
+	// -case.
+	IsUserMFAEnabled(ctx context.Context, userID uuid.UUID) (bool, error)
 	ListAuditLogRange(ctx context.Context, arg ListAuditLogRangeParams) ([]AuditLog, error)
 	ListCommunitiesByOfficeID(ctx context.Context, officeID uuid.UUID) ([]Community, error)
 	ListInvitationsByCommunityID(ctx context.Context, communityID uuid.UUID) ([]Invitation, error)

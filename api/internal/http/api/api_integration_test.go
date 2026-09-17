@@ -26,6 +26,7 @@ import (
 	"github.com/jorgealonsodev/vecingest/internal/http/router"
 	"github.com/jorgealonsodev/vecingest/internal/platform/attempts"
 	"github.com/jorgealonsodev/vecingest/internal/platform/cache"
+	"github.com/jorgealonsodev/vecingest/internal/platform/captcha"
 	"github.com/jorgealonsodev/vecingest/internal/platform/mail"
 	"github.com/jorgealonsodev/vecingest/internal/platform/queue"
 	"github.com/jorgealonsodev/vecingest/internal/testhelpers"
@@ -96,6 +97,10 @@ func newTestServer(t *testing.T) (*httptest.Server, *handlers.Deps, db.Handles) 
 		TokenIssuer:     handlers.OpaqueTokenIssuer{},
 		InviteAttempts:  attempts.NewCounter(nil),
 		Queue:           queue.RiverInvitationQueue{Client: riverClient},
+		// Every test not specifically exercising Turnstile injects the
+		// AlwaysPass double, so none of them depend on network access
+		// (design D-7; this session's explicit instruction).
+		Captcha: captcha.AlwaysPass{},
 	}
 
 	registry := health.NewRegistry(health.PostgresCheck{DB: handlesDB.Write})
@@ -462,8 +467,11 @@ func TestAuthFlow_ForgotPasswordEnumerationSafe(t *testing.T) {
 	createUser(t, handlesDB, email, false)
 
 	client := newClient(srv, nil)
-	resp1, body1 := doJSON(t, client, http.MethodPost, srv.URL+"/v1/auth/forgot-password", map[string]any{"email": email}, nil)
-	resp2, body2 := doJSON(t, client, http.MethodPost, srv.URL+"/v1/auth/forgot-password", map[string]any{"email": "no-such-user@example.com"}, nil)
+	// A non-empty turnstile_token is enough here: this server's Captcha
+	// is captcha.AlwaysPass{} (public-form-protection is exercised by
+	// its own dedicated tests in public_form_protection_test.go).
+	resp1, body1 := doJSON(t, client, http.MethodPost, srv.URL+"/v1/auth/forgot-password", map[string]any{"email": email, "turnstile_token": "test-token"}, nil)
+	resp2, body2 := doJSON(t, client, http.MethodPost, srv.URL+"/v1/auth/forgot-password", map[string]any{"email": "no-such-user@example.com", "turnstile_token": "test-token"}, nil)
 
 	if resp1.StatusCode != resp2.StatusCode || resp1.StatusCode != http.StatusOK {
 		t.Fatalf("expected identical 200 status for both, got %d and %d", resp1.StatusCode, resp2.StatusCode)

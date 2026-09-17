@@ -77,6 +77,7 @@ func Register(hapi huma.API, d *handlers.Deps, registry *health.Registry) {
 	authGroup.UseMiddleware(bearerAuthAndRateLimit(d))
 	handlers.RegisterLogout(authGroup, d)
 	handlers.RegisterMe(authGroup, d)
+	handlers.RegisterMFA(authGroup, d)
 	handlers.RegisterOffices(authGroup, d)
 	handlers.RegisterCommunities(authGroup, d)
 	handlers.RegisterUnits(authGroup, d)

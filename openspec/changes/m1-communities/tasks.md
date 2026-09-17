@@ -180,21 +180,21 @@ through PR1/PR2.
 
 ## Phase 7: Public-Form Protection + Non-Superadmin TOTP (WU-5, PR5 — TDD, D-7)
 
-- [ ] 7.1 RED: an invalid Turnstile token is rejected before any protected-form logic runs (CaptchaVerifier Interface Abstraction)
-- [ ] 7.2 GREEN: implement `CaptchaVerifier` interface in `internal/domain/...`, Turnstile client in `api/internal/platform/captcha/turnstile.go`, `AlwaysPass` test double
-- [ ] 7.3 RED: a third failed login without Turnstile is rejected; a third failed login with a valid token proceeds (Turnstile Required After The Third Login Failure, both scenarios)
-- [ ] 7.4 GREEN: wire `CaptchaVerifier` into the login handler's failure-count branch
-- [ ] 7.5 RED: `POST /v1/auth/forgot-password` without Turnstile is always rejected (Turnstile Always Required On Forgot-Password)
-- [ ] 7.6 GREEN: wire `CaptchaVerifier` unconditionally into forgot-password
-- [ ] 7.7 RED: an IP over its rate limit is still rejected on forgot-password despite a valid Turnstile token (Per-IP Limits Independent Of Turnstile)
-- [ ] 7.8 GREEN: confirm `Limiter` enforcement runs independently of the `CaptchaVerifier` check
-- [ ] 7.9 RED: the M1 registered API surface contains no `register-company` or public contact-form operation (Company Registration And Contact Forms Out Of M1 Scope)
-- [ ] 7.10 GREEN: verify by inspection that no such handler exists; record the scoped exception in `docs/security/gates/M1.md` (Phase 10)
-- [ ] 7.11 RED: an `admin` with no TOTP enrolled verifies a valid code via the non-superadmin endpoint and becomes active; an `admin_staff` with TOTP enrolled verifies via that endpoint (Non-Superadmin TOTP HTTP Endpoints, both scenarios)
-- [ ] 7.12 GREEN: implement `api/internal/http/handlers/mfa.go` wiring the existing `internal/domain/auth/mfa` enroll/verify/recovery flow for non-superadmin callers
-- [ ] 7.13 RED: an `admin` with no active TOTP is rejected on any admin-scoped route and required to enroll; an `admin` with active TOTP is processed normally; an `owner` with no TOTP is unaffected (Mandatory TOTP For Admin And Admin_staff Scope Access, all three scenarios)
-- [ ] 7.14 GREEN: implement the TOTP-gate check in the office/community resolver path — 403 with a distinguishable code when `user_mfa.enabled_at IS NULL` for `admin`/`admin_staff` scope only
-- [ ] 7.15 Run `make gen`; commit regenerated artifacts for the MFA DTOs
+- [x] 7.1 RED: an invalid Turnstile token is rejected before any protected-form logic runs (CaptchaVerifier Interface Abstraction)
+- [x] 7.2 GREEN: implement `CaptchaVerifier` interface in `internal/domain/...`, Turnstile client in `api/internal/platform/captcha/turnstile.go`, `AlwaysPass` test double
+- [x] 7.3 RED: a third failed login without Turnstile is rejected; a third failed login with a valid token proceeds (Turnstile Required After The Third Login Failure, both scenarios)
+- [x] 7.4 GREEN: wire `CaptchaVerifier` into the login handler's failure-count branch
+- [x] 7.5 RED: `POST /v1/auth/forgot-password` without Turnstile is always rejected (Turnstile Always Required On Forgot-Password)
+- [x] 7.6 GREEN: wire `CaptchaVerifier` unconditionally into forgot-password
+- [x] 7.7 RED: an IP over its rate limit is still rejected on forgot-password despite a valid Turnstile token (Per-IP Limits Independent Of Turnstile)
+- [x] 7.8 GREEN: confirm `Limiter` enforcement runs independently of the `CaptchaVerifier` check
+- [x] 7.9 RED: the M1 registered API surface contains no `register-company` or public contact-form operation (Company Registration And Contact Forms Out Of M1 Scope)
+- [x] 7.10 GREEN: verify by inspection that no such handler exists; record the scoped exception in `docs/security/gates/M1.md` (Phase 10) — verification done this run (see apply-progress Deviations: the file itself is intentionally NOT created here, since task 10.4 owns its creation)
+- [x] 7.11 RED: an `admin` with no TOTP enrolled verifies a valid code via the non-superadmin endpoint and becomes active; an `admin_staff` with TOTP enrolled verifies via that endpoint (Non-Superadmin TOTP HTTP Endpoints, both scenarios)
+- [x] 7.12 GREEN: implement `api/internal/http/handlers/mfa.go` wiring the existing `internal/domain/auth/mfa` enroll/verify/recovery flow for non-superadmin callers
+- [x] 7.13 RED: an `admin` with no active TOTP is rejected on any admin-scoped route and required to enroll; an `admin` with active TOTP is processed normally; an `owner` with no TOTP is unaffected (Mandatory TOTP For Admin And Admin_staff Scope Access, all three scenarios)
+- [x] 7.14 GREEN: implement the TOTP-gate check in the office/community resolver path — 403 with a distinguishable code when `user_mfa.enabled_at IS NULL` for `admin`/`admin_staff` scope only
+- [x] 7.15 Run `make gen`; commit regenerated artifacts for the MFA DTOs
 
 ## Phase 8: GET /v1/me Memberships, lint-scope, Permission Matrix (WU-6, PR6 — TDD)
 

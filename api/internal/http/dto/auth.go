@@ -13,6 +13,12 @@ type LoginRequest struct {
 	Password   string `json:"password" minLength:"12" doc:"Absolute floor is 12; the applicable 12-or-15 rule is enforced dynamically server-side (D-F)."`
 	DeviceName string `json:"device_name,omitempty" maxLength:"255"`
 	Platform   string `json:"platform" enum:"ios,android,web" doc:"Determines refresh-token transport: web gets an HttpOnly cookie, ios/android get it in the response body."`
+	// TurnstileToken is REQUIRED only starting on the third failed
+	// attempt for this email/IP within the lockout window
+	// (public-form-protection: Turnstile Required After The Third Login
+	// Failure) -- optional here so the first two attempts need no
+	// client-side challenge at all.
+	TurnstileToken string `json:"turnstile_token,omitempty"`
 }
 
 // LoginInput wraps the login request body.
@@ -92,6 +98,13 @@ type LogoutOutput struct {
 // ForgotPasswordRequest is POST /v1/auth/forgot-password's body.
 type ForgotPasswordRequest struct {
 	Email string `json:"email" format:"email"`
+	// TurnstileToken is ALWAYS required on this endpoint, regardless of
+	// prior attempt count (public-form-protection: Turnstile Always
+	// Required On Forgot-Password). Optional at the schema level
+	// (omitempty) so an absent token renders the SAME domain-level
+	// AUTH_CAPTCHA_REQUIRED response as an invalid one, never huma's
+	// generic schema-validation 422.
+	TurnstileToken string `json:"turnstile_token,omitempty"`
 }
 
 // ForgotPasswordInput wraps the body.

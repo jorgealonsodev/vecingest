@@ -17,6 +17,17 @@ import (
 // {"accepted": true} whether or not the email is registered; only a
 // real account triggers the (async) reset-token dispatch.
 func (d *Deps) ForgotPassword(ctx context.Context, in *dto.ForgotPasswordInput) (*dto.ForgotPasswordOutput, error) {
+	// public-form-protection: Turnstile Always Required On Forgot-
+	// Password -- unconditional, unlike login's failure-count branch,
+	// and checked before any user lookup runs.
+	ok, cerr := d.verifyCaptcha(ctx, in.Body.TurnstileToken, clientIP(ctx))
+	if cerr != nil {
+		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+	}
+	if !ok {
+		return nil, captchaRequired()
+	}
+
 	q := db.New(d.DB.Write)
 	svc := password.ForgotPasswordService{
 		Users:     userLookup{q: q},

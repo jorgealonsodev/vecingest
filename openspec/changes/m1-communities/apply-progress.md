@@ -491,3 +491,129 @@ pending-past-expiry-reads-as-expired-before-sweep) — all three are in
 - Current work unit: WU-4 (Phase 6, tasks 6.1–6.20, this run) — invitations, PR4 (base: `feature/m1-communities-pr3-units`, which already carries PR1+PR2+PR3).
 - Boundary: starts from PR3's tip; ends with a fully green `go test -race ./...` (348/348) including 10 new invitation integration tests, 3 new `scoped.Invitation` tests, and 1 new `cmd/lintscope` test; clean `go vet`/`gofumpt`/`golangci-lint`; no new gosec finding class (one more instance of an already-accepted generated-file false-positive category); a clean, idempotent `make gen`; and a fixed pre-existing River sequence-grant bug that this phase's own first real producer surfaced.
 - Estimated review budget impact: well above 400 authored lines (see Issues Found #4) — recommend `size:exception` for PR4, consistent with the PR1/PR3 precedent.
+
+## Work Unit: WU-5 / PR5 — Phase 7: Public-Form Protection + Non-Superadmin TOTP
+
+**Status**: Phase 7 (tasks 7.1–7.15) COMPLETE. Phase 8 (WU-6) explicitly NOT
+started per this run's instruction.
+
+**Branch**: `feature/m1-communities-pr5-turnstile` (base: `feature/m1-communities-pr4-invitations`,
+which already carries PR1+PR2+PR3+PR4). No commit created yet within this
+run's own tool access — created by the operator after this report; not
+merged, not pushed — delivery is the user's decision.
+
+### Completed Tasks (Phase 7, 7.1–7.15)
+
+All 15 tasks marked `[x]` in `tasks.md`.
+
+- [x] 7.1/7.2 `captcha.Verifier` interface (`internal/domain/auth/captcha/captcha.go`); `captcha.Turnstile` + `captcha.AlwaysPass` (`internal/platform/captcha/turnstile.go`)
+- [x] 7.3/7.4 Turnstile wired into `Login`'s failure-count branch (`lockout.Service.FailureCount`, new, read-only)
+- [x] 7.5/7.6 Turnstile wired unconditionally into `ForgotPassword`
+- [x] 7.7/7.8 Confirmed `limiter.LoginReset` (chi middleware, runs BEFORE the handler) enforces its budget independent of Turnstile — no production code change needed, only the test
+- [x] 7.9/7.10 Confirmed by inspection AND by a genuine RED/GREEN plant that no `register-company`/contact-form operation exists in the API surface
+- [x] 7.11/7.12 `api/internal/http/handlers/mfa.go` — `EnrollMFA`/`VerifyMFA`/`RegisterMFA`, wiring M0's existing `internal/domain/auth/mfa` enroll/verify/recovery-code generation for ANY authenticated non-superadmin caller
+- [x] 7.13/7.14 Mandatory-TOTP gate: `authz.ErrMFARequired` + `requireMFAForAdminRoles`, wired into `ResolveCommunity` and `ResolveOffice` (the one point every community/office resolution passes through, regardless of route shape); new sqlc query `IsUserMFAEnabled`
+- [x] 7.15 `make gen` run twice; second run byte-identical (`git diff --stat` clean on `openapi.yaml`, TS client, Zod schemas, sqlc code)
+
+### Files Changed
+
+| File | Action | What Was Done |
+|------|--------|----------------|
+| `api/internal/domain/auth/captcha/captcha.go` | Created | `Verifier` interface (the design's "CaptchaVerifier") |
+| `api/internal/platform/captcha/turnstile.go` | Created | `Turnstile` (real Cloudflare HTTP client) + `AlwaysPass` test double |
+| `api/internal/platform/captcha/turnstile_test.go` | Created | 4 unit tests against a local `httptest.Server` fake — no network dependency |
+| `api/internal/domain/auth/mfa/totp.go` | Modified | Added exported `Base32Secret` (thin wrapper over the existing unexported `base32Secret` — no new domain logic) |
+| `api/internal/domain/auth/lockout/lockout.go` | Modified | Added `FailureCount` (read-only; `RecordFailure`/`RecordSuccess`/`IsLocked` unchanged) |
+| `api/internal/domain/auth/lockout/lockout_test.go` | Modified | Added `TestFailureCount_ReturnsTheHigherOfEmailAndIPWithoutRecording` |
+| `api/internal/db/queries/user_mfa.sql` | Modified | Added `IsUserMFAEnabled` (`SELECT EXISTS(...)`, always exactly one row) |
+| `api/internal/db/user_mfa.sql.go`, `querier.go` | Generated | `go tool sqlc generate` |
+| `api/internal/authz/resolve.go` | Modified | Added `ErrMFARequired`, `Querier.IsUserMFAEnabled`, `requireMFAForAdminRoles`; wired into `ResolveCommunity` (both the office leg and the unit leg) and `ResolveOffice` |
+| `api/internal/authz/scoped/register.go` | Modified | `resolveErrorResponse` maps `ErrMFARequired` → 403 `apperr.CodeMFAEnrollmentRequired` |
+| `api/internal/authz/scoped/register_test.go` | Modified | `fakeQuerier` gained `mfaDisabledUsers` + `IsUserMFAEnabled` (defaults to enabled=true, so every PRE-EXISTING test keeps resolving exactly as before); added `officeInput`/`officeOutput`/`newOfficeTestAPI` fixture; 6 new tests for the gate (admin/admin_staff rejected without TOTP, admin allowed with TOTP, owner unaffected, both `scoped.Community` and `scoped.Office` paths) |
+| `api/internal/http/apperr/apperr.go` | Modified | Added `CodeCaptchaRequired` |
+| `api/internal/http/dto/auth.go` | Modified | `LoginRequest`/`ForgotPasswordRequest` gained `TurnstileToken` (both `omitempty` at the schema level, so an absent token renders the domain-level captcha error, never huma's generic 422) |
+| `api/internal/http/dto/mfa.go` | Created | `MFAEnrollInput/Output`, `MFAVerifyInput/Output` and their request/response bodies |
+| `api/internal/http/handlers/deps.go` | Modified | Added `Deps.Captcha captcha.Verifier` |
+| `api/internal/http/handlers/captcha.go` | Created | `verifyCaptcha` (fails closed on nil `Captcha` or empty token), `captchaRequired`, `captchaAfterFailures` (=2) |
+| `api/internal/http/handlers/auth_login.go` | Modified | `Login` checks `FailureCount` before any credential lookup; captcha required once `failures >= 2` |
+| `api/internal/http/handlers/auth_password_reset.go` | Modified | `ForgotPassword` checks captcha unconditionally, before any user lookup |
+| `api/internal/http/handlers/mfa.go` | Created | `EnrollMFA`, `VerifyMFA` (+`confirmMFAEnrollment`/`verifyActiveMFA` helpers), `RegisterMFA` |
+| `api/internal/http/api/api.go` | Modified | Wired `handlers.RegisterMFA(authGroup, d)` |
+| `api/cmd/vecingest/serve.go` | Modified | `buildServeDeps` wires `Captcha: captcha.Turnstile{Secret: holder.TurnstileSecret()}` |
+| `api/internal/http/api/api_integration_test.go` | Modified | `newTestServer`'s `Deps` gained `Captcha: captcha.AlwaysPass{}`; fixed `TestAuthFlow_ForgotPasswordEnumerationSafe` (pre-existing test, needed a `turnstile_token` now that forgot-password requires one) |
+| `api/internal/http/api/office_test.go` | Modified | `seedOfficeWithAdmin` now also seeds ACTIVE TOTP (new `seedActiveMFA` helper) — see Deviations #1 |
+| `api/internal/http/api/community_test.go` | Modified | The one inline `admin_staff` caller (`TestCommunity_CreationRestrictedToAdminScopedToOffice`) also seeded with active TOTP, so its observed 403 is unambiguously the ROLE check, not the MFA gate |
+| `api/internal/http/api/public_form_protection_test.go` | Created | 4 integration tests: login-captcha (both scenarios in one test), forgot-password-captcha, rate-limit-independent-of-captcha, no-register-company-in-surface |
+| `api/internal/http/api/mfa_test.go` | Created | 5 integration tests: enroll→verify→activate (+ recovery-code persistence, +encrypted-secret assertion), verify-against-already-active, invalid-code-stays-inactive, re-enroll-conflicts, and one full-stack admin-gate test (`POST /v1/communities` blocked then allowed) |
+| `api/openapi/openapi.yaml`, `packages/shared/src/client/openapi-types.ts`, `packages/shared/src/schemas/index.ts` | Generated | `make gen` |
+
+### TDD Cycle Evidence
+
+Every RED below was produced by PLANTING a targeted logic violation in already-implemented
+production code (route registration always left intact where a route already existed), confirming
+the SPECIFIC test fails at the assertion naming the scenario, then reverting and re-confirming
+GREEN — per this run's explicit instruction. `FailureCount`/the MFA gate/register-company-absence
+are NEW code with no pre-existing route to gut non-vacuously any other way, so each got the
+identical planted-violation treatment against ITS OWN new logic rather than a route-absence RED.
+
+| Task | Test | What was PLANTED | RED assertion observed | GREEN after revert |
+|---|---|---|---|---|
+| 7.1–7.2 | `internal/platform/captcha` (4 tests) | N/A — written test-first against the not-yet-existing `captcha` package; genuine compile-time RED (`undefined: captcha.Turnstile`) before implementation | compile-time RED | ✅ implemented, 4/4 pass |
+| lockout.FailureCount | `TestFailureCount_ReturnsTheHigherOfEmailAndIPWithoutRecording` | `FailureCount` body replaced with `return 0, nil` | `lockout_test.go:306: expected 2 failures after 2 RecordFailure calls, got 0` | ✅ reverted, 8/8 lockout tests pass |
+| 7.3/7.4 | `TestPublicForm_LoginRequiresTurnstileAfterThirdFailure` | `if failures >= captchaAfterFailures` → `if failures >= 999999` (threshold effectively disabled) | `public_form_protection_test.go:53: expected 400 captcha-required on the third attempt with no token...` (got 200 — the correct-password/no-token attempt silently succeeded) | ✅ reverted, pass |
+| 7.5/7.6 | `TestPublicForm_ForgotPasswordAlwaysRequiresTurnstile` | `verifyCaptcha` call short-circuited to `ok, cerr := true, error(nil)` | `public_form_protection_test.go:87: expected 400 captcha-required with no token... got 200` | ✅ reverted, pass |
+| 7.9/7.10 | `TestPublicForm_NoRegisterCompanyOrContactFormInAPISurface` | Planted a temporary `POST /v1/auth/register-company` registration in `api.go`'s `Register()` | `public_form_protection_test.go:162: expected no register-company operation in the M1 API surface` | ✅ reverted, pass |
+| 7.11/7.12 (activation persists) | `TestMFA_EnrollThenVerifyActivates` | `confirmMFAEnrollment`'s call to `mfa.ConfirmEnrollment` short-circuited to `ok, err := true, error(nil)` — the exact "echoes success without persisting" shape this run's instructions named | `mfa_test.go:85: expected TOTP to be active after a valid verification` (re-read via a SEPARATE `GetUserMFA` query, independent of the handler's own 200 response) | ✅ reverted, pass |
+| 7.11/7.12 (recovery codes persist) | `TestMFA_EnrollThenVerifyActivates` | `SetUserMFARecoveryCodes` call skipped (codes still returned in the response body, never written) | `mfa_test.go:88: expected 10 persisted recovery-code hashes, got 0` | ✅ reverted, pass |
+| 7.13/7.14 | `TestCommunity_AdminWithoutMFARejected`, `TestCommunity_AdminStaffWithoutMFARejected`, `TestOffice_AdminWithoutMFARejected` | `requireMFAForAdminRoles`'s `if role != RoleAdmin && role != RoleAdminStaff` → `if true` (gate unconditionally skipped) | All three: `expected 403 ..., got 200` | ✅ reverted, 34/34 `internal/authz/...` tests pass |
+
+**Every write endpoint answers "if gutted, does a test fail?"**: `EnrollMFA`
+(gutting the `mfa.Enroll` call or the conflict check would surface via
+`TestMFA_ReEnrollAlreadyActiveConflicts` and the encrypted-secret assertion
+in `TestMFA_EnrollThenVerifyActivates`); `VerifyMFA`'s two branches are
+BOTH covered by the two planted-violation rows above. Login/ForgotPassword
+are not new write endpoints (no new persistence), so their coverage is the
+planted-violation rows for the new READ/branch logic (`FailureCount`,
+`verifyCaptcha`) rather than a write re-read.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `cd api && go test -race ./internal/platform/captcha/... ./internal/domain/auth/lockout/... ./internal/authz/... ./internal/http/api/... -run "TestTurnstile\|TestAlwaysPass\|TestFailureCount\|TestCommunity_Admin\|TestCommunity_Owner\|TestOffice_Admin\|TestPublicForm\|TestMFA" -v` → **32/32 pass** |
+| Runtime harness command/scenario and exact result | Testcontainers Postgres 17, real HTTP round-trip through the actual chi/huma router for every `internal/http/api` test (login, forgot-password, enroll/verify, and the full-stack `POST /v1/communities` admin-gate test going through the REAL `bearerAuthAndRateLimit` → `scoped.Community` → `authz.ResolveCommunity` → `requireMFAForAdminRoles` chain, not a mock); `internal/authz/scoped`'s 6 new gate tests use the in-memory humachi fixture pattern already established there (unit-layer, per the Testing Strategy table) |
+| Rollback boundary | Revert `api/internal/domain/auth/captcha/`, `api/internal/platform/captcha/`, `api/internal/http/handlers/{mfa,captcha}.go`, `api/internal/http/dto/mfa.go`, `api/internal/http/api/{mfa_test,public_form_protection_test}.go`; revert the `TurnstileToken`/`Captcha` additions in `dto/auth.go`/`handlers/deps.go`/`handlers/auth_login.go`/`handlers/auth_password_reset.go`/`api/api.go`/`cmd/vecingest/serve.go`; revert `authz/resolve.go`'s `ErrMFARequired`/`requireMFAForAdminRoles`/`IsUserMFAEnabled` and `authz/scoped/register.go`'s error-mapping addition; revert `authz/scoped/register_test.go`'s `mfaDisabledUsers`/office-fixture additions; revert `lockout.go`'s `FailureCount`; revert `mfa/totp.go`'s `Base32Secret`; revert `queries/user_mfa.sql`'s `IsUserMFAEnabled` and re-run `go tool sqlc generate`; revert `office_test.go`'s `seedActiveMFA` call inside `seedOfficeWithAdmin` and `community_test.go`'s one `seedActiveMFA` call (this LAST pair is the one revert that is NOT independent of the rest: if the MFA gate is reverted, these seed calls become harmless no-ops rather than required, so they can stay or go either way without breaking anything) |
+
+### Full-Suite Verification
+
+- `cd api && go build ./...` → clean
+- `cd api && go vet ./...` → clean
+- `cd api && go test -race ./...` → **368/368 pass**, 39 packages (up from Phase 6's 348; +20: 4 captcha unit tests, 1 lockout unit test, 6 authz/scoped gate tests, 4 public-form-protection integration tests, 5 mfa integration tests — net +20). One PRE-EXISTING test (`TestAuthFlow_ForgotPasswordEnumerationSafe`) needed a one-line fix (add `turnstile_token`) since forgot-password now requires one — not a new test, a required adjustment to an existing one, called out explicitly rather than silently patched
+- `export PATH="$PATH:$(go env GOPATH)/bin"; gofumpt -l .` → clean (no files listed)
+- `golangci-lint run ./...` → **0 issues**
+- `gosec -quiet ./...` → **27 issues**, IDENTICAL COUNT to the environment's documented baseline (PR4's own final count). Grepped the full output for every file this run created/modified and found ZERO new findings — the 27 are the same pre-existing set (config.go, seed.go, cmd/lintscope/parse.go, cmd/lintcompose/main.go, cmd/openapi-gen/main.go, internal/platform/hibp/client.go, internal/domain/auth/token/csrf.go, internal/domain/audit/hash.go, migrations/bootstrap/00001_roles.go, internal/db/{users,sessions,invitations,password_reset_tokens}.sql.go — none of them touched by this run)
+- `cd api && go run ./cmd/lintscope internal/db/queries migrations/schema` → `OK` (the new `IsUserMFAEnabled` query is against `user_mfa`, a global per-user table with no tenant column, so lint-scope correctly has nothing to say about it)
+- `make gen` (openapi-gen + sqlc generate + `pnpm --filter @vecingest/shared build`) → run twice; `git diff --stat` on `openapi.yaml`, the TS client, the Zod schemas, and every `internal/db/*` file → **byte-identical across both runs**
+
+### Deviations from Design
+
+1. **Every existing test seeding an admin/admin_staff caller via `seedOfficeWithAdmin` (or the one inline `community_test.go` case) now ALSO seeds active TOTP**, via a new `seedActiveMFA` helper. This is NOT a design deviation but a NECESSARY consequence of implementing task 7.14 literally ("the office/community resolver path" — i.e. every resolution, not just new routes): the mandatory-TOTP gate correctly rejects EVERY pre-existing Phase 2–6 admin/admin_staff test caller that never enrolled TOTP, since `authz.Configure` wires a REAL Testcontainers-backed `Querier` in every `internal/http/api` test. Flagging this explicitly because it is the single largest blast-radius decision in this run: it touches two files outside Phase 7's own new files, but touches NOTHING in Phases 2–6's actual assertions or production code — only what each admin test caller's PRECONDITION seeds. The one test that specifically wants an admin WITHOUT TOTP (to exercise the gate itself, `TestMFA_AdminWithoutTOTPBlockedFromAdminScopedRoute`) seeds its own caller directly, bypassing the helper.
+2. **`docs/security/gates/M1.md` (task 7.10's "record the scoped exception") is deliberately NOT created in this run.** That file's creation is explicitly task 10.4 ("Create `docs/security/gates/M1.md` — Checkpoint A/B split... including the scoped exception row for deferred Turnstile coverage on `register-company`/contact forms"), and this run's own instructions say "Do NOT start Phase 8" (Phase 10 is further still). Task 7.10's parenthetical "(Phase 10)" reads as a forward pointer to where that documentation lands, not an instruction to create the file two phases early. 7.10's actual GREEN — "verify by inspection that no such handler exists" — is satisfied by `TestPublicForm_NoRegisterCompanyOrContactFormInAPISurface` plus the genuine RED/GREEN plant proving that test would catch a regression.
+3. **A recovery-code CONSUMPTION HTTP endpoint (e.g. "verify using a recovery code instead of a TOTP code") is NOT implemented.** `mfa.ConsumeRecoveryCode` exists in the domain (M0) but is wired into NO HTTP path anywhere in this codebase, including the pre-existing superadmin login flow — `SuperadminLogin` only ever calls `VerifyTOTP`, never `ConsumeRecoveryCode`. M1's own mandatory-TOTP gate (task 7.14) checks only `user_mfa.enabled_at`, never a live per-request TOTP/recovery challenge, so there is no login-time or admin-route-time moment in M1's actual flow where a recovery code would ever be presented. `VerifyMFA` DOES generate and persist real recovery codes (task's own "recovery flow" wording, satisfied for the enrollment half), but consuming one to bypass a lost authenticator is out of this run's assigned task list (7.11–7.12 name only "enroll/verify" as the HTTP surface) and would need its own spec scenario to be more than an invented feature. Flagging this explicitly rather than silently shipping a partial recovery flow.
+4. **`captchaAfterFailures = 2`** (i.e., the THIRD attempt is the first one requiring Turnstile) is a Go constant in `handlers/captcha.go`, matching `public-form-protection/spec.md`'s literal wording ("starting on the third failed attempt") — not a `legal_rules` row, since this is a security/product threshold, not an LPH legal deadline/majority/percentage (`rules.apply.guidelines`'s legal-rules-are-data rule scopes explicitly to those).
+5. **`CaptchaVerifier` is named `captcha.Verifier`** in Go (package `captcha`, type `Verifier`), not the literally-stuttering `captcha.CaptchaVerifier` design.md's prose uses — this repo's existing seams (`lockout.AttemptCounter`, `mfa.AttemptCounter`, `password.ResetRequester`) never stutter their own package name either, and `.golangci.yml` has no stutter/revive check that would have caught the opposite choice.
+
+### Issues Found
+
+None beyond the one pre-existing test fix (`TestAuthFlow_ForgotPasswordEnumerationSafe`) already called out under Full-Suite Verification.
+
+### Review Workload / PR Boundary
+
+- Mode: chained PR slice (`feature-branch-chain`, per `tasks.md`).
+- Current work unit: WU-5 (Phase 7, tasks 7.1–7.15, this run) — public-form Turnstile protection + non-superadmin TOTP, PR5 (base: `feature/m1-communities-pr4-invitations`, which already carries PR1+PR2+PR3+PR4).
+- Boundary: starts from PR4's tip; ends with a fully green `go test -race ./...` (368/368) including 20 new tests across 5 files, clean `gofumpt`/`golangci-lint`, no new `gosec` finding, a clean `lintscope`, and a clean, idempotent `make gen`.
+- Authored line count (git diff --stat, excluding generated `openapi.yaml`/TS client/Zod artifacts and `tasks.md`'s own checkbox edits): new files (`captcha.go`+`turnstile.go`+`turnstile_test.go`+`mfa.go`(handler)+`mfa.go`(dto)+`captcha.go`(handler)+`mfa_test.go`+`public_form_protection_test.go`) plus modifications across `resolve.go`, `register.go`/`register_test.go`, `lockout.go`/`lockout_test.go`, `totp.go`, `apperr.go`, `auth.go`(dto), `deps.go`, `auth_login.go`, `auth_password_reset.go`, `api.go`, `serve.go`, `api_integration_test.go`, `office_test.go`, `community_test.go`, `user_mfa.sql` — well above the 400-line budget, consistent with the PR1/PR3/PR4 precedent. This run's instructions state the 400-line figure is "an advisory planning heuristic, not a cap" for this session; the Turnstile and TOTP-gate halves share no natural split point that would avoid duplicating the `captcha`/`verifyCaptcha` seam or leaving the mandatory-TOTP gate half-wired (an admin gated on TOTP with no enroll/verify endpoint yet would be locked out with no way to satisfy the gate). Flagging honestly: a `size:exception` recommendation for PR5, consistent with the PR1/PR3/PR4 precedent.
+
+### Status
+
+25/25 Phase 1. 9/9 Phase 2. 11/11 Phase 3. 13/13 Phase 4. 11/11 Phase 5. 20/20 Phase 6. **15/15 Phase 7 (this run).** Phase 8 (WU-6, PR6 — GET /v1/me memberships, lint-scope, permission matrix) NOT started per this run's explicit instruction to stop after Phase 7.

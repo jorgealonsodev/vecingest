@@ -47,6 +47,7 @@ const LoginResponse = z.object({
 const ForgotPasswordRequest = z.object({
   $schema: z.string().url().optional(),
   email: z.string().email(),
+  turnstile_token: z.string().optional(),
 });
 const ForgotPasswordResponse = z.object({
   $schema: z.string().url().optional(),
@@ -58,6 +59,7 @@ const LoginRequest = z.object({
   email: z.string().email(),
   password: z.string().min(12),
   platform: z.enum(["ios", "android", "web"]),
+  turnstile_token: z.string().optional(),
 });
 const RefreshRequest = z
   .object({ $schema: z.string().url(), refresh_token: z.string() })
@@ -300,6 +302,20 @@ const MeResponse = z.object({
   id: z.string(),
   is_superadmin: z.boolean(),
 });
+const MFAEnrollResponse = z.object({
+  $schema: z.string().url().optional(),
+  provisioning_uri: z.string(),
+  secret: z.string(),
+});
+const MFAVerifyRequest = z.object({
+  $schema: z.string().url().optional(),
+  code: z.string().min(6).max(6),
+});
+const MFAVerifyResponse = z.object({
+  $schema: z.string().url().optional(),
+  active: z.boolean(),
+  recovery_codes: z.union([z.array(z.string()), z.null()]).optional(),
+});
 const SessionSummary = z.object({
   created_at: z.string().datetime({ offset: true }),
   device_name: z.string().optional(),
@@ -411,6 +427,9 @@ export const schemas = {
   RevokeInvitationResponse,
   ResendInvitationResponse,
   MeResponse,
+  MFAEnrollResponse,
+  MFAVerifyRequest,
+  MFAVerifyResponse,
   SessionSummary,
   ListSessionsResponse,
   ListOfficesResponse,

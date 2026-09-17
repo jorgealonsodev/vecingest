@@ -45,7 +45,14 @@ func mintAccessToken(t *testing.T, deps *handlers.Deps, handlesDB db.Handles, us
 // seedOfficeWithAdmin inserts an office and one admin office_members row
 // directly (bypassing the HTTP bootstrap flow this file also tests),
 // for tests whose focus is a DIFFERENT endpoint that merely needs an
-// existing office+admin as a precondition.
+// existing office+admin as a precondition. The admin is seeded with
+// ACTIVE TOTP (seedActiveMFA): since auth-mfa-totp delta's Mandatory
+// TOTP For Admin And Admin_staff Scope Access gate now runs at every
+// community/office resolution, an admin test caller with no TOTP would
+// be rejected before ever reaching the endpoint each of these tests
+// actually means to exercise. A test that specifically wants an admin
+// WITHOUT TOTP (to exercise that gate itself) seeds its own caller
+// directly rather than using this helper -- see public_form_test.go.
 func seedOfficeWithAdmin(t *testing.T, handlesDB db.Handles, adminEmail string) (officeID, adminID uuid.UUID) {
 	t.Helper()
 	q := db.New(handlesDB.Write)
@@ -66,7 +73,28 @@ func seedOfficeWithAdmin(t *testing.T, handlesDB db.Handles, adminEmail string) 
 	}); err != nil {
 		t.Fatalf("insert office member: %v", err)
 	}
+	seedActiveMFA(t, handlesDB, adminID)
 	return office.ID, adminID
+}
+
+// seedActiveMFA inserts an ENABLED user_mfa row for userID directly
+// (bypassing the enroll/verify HTTP flow this package's mfa_test.go
+// exercises separately), for any test whose admin/admin_staff caller
+// merely needs to satisfy the mandatory-TOTP gate as a precondition.
+// The secret value itself is never used by these tests -- only
+// enabled_at needs to be non-NULL.
+func seedActiveMFA(t *testing.T, handlesDB db.Handles, userID uuid.UUID) {
+	t.Helper()
+	q := db.New(handlesDB.Write)
+	if _, err := q.UpsertUserMFA(t.Context(), db.UpsertUserMFAParams{
+		UserID:              userID,
+		TotpSecretEncrypted: []byte("seed-placeholder-not-a-real-secret"),
+	}); err != nil {
+		t.Fatalf("seed user_mfa: %v", err)
+	}
+	if err := q.ConfirmUserMFAEnrollment(t.Context(), userID); err != nil {
+		t.Fatalf("confirm user_mfa enrollment: %v", err)
+	}
 }
 
 // office-management: Office Creation Restricted To Superadmin (both
