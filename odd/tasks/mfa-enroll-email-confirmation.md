@@ -33,8 +33,13 @@ Proving control of the account's mailbox at enrollment time closes the password-
 - [x] T1 — Schema and queries: migration `00011_otp_mfa_enroll_purpose.sql` adds purpose `mfa_enroll` (drop/re-add CHECK, Down restores the 00006 list); queries to fetch the latest open challenge `FOR UPDATE` and to invalidate open challenges per user+purpose; `make gen`.
 - [x] T2 — Delivery: River job `mfa_enroll_email` with sealed code, worker registered in `queue.NewClient`, template `mfa_enroll.html` + `RenderMFAEnrollCode`, wiring in `serve.go`/`Deps`.
 - [x] T3 — Enroll and confirm: `EnrollMFA` issues the challenge in the same transaction as the pending secret; `confirmMFAEnrollment` requires `email_code`, enforces expiry/attempts/single use, marks the challenge verified before activation. Test-first; update existing MFA tests.
-- [ ] T5 — Issuance cap: limit how many `mfa_enroll` challenges one user can be issued per window, so re-enrolling cannot mint fresh attempt budgets (review finding: ~250 guesses/min via repeated enroll under the 300 req/min per-user limit). Test-first.
-- [ ] T4 — Spec: add the email-confirmed enrollment scenario to `openspec/changes/m1-communities/specs/auth-mfa-totp/spec.md`.
+- [x] T5 — Issuance cap: limit how many `mfa_enroll` challenges one user can be issued per window, so re-enrolling cannot mint fresh attempt budgets (review finding: ~250 guesses/min via repeated enroll under the 300 req/min per-user limit). Test-first. Outcome: `mfa.EnrollEmailIssueLimit` = 5 per `mfa.EnrollEmailIssueWindow` = 1h (sliding, counted on `created_at` with the DB clock via new query `CountOTPChallengesIssuedSince`); past it, 429 `AUTH_TOO_MANY_ATTEMPTS` with `Retry-After: 3600`, reusing the existing code (no new error code, so openapi/shared unchanged). The count runs under a new users-row lock (`LockUserForMFAEnrollment`, `FOR NO KEY UPDATE`) so concurrent enrolls cannot all pass it; the already-active 409 check moved inside the same transaction. No migration needed.
+- [x] T4 — Spec: add the email-confirmed enrollment scenario to `openspec/changes/m1-communities/specs/auth-mfa-totp/spec.md`. Outcome: new requirement "Email-Confirmed Enrollment" with five scenarios (missing/wrong email code, both valid, expired/exhausted/superseded, issuance cap, stale code not delivered); the admin enroll scenario now mentions the emailed code.
+- [x] T6 — Review follow-up R3/R4 lock order: real. Enroll locked `user_mfa` (upsert) then `otp_challenges` (invalidate); confirm locked the challenge then `user_mfa` (activate) — a possible deadlock. Fixed in 311c4fd: both paths now lock the users row first, then `otp_challenges`, then `user_mfa` (enroll issues the challenge before upserting the secret). No deterministic test: the deadlock needs interleaved transactions; covered by the full suite staying green.
+- [x] T7 — Review follow-up R4 stale codes on retry: real (the job carried no challenge identity). Fixed in ce447d3: job args carry `challenge_id`; the worker re-reads the challenge and completes without sending when it is missing, expired/superseded or verified; a lookup error fails the job so River retries. Tests: worker stub cases + HTTP test asserting the job names the issued challenge.
+- [x] T8 — Review follow-up R2 TTL hardcoded in template: real. Fixed in ce447d3: `MFAEnrollCodeData.ExpiresInMinutes`, filled by the worker from `mfa.EnrollEmailTTL`; template renders it. Tests in `mail` and `queue`.
+- [x] T9 — Review follow-up R2 attempt-cap literal in tests: real. Fixed in ce447d3: the HTTP tests use `mfa.EnrollEmailMaxAttempts`.
+- Not changed (out of scope by decision): the invitations.go policy-infra finding, and "a wrong TOTP burns an email attempt" (intended: every failed confirmation counts).
 
 ## Acceptance criteria
 
@@ -63,7 +68,10 @@ Forecast about 500–700 authored changed lines. Strategy: `single-pr` on the ex
 - 2026-10-06: Design mapped (otp_challenges table exists unused). Document created.
 - 2026-10-06: T1 committed as 3b7d6cb (delegated writer).
 - 2026-10-06: T2+T3 implemented by the delegated writer. Independent read-only review: all constraints and acceptance criteria met; `go test -race -count=1 ./...` 31 packages ok, `make lint` 0 issues, `make gen` no diff. Review finding fixed inline: the expiry re-check under the challenge lock now reads the clock after the lock, so a re-enrollment committed between attempt consumption and the lock is rejected (no deterministic test: the window needs interleaved transactions; http tests 112 passed after the fix). Medium finding added as T5.
+- 2026-10-06: T5 committed as 311c4fd (delegated writer; route: delegated direct, writer trigger). RED observed first (`TestMFAEnrollEmail_IssuanceIsCappedPerWindow`: 200 instead of 429), then GREEN. Includes the T6 lock-order fix (same users-row lock).
+- 2026-10-06: T7–T9 committed as ce447d3. RED observed first (worker skip cases sent the stale code; template ignored the given lifetime), then GREEN.
+- 2026-10-06: T4 spec + this document committed. Checks after the last code commit: `go test -race -count=1 ./...` 433 passed in 39 packages; `make lint` 0 issues (gofumpt clean, golangci-lint, biome, lint-compose OK); `make lint-scope` OK; `make gen` exit 0 with no diff.
 
 ## Next step
 
-T5 then T4 via one delegated writer.
+All tasks done. RDD assess the new commits (311c4fd, ce447d3, and the T4/doc commit) against the last reviewed boundary; push/PR remain the user's decision.
