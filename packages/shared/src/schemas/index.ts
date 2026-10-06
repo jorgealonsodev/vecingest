@@ -299,11 +299,18 @@ const ResendInvitationResponse = z.object({
   sent_count: z.number().int(),
   short_code: z.string(),
 });
+const MembershipEntry = z.object({
+  id: z.string(),
+  name: z.string(),
+  role: z.enum(["admin", "admin_staff", "owner", "tenant"]),
+  scope: z.enum(["office", "community"]),
+});
 const MeResponse = z.object({
   $schema: z.string().url().optional(),
   email: z.string(),
   id: z.string(),
   is_superadmin: z.boolean(),
+  memberships: z.array(MembershipEntry),
 });
 const MFAEnrollResponse = z.object({
   $schema: z.string().url().optional(),
@@ -430,6 +437,7 @@ export const schemas = {
   PreviewInvitationResponse,
   RevokeInvitationResponse,
   ResendInvitationResponse,
+  MembershipEntry,
   MeResponse,
   MFAEnrollResponse,
   MFAVerifyRequest,

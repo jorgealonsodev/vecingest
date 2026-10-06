@@ -132,6 +132,47 @@ func (q *Queries) InsertUnitMember(ctx context.Context, arg InsertUnitMemberPara
 	return i, err
 }
 
+const listCommunityMembershipSummariesByUserID = `-- name: ListCommunityMembershipSummariesByUserID :many
+SELECT DISTINCT um.community_id, c.name AS community_name, um.role
+FROM unit_members um
+JOIN communities c ON c.id = um.community_id AND c.deleted_at IS NULL
+WHERE um.user_id = $1 AND um.deleted_at IS NULL
+ORDER BY c.name ASC, um.community_id ASC, um.role ASC
+`
+
+type ListCommunityMembershipSummariesByUserIDRow struct {
+	CommunityID   uuid.UUID `json:"community_id"`
+	CommunityName string    `json:"community_name"`
+	Role          string    `json:"role"`
+}
+
+// GET /v1/me's profile listing (user-profile: GET /v1/me Response
+// Shape): the caller's community memberships WITH the community name.
+// DISTINCT collapses several units held in one community under the same
+// role into the single entry the response describes; owner and tenant
+// in the same community stay two entries. Like
+// ListOfficeMembershipSummariesByUserID, a description of the caller's
+// own rows, never an authorization decision.
+func (q *Queries) ListCommunityMembershipSummariesByUserID(ctx context.Context, userID uuid.UUID) ([]ListCommunityMembershipSummariesByUserIDRow, error) {
+	rows, err := q.db.Query(ctx, listCommunityMembershipSummariesByUserID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCommunityMembershipSummariesByUserIDRow
+	for rows.Next() {
+		var i ListCommunityMembershipSummariesByUserIDRow
+		if err := rows.Scan(&i.CommunityID, &i.CommunityName, &i.Role); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUnitMembersByCommunityID = `-- name: ListUnitMembersByCommunityID :many
 SELECT id, unit_id, community_id, user_id, role, tenure, board_role, board_from, board_to, notification_address, electronic_notifications_consent_at, consent_text_version, valid_from, valid_to, deleted_at, created_at, updated_at FROM unit_members WHERE community_id = $1 AND deleted_at IS NULL ORDER BY created_at ASC
 `

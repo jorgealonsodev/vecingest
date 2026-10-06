@@ -1164,3 +1164,48 @@ reader will hit them. The session's stated budget was 200 lines with
 mechanism and a second mailer contract do not fit it. `size:exception` is the
 honest classification. Nothing was compressed and no test was dropped to
 approach a number.
+
+## Work Unit: WU-6 / PR6 — Phase 8: GET /v1/me Memberships, lint-scope, Permission Matrix
+
+**Branch**: `feature/m1-communities-pr6-me-memberships` (base: `feature/m1-communities-pr5-turnstile`,
+which already carries PR1–PR5 and their correction rounds). Not pushed, no PR —
+delivery is the user's decision.
+
+### 8.1–8.4 — `GET /v1/me` memberships
+
+- `dto.MeResponse` gained `memberships: MembershipEntry[]` (`nullable:"false"`,
+  so the published schema is `type: array`, never `array | null`), each entry
+  `{scope: office|community, id, name, role}`.
+- `handlers.Me` fills it through `listOwnMemberships`, backed by two new sqlc
+  queries: `ListOfficeMembershipSummariesByUserID` (`office_members ⋈ offices`)
+  and `ListCommunityMembershipSummariesByUserID` (`SELECT DISTINCT` over
+  `unit_members ⋈ communities`, so several units held in one community under
+  one role are one entry; owner+tenant in one community stay two).
+- Tests: `api/internal/http/api/me_test.go` — `TestMe_MembershipsResponseShape`
+  (the three spec scenarios plus "admin without a second factor still reads
+  their memberships") and `TestMe_RevokingASessionLeavesMembershipsUnchanged`
+  (two real logins, revoke family B through A, B's token is refused 401, A's
+  memberships are identical before and after).
+
+| Task | RED observed | GREEN |
+|---|---|---|
+| 8.1 | All four subtests failed on the assertion `expected a memberships field in GET /v1/me, got map[$schema:… email:… id:… is_superadmin:…]` | pass after 8.2 |
+| 8.3 | Failed at the same assertion (`me_test.go:179`), i.e. on the missing field, not on independence: there was no `memberships` to change yet. Stated honestly — no separate independence RED was planted | pass after 8.2 with no further code |
+| 8.4 | Confirmation by inspection: `Me` reads both legs from Postgres on every request; `RevokeSession` touches only `sessions` and `RevocationCache` (keyed by family id). No cache sits on the membership path, matching the design's "membership lookups deliberately not cached" | `TestMe_RevokingASessionLeavesMembershipsUnchanged` green |
+
+**Deviation (8.2) — populated from the caller's membership rows, not from
+`authz.Memberships`.** `authz.ResolveSelf` runs the mandatory-TOTP gate over
+the whole Self route class, and its own doc comment names `GET /v1/me` as part
+of the bootstrap path that must survive that gate (an admin with no second
+factor must read their profile, enroll, and log in again with a code).
+Routing `Me` through `ResolveSelf`/`scoped.Self` would turn that profile read
+into a 403 for exactly that admin. `Me` therefore stays a plain
+`huma.Register` operation and lists the caller's own rows through two
+description-only queries; they return plain DTO data, never an
+`authz.Membership`, so nothing read here can be used to authorize anything.
+The new subtest "admin without a second factor still reads their
+memberships" pins that choice.
+
+Focused: `cd api && go test -count=1 ./internal/http/api/ -run 'TestMe_|TestAuthFlow'` → 15 passed.
+`make gen` regenerated `openapi.yaml`, `openapi-types.ts`, `schemas/index.ts`
+(`memberships: z.array(MembershipEntry)`); `pnpm --filter app typecheck` clean.

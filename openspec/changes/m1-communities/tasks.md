@@ -249,10 +249,10 @@ breaking a different invariant each round is what it set out to end.
 
 ## Phase 8: GET /v1/me Memberships, lint-scope, Permission Matrix (WU-6, PR6 — TDD)
 
-- [ ] 8.1 RED: a non-superadmin user with no memberships gets an empty `memberships` array; a superadmin gets `is_superadmin: true`; a user with one office and one community membership gets both typed entries (GET /v1/me Response Shape, all three scenarios)
-- [ ] 8.2 GREEN: implement `dto/me.go` `memberships[]` with a `scope` discriminator; modify `api/internal/http/handlers/me.go` to populate it from `authz.Memberships`
-- [ ] 8.3 RED: revoking a session via `DELETE /v1/me/sessions/:id` leaves `GET /v1/me`'s `memberships` unchanged (Remote Session Listing and Revocation Endpoints, revoke scenario)
-- [ ] 8.4 GREEN: confirm session revocation and membership reads stay independent — no shared cache (D interfaces table: membership lookups deliberately uncached)
+- [x] 8.1 RED: a non-superadmin user with no memberships gets an empty `memberships` array; a superadmin gets `is_superadmin: true`; a user with one office and one community membership gets both typed entries (GET /v1/me Response Shape, all three scenarios)
+- [x] 8.2 GREEN: implement `dto/me.go` `memberships[]` with a `scope` discriminator; modify `api/internal/http/handlers/me.go` to populate it from `authz.Memberships`
+- [x] 8.3 RED: revoking a session via `DELETE /v1/me/sessions/:id` leaves `GET /v1/me`'s `memberships` unchanged (Remote Session Listing and Revocation Endpoints, revoke scenario)
+- [x] 8.4 GREEN: confirm session revocation and membership reads stay independent — no shared cache (D interfaces table: membership lookups deliberately uncached)
 - [ ] 8.5 RED: `make lint-scope` fails on a deliberately tenant-blind new audit query that is not `GetAuditLogHead`/`ListAuditLogRange`
 - [ ] 8.6 GREEN: modify `api/cmd/lintscope/main.go` — retire the blanket `audit_log` table exception; add the query-level exception map keyed `file:queryName` holding exactly those two entries with their reason
 - [ ] 8.7 RED: `make lint-scope` passes green with all M1 tenant tables and no table-wide `audit_log` exception

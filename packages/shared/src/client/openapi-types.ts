@@ -956,6 +956,20 @@ export interface components {
             email: string;
             id: string;
             is_superadmin: boolean;
+            memberships: components["schemas"]["MembershipEntry"][];
+        };
+        MembershipEntry: {
+            /** @description The office id (scope office) or the community id (scope community). */
+            id: string;
+            /** @description The office or community name. */
+            name: string;
+            /** @enum {string} */
+            role: "admin" | "admin_staff" | "owner" | "tenant";
+            /**
+             * @description Which resource the membership is tied to.
+             * @enum {string}
+             */
+            scope: "office" | "community";
         };
         OfficeMemberResponse: {
             /**

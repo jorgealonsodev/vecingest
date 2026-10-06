@@ -162,9 +162,25 @@ type Querier interface {
 	IsUserMFAEnabled(ctx context.Context, userID uuid.UUID) (bool, error)
 	ListAuditLogRange(ctx context.Context, arg ListAuditLogRangeParams) ([]AuditLog, error)
 	ListCommunitiesByOfficeID(ctx context.Context, officeID uuid.UUID) ([]Community, error)
+	// GET /v1/me's profile listing (user-profile: GET /v1/me Response
+	// Shape): the caller's community memberships WITH the community name.
+	// DISTINCT collapses several units held in one community under the same
+	// role into the single entry the response describes; owner and tenant
+	// in the same community stay two entries. Like
+	// ListOfficeMembershipSummariesByUserID, a description of the caller's
+	// own rows, never an authorization decision.
+	ListCommunityMembershipSummariesByUserID(ctx context.Context, userID uuid.UUID) ([]ListCommunityMembershipSummariesByUserIDRow, error)
 	ListInvitationsByCommunityID(ctx context.Context, communityID uuid.UUID) ([]Invitation, error)
 	ListLiveSessionsByFamilyID(ctx context.Context, familyID uuid.UUID) ([]Session, error)
 	ListOfficeMembers(ctx context.Context, officeID uuid.UUID) ([]OfficeMember, error)
+	// GET /v1/me's profile listing (user-profile: GET /v1/me Response
+	// Shape): the caller's office memberships WITH the office name the
+	// response must carry. Looked up by user, like
+	// ListOfficeMembershipsByUserID above (the same documented D-5
+	// exception). It is a description of the caller's own rows, never an
+	// authorization decision -- authz.ResolveSelf remains the only path that
+	// turns these rows into authz.Memberships.
+	ListOfficeMembershipSummariesByUserID(ctx context.Context, userID uuid.UUID) ([]ListOfficeMembershipSummariesByUserIDRow, error)
 	// Self resolver (design D-4): the caller's full office-membership set,
 	// for GET /v1/me. Looked up by user, not by office -- the documented
 	// exception D-5 names for office_members_user_id_idx.
