@@ -72,6 +72,10 @@ Forecast about 500–700 authored changed lines. Strategy: `single-pr` on the ex
 - 2026-10-06: T7–T9 committed as ce447d3. RED observed first (worker skip cases sent the stale code; template ignored the given lifetime), then GREEN.
 - 2026-10-06: T4 spec + this document committed. Checks after the last code commit: `go test -race -count=1 ./...` 433 passed in 39 packages; `make lint` 0 issues (gofumpt clean, golangci-lint, biome, lint-compose OK); `make lint-scope` OK; `make gen` exit 0 with no diff.
 
+- 2026-10-06: Native review of 74f1ccd (lineage review-479695069147b6d9): granted, approved, acknowledged. Its advisory findings became T5–T9.
+- 2026-10-06: Native review of 311c4fd..cfb1a35 (lineage review-ca42364fdeb97d40, high risk, 16 files / 509 lines): granted, approved, acknowledged. Non-blocking advisories, all in the delivery worker `api/internal/platform/queue/mfa_enroll.go`: the open-challenge check reads `time.Now()` instead of an injectable clock; jobs without `challenge_id` (none exist, the feature is undeployed) are dropped silently; an exhausted challenge (attempts at the cap) is still mailed; the issuance-cap race has no deterministic test. Left as optional follow-ups.
+- 2026-10-06: A whole-branch review against `main` (146 files, 22,770 lines) stopped with `lens_context_budget_exceeded`; no authority created. Branch-wide review needs smaller chained slices at PR time.
+
 ## Next step
 
-All tasks done. RDD assess the new commits (311c4fd, ce447d3, and the T4/doc commit) against the last reviewed boundary; push/PR remain the user's decision.
+All tasks done and reviewed. Optional: the worker advisories above. Push/PR remain the user's decision; a PR of the whole branch will need chained slices to be reviewable.
