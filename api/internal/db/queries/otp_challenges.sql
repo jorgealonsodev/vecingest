@@ -49,3 +49,12 @@ RETURNING *;
 SELECT * FROM otp_challenges
 WHERE id = $1 AND verified_at IS NULL
 FOR UPDATE;
+
+-- name: CountOTPChallengesIssuedSince :one
+-- How many challenges of purpose were issued to user_id within the last
+-- window_seconds. created_at is the database's own clock, so the window
+-- is measured against now() rather than the caller's clock. It caps
+-- issuance, not use: superseded and expired challenges count too.
+SELECT count(*) FROM otp_challenges
+WHERE user_id = sqlc.arg(user_id) AND purpose = sqlc.arg(purpose)
+  AND created_at > now() - make_interval(secs => sqlc.arg(window_seconds)::double precision);

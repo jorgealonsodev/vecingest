@@ -3,6 +3,9 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"strconv"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
@@ -37,7 +40,10 @@ import (
 // issues a 6-digit code to the STORED users.email, in the same
 // transaction as the pending secret, and confirmation requires it
 // (auth-mfa-totp: Email-Confirmed Enrollment). Re-enrolling supersedes
-// the previous code along with the previous secret.
+// the previous code along with the previous secret. Because each code
+// carries its own attempt budget, issuance itself is capped
+// (mfa.EnrollEmailIssueLimit per mfa.EnrollEmailIssueWindow, 429 past
+// it): otherwise re-enrolling would mint unlimited guesses.
 //
 // Re-enrolling an ALREADY-ACTIVE factor is refused (409): silently
 // replacing a live secret would strand the caller's current
@@ -52,15 +58,6 @@ func (d *Deps) EnrollMFA(ctx context.Context, in *dto.MFAEnrollInput) (*dto.MFAE
 		return nil, apperr.New(401, apperr.CodeUnauthorized, "invalid token subject", nil)
 	}
 
-	q := db.New(d.DB.Write)
-	existing, err := q.GetUserMFA(ctx, userID)
-	if err == nil && existing.EnabledAt.Valid {
-		return nil, apperr.New(409, apperr.CodeConflict, "TOTP is already active on this account", nil)
-	}
-	if err != nil && !isNoRows(err) {
-		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
-	}
-
 	if d.MFAEnrollQueue == nil {
 		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
@@ -71,20 +68,38 @@ func (d *Deps) EnrollMFA(ctx context.Context, in *dto.MFAEnrollInput) (*dto.MFAE
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// Lock order, shared with confirmMFAEnrollment: users row, then
+	// otp_challenges, then user_mfa. The user lock also makes the
+	// already-active check below and the issuance cap race-free: a
+	// concurrent confirmation cannot activate the factor between the
+	// check and the secret upsert, and concurrent enrollments cannot
+	// all count below the cap.
+	q := db.New(tx)
+	email, err := q.LockUserForMFAEnrollment(ctx, userID)
+	if err != nil {
+		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+	}
+	existing, err := q.GetUserMFA(ctx, userID)
+	if err == nil && existing.EnabledAt.Valid {
+		return nil, apperr.New(409, apperr.CodeConflict, "TOTP is already active on this account", nil)
+	}
+	if err != nil && !isNoRows(err) {
+		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+	}
+
+	code, err := mfa.IssueEnrollEmailChallenge(ctx, tx, d.clock(), d.MFAKey, userID)
+	if errors.Is(err, mfa.ErrEnrollEmailIssueLimited) {
+		return nil, tooManyEnrollEmailCodes()
+	}
+	if err != nil {
+		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+	}
 	result, err := mfa.Enroll(ctx, tx, d.MFAKey, userID)
 	if err != nil {
 		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
-	user, err := db.New(tx).GetUserByID(ctx, userID)
-	if err != nil {
-		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
-	}
-	code, err := mfa.IssueEnrollEmailChallenge(ctx, tx, d.clock(), d.MFAKey, userID)
-	if err != nil {
-		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
-	}
 	if err := d.MFAEnrollQueue.EnqueueMFAEnrollEmail(ctx, tx, mfa.EnrollEmail{
-		UserID: userID, Email: user.Email, Code: code,
+		UserID: userID, Email: email, Code: code,
 	}); err != nil {
 		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
@@ -94,8 +109,19 @@ func (d *Deps) EnrollMFA(ctx context.Context, in *dto.MFAEnrollInput) (*dto.MFAE
 
 	return &dto.MFAEnrollOutput{Body: dto.MFAEnrollResponse{
 		Secret:          mfa.Base32Secret(result.Secret),
-		ProvisioningURI: mfa.ProvisioningURI(result.Secret, user.Email),
+		ProvisioningURI: mfa.ProvisioningURI(result.Secret, email),
 	}}, nil
+}
+
+// tooManyEnrollEmailCodes is EnrollMFA's 429 once the caller reached
+// mfa.EnrollEmailIssueLimit. Retry-After is the whole window, the same
+// conservative upper bound tooManyInviteAttempts uses: the oldest code
+// in the window may age out sooner, but this never understates the wait.
+func tooManyEnrollEmailCodes() error {
+	base := apperr.New(429, apperr.CodeTooManyAttempts, "too many enrollment codes requested, try again later", nil)
+	return huma.ErrorWithHeaders(base, http.Header{
+		"Retry-After": []string{strconv.Itoa(int(mfa.EnrollEmailIssueWindow.Seconds()))},
+	})
 }
 
 // VerifyMFA implements POST /v1/me/mfa/verify (auth-mfa-totp delta:
@@ -183,6 +209,12 @@ func (d *Deps) confirmMFAEnrollment(ctx context.Context, userID uuid.UUID, code,
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// Same lock order as EnrollMFA (users row, otp_challenges, user_mfa):
+	// a re-enrollment and this confirmation used to lock user_mfa and the
+	// challenge in opposite orders and could deadlock.
+	if _, err := db.New(tx).LockUserForMFAEnrollment(ctx, userID); err != nil {
+		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+	}
 	locked, err := db.New(tx).LockOpenOTPChallenge(ctx, challenge.ID)
 	if err != nil {
 		if isNoRows(err) {

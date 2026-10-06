@@ -161,6 +161,23 @@ func (q *Queries) InsertUserIgnoreConflict(ctx context.Context, arg InsertUserIg
 	return result.RowsAffected(), nil
 }
 
+const lockUserForMFAEnrollment = `-- name: LockUserForMFAEnrollment :one
+SELECT email FROM users WHERE id = $1 FOR NO KEY UPDATE
+`
+
+// Row-locks the user at the start of every TOTP enrollment write
+// (enroll and its confirmation), so per-user enrollment state changes
+// one transaction at a time: the issuance cap is counted and enforced
+// without a race, and enroll and confirm take their later locks
+// (otp_challenges, then user_mfa) behind this one in the same order.
+// NO KEY UPDATE leaves foreign-key checks against users unblocked.
+func (q *Queries) LockUserForMFAEnrollment(ctx context.Context, id uuid.UUID) (string, error) {
+	row := q.db.QueryRow(ctx, lockUserForMFAEnrollment, id)
+	var email string
+	err := row.Scan(&email)
+	return email, err
+}
+
 const updateUserLastLogin = `-- name: UpdateUserLastLogin :exec
 UPDATE users SET last_login_at = $2, updated_at = now() WHERE id = $1
 `

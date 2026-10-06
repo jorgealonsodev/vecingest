@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -303,4 +304,64 @@ func TestMFAEnrollEmail_JobTargetsStoredAddressWithSealedCode(t *testing.T) {
 	if len(hash) != 32 || string(hash) == job.Code {
 		t.Fatalf("expected a 32-byte keyed digest, got %d bytes", len(hash))
 	}
+}
+
+// countMFAEnrollChallenges is how many mfa_enroll challenges userID has
+// ever been issued.
+func countMFAEnrollChallenges(t *testing.T, handlesDB db.Handles, userID uuid.UUID) int {
+	t.Helper()
+	var n int
+	if err := handlesDB.Write.QueryRow(t.Context(),
+		`SELECT count(*) FROM otp_challenges WHERE user_id = $1 AND purpose = 'mfa_enroll'`, userID,
+	).Scan(&n); err != nil {
+		t.Fatalf("count mfa_enroll challenges: %v", err)
+	}
+	return n
+}
+
+// Re-enrolling cannot mint fresh attempt budgets without limit: each
+// enrollment issues a new code with its own mfa.EnrollEmailMaxAttempts,
+// so only the number of codes per window bounds blind guessing. Past
+// mfa.EnrollEmailIssueLimit the enrollment is refused with 429 and
+// Retry-After, and nothing is issued or mailed.
+func TestMFAEnrollEmail_IssuanceIsCappedPerWindow(t *testing.T) {
+	f := newEnrollFixture(t, "mfa-email-cap@example.com")
+	for range mfa.EnrollEmailIssueLimit {
+		f.enroll(t)
+	}
+	lastCode := enrollEmailCode(t, f.db, f.userID)
+
+	resp, body := doJSON(t, f.client, http.MethodPost, f.srv.URL+"/v1/me/mfa/enroll", nil, f.auth)
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 past the issuance cap, got %d body=%v", resp.StatusCode, body)
+	}
+	if body["code"] != "AUTH_TOO_MANY_ATTEMPTS" {
+		t.Fatalf("expected AUTH_TOO_MANY_ATTEMPTS, got %v", body)
+	}
+	if got, want := resp.Header.Get("Retry-After"), strconv.Itoa(int(mfa.EnrollEmailIssueWindow.Seconds())); got != want {
+		t.Fatalf("expected Retry-After %q, got %q", want, got)
+	}
+	if n := countMFAEnrollChallenges(t, f.db, f.userID); n != mfa.EnrollEmailIssueLimit {
+		t.Fatalf("expected no challenge issued past the cap, got %d", n)
+	}
+	if got := enrollEmailCode(t, f.db, f.userID); got != lastCode {
+		t.Fatalf("expected no new enrollment email past the cap")
+	}
+}
+
+// The cap is a sliding window: codes issued before it no longer count.
+func TestMFAEnrollEmail_IssuanceCapForgetsCodesOutsideTheWindow(t *testing.T) {
+	f := newEnrollFixture(t, "mfa-email-cap-window@example.com")
+	for range mfa.EnrollEmailIssueLimit {
+		f.enroll(t)
+	}
+	if _, err := f.db.Write.Exec(t.Context(),
+		`UPDATE otp_challenges SET created_at = now() - make_interval(secs => $2) - interval '1 second'
+		 WHERE user_id = $1 AND purpose = 'mfa_enroll'`,
+		f.userID, mfa.EnrollEmailIssueWindow.Seconds(),
+	); err != nil {
+		t.Fatalf("age the challenges out of the window: %v", err)
+	}
+
+	f.enroll(t)
 }

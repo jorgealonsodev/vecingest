@@ -63,6 +63,29 @@ func (q *Queries) ConsumeOTPChallengeAttempt(ctx context.Context, arg ConsumeOTP
 	return i, err
 }
 
+const countOTPChallengesIssuedSince = `-- name: CountOTPChallengesIssuedSince :one
+SELECT count(*) FROM otp_challenges
+WHERE user_id = $1 AND purpose = $2
+  AND created_at > now() - make_interval(secs => $3::double precision)
+`
+
+type CountOTPChallengesIssuedSinceParams struct {
+	UserID        uuid.UUID `json:"user_id"`
+	Purpose       string    `json:"purpose"`
+	WindowSeconds float64   `json:"window_seconds"`
+}
+
+// How many challenges of purpose were issued to user_id within the last
+// window_seconds. created_at is the database's own clock, so the window
+// is measured against now() rather than the caller's clock. It caps
+// issuance, not use: superseded and expired challenges count too.
+func (q *Queries) CountOTPChallengesIssuedSince(ctx context.Context, arg CountOTPChallengesIssuedSinceParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countOTPChallengesIssuedSince, arg.UserID, arg.Purpose, arg.WindowSeconds)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const getOTPChallenge = `-- name: GetOTPChallenge :one
 SELECT id, user_id, purpose, code_hash, channel, expires_at, attempts, verified_at, created_at, updated_at FROM otp_challenges WHERE id = $1
 `

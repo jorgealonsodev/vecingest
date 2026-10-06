@@ -27,6 +27,11 @@ type Querier interface {
 	ConsumeOTPChallengeAttempt(ctx context.Context, arg ConsumeOTPChallengeAttemptParams) (OtpChallenge, error)
 	ConsumePasswordResetToken(ctx context.Context, id uuid.UUID) error
 	ConsumeUserMFARecoveryCode(ctx context.Context, arg ConsumeUserMFARecoveryCodeParams) (int64, error)
+	// How many challenges of purpose were issued to user_id within the last
+	// window_seconds. created_at is the database's own clock, so the window
+	// is measured against now() rather than the caller's clock. It caps
+	// issuance, not use: superseded and expired challenges count too.
+	CountOTPChallengesIssuedSince(ctx context.Context, arg CountOTPChallengesIssuedSinceParams) (int64, error)
 	// CountOfficeMembersByOfficeID backs community-management: Community
 	// Detail Excludes Cross-Milestone Aggregates -- the community detail
 	// response's office-member count is a plain count of the owning
@@ -174,6 +179,13 @@ type Querier interface {
 	// mark it verified, so two concurrent correct submissions cannot both
 	// consume it: the second waits on the lock and then finds verified_at set.
 	LockOpenOTPChallenge(ctx context.Context, id uuid.UUID) (OtpChallenge, error)
+	// Row-locks the user at the start of every TOTP enrollment write
+	// (enroll and its confirmation), so per-user enrollment state changes
+	// one transaction at a time: the issuance cap is counted and enforced
+	// without a race, and enroll and confirm take their later locks
+	// (otp_challenges, then user_mfa) behind this one in the same order.
+	// NO KEY UPDATE leaves foreign-key checks against users unblocked.
+	LockUserForMFAEnrollment(ctx context.Context, id uuid.UUID) (string, error)
 	MarkOTPChallengeVerified(ctx context.Context, id uuid.UUID) error
 	// Community resolver, office leg (design D-4): an admin/admin_staff
 	// reaches a community whose office_id matches one of their

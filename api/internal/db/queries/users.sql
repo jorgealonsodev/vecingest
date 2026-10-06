@@ -32,3 +32,12 @@ ON CONFLICT (email) DO NOTHING;
 -- (e.g. one first created by seed) promotes it, but NEVER touches its
 -- password_hash.
 UPDATE users SET is_superadmin = true, updated_at = now() WHERE id = $1 AND is_superadmin = false;
+
+-- name: LockUserForMFAEnrollment :one
+-- Row-locks the user at the start of every TOTP enrollment write
+-- (enroll and its confirmation), so per-user enrollment state changes
+-- one transaction at a time: the issuance cap is counted and enforced
+-- without a race, and enroll and confirm take their later locks
+-- (otp_challenges, then user_mfa) behind this one in the same order.
+-- NO KEY UPDATE leaves foreign-key checks against users unblocked.
+SELECT email FROM users WHERE id = $1 FOR NO KEY UPDATE;
