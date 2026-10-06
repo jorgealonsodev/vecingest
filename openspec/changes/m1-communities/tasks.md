@@ -265,10 +265,10 @@ breaking a different invariant each round is what it set out to end.
 
 ## Phase 9: App Portal Memberships (WU-7, PR7 — TDD RNTL)
 
-- [ ] 9.1 RED (RNTL): a user with one `scope: community` membership renders exactly one selectable row (Portal Renders Real Membership Rows, populated scenario)
-- [ ] 9.2 GREEN: implement the populated branch in `app/src/screens/PortalScreen.tsx`, replacing the hardcoded empty state
-- [ ] 9.3 RED (RNTL, regression guard): a user with an empty `memberships` array still sees the unchanged empty state
-- [ ] 9.4 GREEN: confirm the empty-state branch is preserved unchanged
+- [x] 9.1 RED (RNTL): a user with one `scope: community` membership renders exactly one selectable row (Portal Renders Real Membership Rows, populated scenario)
+- [x] 9.2 GREEN: implement the populated branch in `app/src/screens/PortalScreen.tsx`, replacing the hardcoded empty state
+- [x] 9.3 RED (RNTL, regression guard): a user with an empty `memberships` array still sees the unchanged empty state
+- [x] 9.4 GREEN: confirm the empty-state branch is preserved unchanged
 - [ ] 9.5 RED (RNTL): a user with three memberships (owner/tenant/admin_staff) sees a context selector listing all three with their roles (Context Selector For Multiple Memberships)
 - [ ] 9.6 GREEN: implement the context selector, resolving the chosen membership's scope path parameters client-side, no new endpoint
 - [ ] 9.7 RED (RNTL): a valid short code at `portal-invitation-link` shows the preview before account creation; an invalid/expired code shows a generic error (Invitation-Code Entry Point Enabled, both scenarios)

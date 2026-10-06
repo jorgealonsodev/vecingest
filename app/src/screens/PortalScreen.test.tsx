@@ -33,6 +33,78 @@ function renderPortalScreen() {
   );
 }
 
+describe("PortalScreen — membership rows (GET /v1/me memberships)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    clearSession();
+    setSession({ accessToken: "a-valid-access-token", csrfToken: null });
+  });
+
+  it("renders exactly one selectable row for a single community membership", async () => {
+    (apiClient.GET as jest.Mock).mockResolvedValue({
+      data: {
+        id: "user-1",
+        email: "vecino@example.com",
+        is_superadmin: false,
+        memberships: [
+          {
+            scope: "community",
+            id: "community-1",
+            name: "C/ Mayor 12, Irun",
+            role: "owner",
+          },
+        ],
+      },
+      error: undefined,
+    });
+
+    await renderPortalScreen();
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId(/^portal-membership-/)).toHaveLength(1);
+    });
+
+    const row = screen.getByTestId("portal-membership-community-community-1");
+    expect(row.props.accessibilityRole).toBe("radio");
+    expect(screen.getByText("C/ Mayor 12, Irun")).toBeTruthy();
+    expect(screen.getByText("Propietario")).toBeTruthy();
+    expect(screen.queryByTestId("portal-empty-state")).toBeNull();
+  });
+
+  it("keeps the unchanged empty state when the memberships array is empty", async () => {
+    (apiClient.GET as jest.Mock).mockResolvedValue({
+      data: {
+        id: "user-1",
+        email: "vecino@example.com",
+        is_superadmin: false,
+        memberships: [],
+      },
+      error: undefined,
+    });
+
+    await renderPortalScreen();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("portal-empty-state")).toBeTruthy();
+    });
+
+    expect(
+      screen.getByText("Todavía no perteneces a ninguna comunidad ni empresa."),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Un administrador debe crear una comunidad e invitarte para que aparezca aquí.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("portal-memberships")).toBeNull();
+    expect(screen.queryAllByTestId(/^portal-membership-/)).toHaveLength(0);
+    expect(
+      screen.getByTestId("portal-primary-cta").props.accessibilityState
+        ?.disabled,
+    ).toBe(true);
+  });
+});
+
 describe("PortalScreen — proving the session works (GET /v1/me)", () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -59,6 +131,7 @@ describe("PortalScreen — proving the session works (GET /v1/me)", () => {
         id: "user-1",
         email: "jorge@vecingest.xdev.es",
         is_superadmin: true,
+        memberships: [],
       },
       error: undefined,
     });
@@ -84,7 +157,12 @@ describe("PortalScreen — proving the session works (GET /v1/me)", () => {
   it("renders the empty state honestly instead of a fabricated portal list", async () => {
     setSession({ accessToken: "a-valid-access-token", csrfToken: null });
     (apiClient.GET as jest.Mock).mockResolvedValue({
-      data: { id: "user-1", email: "vecino@example.com", is_superadmin: false },
+      data: {
+        id: "user-1",
+        email: "vecino@example.com",
+        is_superadmin: false,
+        memberships: [],
+      },
       error: undefined,
     });
 
@@ -117,7 +195,12 @@ describe("PortalScreen — proving the session works (GET /v1/me)", () => {
     });
 
     (apiClient.GET as jest.Mock).mockResolvedValue({
-      data: { id: "user-1", email: "vecino@example.com", is_superadmin: false },
+      data: {
+        id: "user-1",
+        email: "vecino@example.com",
+        is_superadmin: false,
+        memberships: [],
+      },
       error: undefined,
     });
 
@@ -148,7 +231,12 @@ describe("PortalScreen — proving the session works (GET /v1/me)", () => {
   it("signs out through POST /v1/auth/logout, clears local state, and returns to login", async () => {
     setSession({ accessToken: "a-valid-access-token", csrfToken: "csrf" });
     (apiClient.GET as jest.Mock).mockResolvedValue({
-      data: { id: "user-1", email: "vecino@example.com", is_superadmin: false },
+      data: {
+        id: "user-1",
+        email: "vecino@example.com",
+        is_superadmin: false,
+        memberships: [],
+      },
       error: undefined,
     });
     (apiClient.POST as jest.Mock).mockResolvedValue({
@@ -187,7 +275,12 @@ describe("PortalScreen — proving the session works (GET /v1/me)", () => {
     );
     setSession({ accessToken: "a-valid-access-token", csrfToken: "csrf" });
     (apiClient.GET as jest.Mock).mockResolvedValue({
-      data: { id: "user-1", email: "vecino@example.com", is_superadmin: false },
+      data: {
+        id: "user-1",
+        email: "vecino@example.com",
+        is_superadmin: false,
+        memberships: [],
+      },
       error: undefined,
     });
     (apiClient.POST as jest.Mock).mockResolvedValue({
