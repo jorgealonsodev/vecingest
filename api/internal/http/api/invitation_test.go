@@ -17,6 +17,7 @@ import (
 	"github.com/jorgealonsodev/vecingest/internal/db"
 	"github.com/jorgealonsodev/vecingest/internal/domain/auth/lockout"
 	"github.com/jorgealonsodev/vecingest/internal/domain/auth/mfa"
+	"github.com/jorgealonsodev/vecingest/internal/domain/auth/password"
 )
 
 // uuidPgtype/pgtypeText adapt uuid.UUID/string to the pgtype.UUID/
@@ -1214,5 +1215,167 @@ func TestInvitation_ResendRotatesTheCodeAndActuallyDispatches(t *testing.T) {
 		map[string]any{"short_code": newCode}, inviteHeaders("web", "1.0.0"))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected the newly issued short code to resolve the invitation, got %d body=%v", resp.StatusCode, body)
+	}
+}
+
+// createUserWithPassword is createUser with a caller-chosen password, for the
+// tests that need an existing credential the CURRENT policy would reject
+// (shorter than its no-MFA floor), as an account legitimately has when it
+// set that password under TOTP or before the policy last tightened.
+func createUserWithPassword(t *testing.T, handlesDB db.Handles, email, pw string) uuid.UUID {
+	t.Helper()
+	hash, err := password.Hash(pw)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	user, err := db.New(handlesDB.Write).InsertUser(t.Context(), db.InsertUserParams{
+		ID:           uuid.New(),
+		Email:        email,
+		PasswordHash: hash,
+		Name:         "Test User",
+		Locale:       "es",
+	})
+	if err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	return user.ID
+}
+
+// R3-accept-invitation-applies-password-policy-to-an-existing-credential.
+// The linking branch VERIFIES an existing credential; it never sets one. So
+// today's policy has no business re-litigating it: a 12-14 character password
+// is legitimate for an account with TOTP active (and was set under exactly
+// that rule), and an account whose password predates a policy change -- or
+// has since appeared in HIBP -- must still be able to link with it. Running
+// the policy (with totpActive hardcoded false) before the account lookup
+// locked every such owner out of every invitation, even with the right
+// password and the right code.
+func TestInvitation_AcceptDoesNotPolicyCheckAnExistingAccountsCorrectPassword(t *testing.T) {
+	srv, deps, handlesDB := newTestServer(t)
+	client := newClient(srv, nil)
+
+	officeID, adminID := seedOfficeWithAdmin(t, handlesDB, "invite-legacy-pw-admin@example.com")
+	communityID := seedCommunity(t, handlesDB, officeID, "Invite Legacy Password Community")
+	adminToken := mintAccessToken(t, deps, handlesDB, adminID, false)
+	auth := map[string]string{"Authorization": "Bearer " + adminToken}
+
+	// 13 characters: above the with-MFA floor, below the no-MFA one.
+	const shortButLegitimate = "thirteen-char"
+	if n := len(shortButLegitimate); n < password.MinLengthWithMFA || n >= password.MinLengthNoMFA {
+		t.Fatalf("test premise: want a password in [%d, %d), got %d chars", password.MinLengthWithMFA, password.MinLengthNoMFA, n)
+	}
+
+	invite := func(email string) string {
+		unitID := seedUnit(t, handlesDB, communityID)
+		_, created := doJSON(t, client, http.MethodPost, srv.URL+"/v1/communities/"+communityID.String()+"/invitations", map[string]any{
+			"unit_id": unitID.String(), "email": email, "role": "owner",
+		}, auth)
+		code, _ := created["short_code"].(string)
+		if code == "" {
+			t.Fatalf("test setup: expected a short_code from invitation creation, got %v", created)
+		}
+		return code
+	}
+	accept := func(code, totpCode, ip string) (*http.Response, map[string]any) {
+		body := map[string]any{
+			"short_code": code, "name": "Legacy Password Owner", "password": shortButLegitimate,
+			"consent": true, "platform": "web",
+		}
+		if totpCode != "" {
+			body["totp_code"] = totpCode
+		}
+		return doFromIPClient(t, client, srv.URL+"/v1/auth/accept-invitation", http.MethodPost, ip, body, inviteHeaders("web", "1.0.0"))
+	}
+
+	// With TOTP active: the policy itself allows this password.
+	totpEmail := "invite-legacy-pw-totp@example.com"
+	totpUserID := createUserWithPassword(t, handlesDB, totpEmail, shortButLegitimate)
+	secret := seedActiveMFAWithSecret(t, handlesDB, deps.MFAKey, totpUserID)
+	resp, body := accept(invite(totpEmail), validTOTPCode(t, secret), "203.0.113.140")
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected an account with TOTP active to link with its own correct 13-char password and a valid code, got %d body=%v", resp.StatusCode, body)
+	}
+	if body["access_token"] == nil {
+		t.Fatalf("expected a session for the linked TOTP account, got %v", body)
+	}
+
+	// Without TOTP: today's policy would refuse this password if it were
+	// being SET, but it is only being verified, so it must still link.
+	plainEmail := "invite-legacy-pw-plain@example.com"
+	createUserWithPassword(t, handlesDB, plainEmail, shortButLegitimate)
+	resp, body = accept(invite(plainEmail), "", "203.0.113.141")
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected an existing account to link with its own correct password regardless of today's policy, got %d body=%v", resp.StatusCode, body)
+	}
+}
+
+// The other half of the same correction: dropping the policy from the
+// linking branch must not reopen the prior-existence disclosure the step-3
+// comment guards. A policy-violating password that does NOT match the
+// account must answer exactly what the create branch answers for the same
+// password -- the same 422, code and details -- while a policy-compliant
+// wrong password still answers 401.
+func TestInvitation_AcceptPolicyViolationIsIndistinguishableAcrossBranches(t *testing.T) {
+	srv, deps, handlesDB := newTestServer(t)
+	client := newClient(srv, nil)
+
+	officeID, adminID := seedOfficeWithAdmin(t, handlesDB, "invite-parity-admin@example.com")
+	communityID := seedCommunity(t, handlesDB, officeID, "Invite Parity Community")
+	adminToken := mintAccessToken(t, deps, handlesDB, adminID, false)
+	auth := map[string]string{"Authorization": "Bearer " + adminToken}
+
+	invite := func(email string) string {
+		unitID := seedUnit(t, handlesDB, communityID)
+		_, created := doJSON(t, client, http.MethodPost, srv.URL+"/v1/communities/"+communityID.String()+"/invitations", map[string]any{
+			"unit_id": unitID.String(), "email": email, "role": "owner",
+		}, auth)
+		code, _ := created["short_code"].(string)
+		if code == "" {
+			t.Fatalf("test setup: expected a short_code from invitation creation, got %v", created)
+		}
+		return code
+	}
+	accept := func(code, pw, ip string) (*http.Response, map[string]any) {
+		return doFromIPClient(t, client, srv.URL+"/v1/auth/accept-invitation", http.MethodPost, ip,
+			map[string]any{
+				"short_code": code, "name": "Parity", "password": pw,
+				"consent": true, "platform": "web",
+			}, inviteHeaders("web", "1.0.0"))
+	}
+
+	// Passes the request schema's static 12-char floor, fails the policy.
+	const tooShort = "short-wrong1"
+
+	unknownEmail := "invite-parity-unknown@example.com"
+	existingEmail := "invite-parity-existing@example.com"
+	createUser(t, handlesDB, existingEmail, false)
+
+	unknownResp, unknownBody := accept(invite(unknownEmail), tooShort, "203.0.113.150")
+	existingCode := invite(existingEmail)
+	existingResp, existingBody := accept(existingCode, tooShort, "203.0.113.151")
+
+	if unknownResp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("test premise: expected the create branch to refuse a policy-violating password with 422, got %d body=%v", unknownResp.StatusCode, unknownBody)
+	}
+	if existingResp.StatusCode != unknownResp.StatusCode {
+		t.Fatalf("expected a policy-violating WRONG password to answer the same status for an existing account as for an unknown one (%d), got %d body=%v", unknownResp.StatusCode, existingResp.StatusCode, existingBody)
+	}
+	if existingBody["code"] != unknownBody["code"] {
+		t.Fatalf("expected the same error code on both branches, got existing=%v unknown=%v", existingBody["code"], unknownBody["code"])
+	}
+	if existingBody["message"] != unknownBody["message"] {
+		t.Fatalf("expected the same error message on both branches, got existing=%v unknown=%v", existingBody["message"], unknownBody["message"])
+	}
+	if fmt.Sprint(existingBody["details"]) != fmt.Sprint(unknownBody["details"]) {
+		t.Fatalf("expected the same error details on both branches, got existing=%v unknown=%v", existingBody["details"], unknownBody["details"])
+	}
+	if existingBody["access_token"] != nil {
+		t.Fatalf("expected NO session for a wrong password, got %v", existingBody)
+	}
+
+	// A policy-compliant wrong password is still plain invalid credentials.
+	resp, body := accept(existingCode, "a-compliant-but-wrong-password", "203.0.113.152")
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for a policy-compliant wrong password on an existing account, got %d body=%v", resp.StatusCode, body)
 	}
 }
