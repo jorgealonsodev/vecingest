@@ -30,9 +30,10 @@ const enrollConfirmationInvalid = "AUTH_MFA_ENROLLMENT_CONFIRMATION_INVALID"
 // delivers from, so the same read also proves the recipient and that
 // the payload is sealed, and no test-only hook is added to the handler.
 type mfaEnrollEmailJob struct {
-	Email string
-	Code  string
-	Args  string
+	Email       string
+	ChallengeID string
+	Code        string
+	Args        string
 }
 
 func latestMFAEnrollEmailJob(t *testing.T, handlesDB db.Handles, userID uuid.UUID) mfaEnrollEmailJob {
@@ -46,6 +47,7 @@ func latestMFAEnrollEmailJob(t *testing.T, handlesDB db.Handles, userID uuid.UUI
 	}
 	var payload struct {
 		Email         string `json:"email"`
+		ChallengeID   string `json:"challenge_id"`
 		CodeEncrypted []byte `json:"code_encrypted"`
 	}
 	if err := json.Unmarshal(args, &payload); err != nil {
@@ -55,7 +57,7 @@ func latestMFAEnrollEmailJob(t *testing.T, handlesDB db.Handles, userID uuid.UUI
 	if err != nil {
 		t.Fatalf("expected the enrollment code sealed under ENCRYPTION_KEY: %v", err)
 	}
-	return mfaEnrollEmailJob{Email: payload.Email, Code: string(code), Args: string(args)}
+	return mfaEnrollEmailJob{Email: payload.Email, ChallengeID: payload.ChallengeID, Code: string(code), Args: string(args)}
 }
 
 // enrollEmailCode is the code the latest enrollment emailed to userID.
@@ -173,14 +175,15 @@ func TestMFAEnrollEmail_ExpiredCodeIsRejected(t *testing.T) {
 	f.requireInactive(t)
 }
 
-// Five wrong guesses exhaust the challenge: the sixth is refused even
-// carrying the right code, because each rejection's increment was kept.
+// mfa.EnrollEmailMaxAttempts wrong guesses exhaust the challenge: the
+// next is refused even carrying the right code, because each
+// rejection's increment was kept.
 func TestMFAEnrollEmail_SixthAttemptRejectedEvenWithCorrectCode(t *testing.T) {
 	f := newEnrollFixture(t, "mfa-email-attempts@example.com")
 	secret := f.enroll(t)
 	emailCode := enrollEmailCode(t, f.db, f.userID)
 
-	for i := range 5 {
+	for i := range mfa.EnrollEmailMaxAttempts {
 		resp, body := f.verify(t, map[string]any{"code": validTOTPCode(t, secret), "email_code": wrongEmailCode(emailCode)})
 		if resp.StatusCode != http.StatusUnauthorized {
 			t.Fatalf("attempt %d: expected 401, got %d body=%v", i+1, resp.StatusCode, body)
@@ -193,8 +196,8 @@ func TestMFAEnrollEmail_SixthAttemptRejectedEvenWithCorrectCode(t *testing.T) {
 	).Scan(&attempts); err != nil {
 		t.Fatalf("read attempts: %v", err)
 	}
-	if attempts != 5 {
-		t.Fatalf("expected 5 recorded attempts surviving the rejections, got %d", attempts)
+	if attempts != mfa.EnrollEmailMaxAttempts {
+		t.Fatalf("expected %d recorded attempts surviving the rejections, got %d", mfa.EnrollEmailMaxAttempts, attempts)
 	}
 
 	resp, body := f.verify(t, map[string]any{"code": validTOTPCode(t, secret), "email_code": emailCode})
@@ -270,7 +273,7 @@ func TestMFAEnrollEmail_ValidBothActivatesAndSpendsTheCode(t *testing.T) {
 	// second use is asserted where it would be spent: the challenge no
 	// longer yields an attempt.
 	_, err = db.New(f.db.Write).ConsumeOTPChallengeAttempt(t.Context(), db.ConsumeOTPChallengeAttemptParams{
-		UserID: f.userID, Purpose: "mfa_enroll", Now: time.Now(), MaxAttempts: 5,
+		UserID: f.userID, Purpose: "mfa_enroll", Now: time.Now(), MaxAttempts: mfa.EnrollEmailMaxAttempts,
 	})
 	if !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("expected a verified challenge to be unusable, got err=%v", err)
@@ -296,10 +299,16 @@ func TestMFAEnrollEmail_JobTargetsStoredAddressWithSealedCode(t *testing.T) {
 	}
 
 	var hash []byte
+	var challengeID uuid.UUID
 	if err := f.db.Write.QueryRow(t.Context(),
-		`SELECT code_hash FROM otp_challenges WHERE user_id = $1 AND purpose = 'mfa_enroll' AND channel = 'email'`, f.userID,
-	).Scan(&hash); err != nil {
+		`SELECT id, code_hash FROM otp_challenges WHERE user_id = $1 AND purpose = 'mfa_enroll' AND channel = 'email'`, f.userID,
+	).Scan(&challengeID, &hash); err != nil {
 		t.Fatalf("read challenge: %v", err)
+	}
+	// The job names the challenge it delivers, so a retried delivery can
+	// tell whether that code is still open.
+	if job.ChallengeID != challengeID.String() {
+		t.Fatalf("expected the job to name challenge %s, got %q", challengeID, job.ChallengeID)
 	}
 	if len(hash) != 32 || string(hash) == job.Code {
 		t.Fatalf("expected a 32-byte keyed digest, got %d bytes", len(hash))

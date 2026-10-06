@@ -87,7 +87,7 @@ func (d *Deps) EnrollMFA(ctx context.Context, in *dto.MFAEnrollInput) (*dto.MFAE
 		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
 
-	code, err := mfa.IssueEnrollEmailChallenge(ctx, tx, d.clock(), d.MFAKey, userID)
+	challengeID, code, err := mfa.IssueEnrollEmailChallenge(ctx, tx, d.clock(), d.MFAKey, userID)
 	if errors.Is(err, mfa.ErrEnrollEmailIssueLimited) {
 		return nil, tooManyEnrollEmailCodes()
 	}
@@ -99,7 +99,7 @@ func (d *Deps) EnrollMFA(ctx context.Context, in *dto.MFAEnrollInput) (*dto.MFAE
 		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
 	if err := d.MFAEnrollQueue.EnqueueMFAEnrollEmail(ctx, tx, mfa.EnrollEmail{
-		UserID: userID, Email: email, Code: code,
+		UserID: userID, ChallengeID: challengeID, Email: email, Code: code,
 	}); err != nil {
 		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}

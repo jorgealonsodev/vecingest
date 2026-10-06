@@ -57,6 +57,10 @@ const enrollEmailHashDomain = "vecingest/mfa_enroll/v1\x00"
 // durable row, exactly like invitations.EmailArgs.ShortCode.
 type EnrollEmail struct {
 	UserID uuid.UUID
+	// ChallengeID is the otp_challenges row Code belongs to, so delivery
+	// can skip a code that was superseded, expired or spent before the
+	// email went out.
+	ChallengeID uuid.UUID
 	// Email is always users.email as stored, read inside the issuing
 	// transaction -- never an address the client supplied.
 	Email string
@@ -104,46 +108,47 @@ func EnrollEmailCodeMatches(key [32]byte, code string, stored []byte) bool {
 var ErrEnrollEmailIssueLimited = errors.New("mfa: enrollment code issuance limit reached")
 
 // IssueEnrollEmailChallenge closes every open enrollment challenge for
-// userID and inserts a fresh one, returning its plaintext code for the
-// caller to enqueue on the same transaction. Closing the old ones is
+// userID and inserts a fresh one, returning its ID and plaintext code
+// for the caller to enqueue on the same transaction. Closing the old ones is
 // what makes a re-enrollment supersede the previous email: its code was
 // issued for a secret that no longer exists.
 //
 // It refuses with ErrEnrollEmailIssueLimited, issuing nothing, once the
 // cap is reached. The count is only race-free when the caller already
 // holds the user's row lock (LockUserForMFAEnrollment) on tx.
-func IssueEnrollEmailChallenge(ctx context.Context, tx pgx.Tx, clock Clock, key [32]byte, userID uuid.UUID) (string, error) {
+func IssueEnrollEmailChallenge(ctx context.Context, tx pgx.Tx, clock Clock, key [32]byte, userID uuid.UUID) (challengeID uuid.UUID, code string, err error) {
 	q := db.New(tx)
 	issued, err := q.CountOTPChallengesIssuedSince(ctx, db.CountOTPChallengesIssuedSinceParams{
 		UserID: userID, Purpose: EnrollEmailPurpose, WindowSeconds: EnrollEmailIssueWindow.Seconds(),
 	})
 	if err != nil {
-		return "", fmt.Errorf("mfa: count issued enrollment challenges: %w", err)
+		return uuid.Nil, "", fmt.Errorf("mfa: count issued enrollment challenges: %w", err)
 	}
 	if issued >= EnrollEmailIssueLimit {
-		return "", ErrEnrollEmailIssueLimited
+		return uuid.Nil, "", ErrEnrollEmailIssueLimited
 	}
 
 	now := clock.Now()
 	if err := q.InvalidateOpenOTPChallenges(ctx, db.InvalidateOpenOTPChallengesParams{
 		Now: now, UserID: userID, Purpose: EnrollEmailPurpose,
 	}); err != nil {
-		return "", fmt.Errorf("mfa: invalidate open enrollment challenges: %w", err)
+		return uuid.Nil, "", fmt.Errorf("mfa: invalidate open enrollment challenges: %w", err)
 	}
 
-	code, err := GenerateEnrollEmailCode()
+	code, err = GenerateEnrollEmailCode()
 	if err != nil {
-		return "", err
+		return uuid.Nil, "", err
 	}
+	challengeID = uuid.New()
 	if _, err := q.InsertOTPChallenge(ctx, db.InsertOTPChallengeParams{
-		ID:        uuid.New(),
+		ID:        challengeID,
 		UserID:    userID,
 		Purpose:   EnrollEmailPurpose,
 		CodeHash:  HashEnrollEmailCode(key, code),
 		Channel:   "email",
 		ExpiresAt: now.Add(EnrollEmailTTL),
 	}); err != nil {
-		return "", fmt.Errorf("mfa: insert enrollment challenge: %w", err)
+		return uuid.Nil, "", fmt.Errorf("mfa: insert enrollment challenge: %w", err)
 	}
-	return code, nil
+	return challengeID, code, nil
 }

@@ -30,9 +30,12 @@ const MFAEnrollCodeSubject = "Confirm your new authenticator app"
 // MFAEnrollCodeData is what mfa_enroll.html renders. Code is the
 // plaintext 6-digit enrollment code (auth-mfa-totp: Email-Confirmed
 // Enrollment); like InvitationData.ShortCode, it reaches this template
-// only by opening the sealed background-job payload.
+// only by opening the sealed background-job payload. ExpiresInMinutes
+// is the code's lifetime as issued (mfa.EnrollEmailTTL), passed in
+// rather than written into the template so the two cannot drift.
 type MFAEnrollCodeData struct {
-	Code string
+	Code             string
+	ExpiresInMinutes int
 }
 
 // RenderMFAEnrollCode renders the enrollment-confirmation email body.

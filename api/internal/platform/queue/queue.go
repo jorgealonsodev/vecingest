@@ -72,7 +72,7 @@ func NewClient(pool *pgxpool.Pool, logger *slog.Logger, sender RawSender, encryp
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &noopWorker{})
 	river.AddWorker(workers, &InvitationEmailWorker{Sender: sender, Key: encryptionKey})
-	river.AddWorker(workers, &MFAEnrollEmailWorker{Sender: sender, Key: encryptionKey})
+	river.AddWorker(workers, &MFAEnrollEmailWorker{Sender: sender, Key: encryptionKey, Challenges: db.New(pool)})
 	river.AddWorker(workers, &invitationsExpireWorker{pool: pool})
 
 	driver := riverpgxv5.New(pool)
