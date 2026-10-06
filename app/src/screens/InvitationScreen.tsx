@@ -208,8 +208,11 @@ export function InvitationScreen() {
         accessToken: data.access_token,
         csrfToken: data.csrf_token ?? null,
       });
+      // The invitation is already consumed server-side, so a failure to
+      // persist the refresh token must not strand the user on an error: the
+      // in-memory session still works until the access token expires.
       if (data.refresh_token) {
-        await persistRefreshToken(data.refresh_token);
+        await persistRefreshToken(data.refresh_token).catch(() => undefined);
       }
       router.replace("/portal");
     } catch {

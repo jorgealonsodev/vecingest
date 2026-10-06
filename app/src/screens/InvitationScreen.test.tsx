@@ -207,6 +207,36 @@ describe("InvitationScreen — accept (POST /v1/auth/accept-invitation)", () => 
     expect(persistRefreshToken).toHaveBeenCalledWith("new-refresh-token");
   });
 
+  it("still lands on the portal when persisting the refresh token fails after a successful accept", async () => {
+    jest
+      .mocked(persistRefreshToken)
+      .mockRejectedValueOnce(new Error("keychain unavailable"));
+    mockPostResponses({
+      "/v1/invitations/preview": [{ data: PREVIEW }],
+      "/v1/auth/accept-invitation": [
+        {
+          data: {
+            access_token: "new-access-token",
+            refresh_token: "new-refresh-token",
+            expires_in: 900,
+          },
+        },
+      ],
+    });
+
+    await renderScreen();
+    await reachAcceptForm();
+    await fireEvent.press(screen.getByTestId("invitation-accept-submit"));
+
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith("/portal");
+    });
+    expect(getSession()).toEqual({
+      accessToken: "new-access-token",
+      csrfToken: null,
+    });
+  });
+
   it("asks for the TOTP code on AUTH_MFA_REQUIRED and retries with it", async () => {
     mockPostResponses({
       "/v1/invitations/preview": [{ data: PREVIEW }],
