@@ -1,17 +1,23 @@
 name: security
 
 # Phase 11 (openspec/changes/m0-foundation/tasks.md, D-M): six independent,
-# ALL-BLOCKING scans -- no continue-on-error anywhere in this file. The
-# weekly schedule trigger is what catches a new CVE against unchanged code
-# (PRD 10.1 gate item 7); pull_request/push catch a newly introduced one.
+# ALL-BLOCKING scans -- no continue-on-error anywhere in this file.
+# pull_request/push catch a newly introduced CVE.
+#
+# The weekly schedule trigger was removed on 2026-09-22 at the owner's
+# request, together with the scheduled workflows of the other repositories,
+# because their failure mails had stopped being read. It was the only trigger
+# that caught a new CVE against code that had stopped changing (PRD 10.1 gate
+# item 7), so nothing covers that case now: a CVE published against a pinned
+# dependency will surface at the next push or pull request, not before.
+# Restoring it means putting back a `schedule:` block with a weekly cron.
+#
 # Reused by deploy.yml via `workflow_call` before any image is built.
 
 on:
   pull_request:
   push:
     branches: [main]
-  schedule:
-    - cron: "17 4 * * 1" # weekly, Monday 04:17 UTC
   workflow_call:
 
 permissions:
