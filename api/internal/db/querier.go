@@ -99,6 +99,9 @@ type Querier interface {
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
 	GetUserMFA(ctx context.Context, userID uuid.UUID) (UserMfa, error)
+	// Detail lookup repeats the complete visibility predicate and binds both
+	// community and caller, so foreign/private ids resolve as no row.
+	GetVisibleIncidentByID(ctx context.Context, arg GetVisibleIncidentByIDParams) (Incident, error)
 	// IncrementInvitationFailedAttempts records that a preview/accept call
 	// RESOLVED to this real invitation row (design D-6: "invitations.
 	// failed_attempts is still incremented, but only when the code resolved
@@ -121,6 +124,8 @@ type Querier interface {
 	// communities: tenant column office_id (tenant owner); id is the
 	// community tenant root (design D-5).
 	InsertCommunity(ctx context.Context, arg InsertCommunityParams) (Community, error)
+	// incidents: tenant column community_id (design D-5).
+	InsertIncident(ctx context.Context, arg InsertIncidentParams) (Incident, error)
 	// invitations: tenant column community_id (design D-5).
 	InsertInvitation(ctx context.Context, arg InsertInvitationParams) (Invitation, error)
 	InsertOTPChallenge(ctx context.Context, arg InsertOTPChallengeParams) (OtpChallenge, error)
@@ -191,6 +196,14 @@ type Querier interface {
 	// for GET /v1/me.
 	ListUnitMembershipsByUserID(ctx context.Context, userID uuid.UUID) ([]ListUnitMembershipsByUserIDRow, error)
 	ListUnitsByCommunityID(ctx context.Context, communityID uuid.UUID) ([]Unit, error)
+	// A private unit incident is visible only to its creator, an active
+	// member of that exact unit, or an admin/admin_staff of the community's
+	// owning office. Board roles are intentionally not an authorization
+	// predicate: being president alone does not grant private-unit access.
+	// Common incidents require community membership unless the caller is a
+	// scoped office administrator. Caller and community ids are explicit
+	// bound inputs, never inferred from an incident id alone.
+	ListVisibleIncidents(ctx context.Context, arg ListVisibleIncidentsParams) ([]Incident, error)
 	// Re-reads one challenge FOR UPDATE inside the transaction that will
 	// mark it verified, so two concurrent correct submissions cannot both
 	// consume it: the second waits on the lock and then finds verified_at set.
