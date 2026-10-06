@@ -811,6 +811,11 @@ components:
           maxLength: 6
           minLength: 6
           type: string
+        email_code:
+          description: 6-digit code emailed to the account's address by the enroll call. Required to confirm an enrollment; ignored once TOTP is active.
+          maxLength: 6
+          minLength: 6
+          type: string
       required:
         - code
       type: object

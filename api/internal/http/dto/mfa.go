@@ -21,9 +21,13 @@ type MFAEnrollOutput struct {
 	Body MFAEnrollResponse
 }
 
-// MFAVerifyRequest is POST /v1/me/mfa/verify's body.
+// MFAVerifyRequest is POST /v1/me/mfa/verify's body. EmailCode is
+// optional in the schema because the same endpoint serves two calls:
+// the handler requires it on the call that confirms an enrollment and
+// ignores it once the factor is active.
 type MFAVerifyRequest struct {
-	Code string `json:"code" minLength:"6" maxLength:"6" doc:"6-digit TOTP code."`
+	Code      string `json:"code" minLength:"6" maxLength:"6" doc:"6-digit TOTP code."`
+	EmailCode string `json:"email_code,omitempty" minLength:"6" maxLength:"6" doc:"6-digit code emailed to the account's address by the enroll call. Required to confirm an enrollment; ignored once TOTP is active."`
 }
 
 type MFAVerifyInput struct {

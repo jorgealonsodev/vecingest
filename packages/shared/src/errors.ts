@@ -35,6 +35,11 @@ export const ErrorCode = {
   // authenticated on a password alone. Distinct from
   // AuthMFAEnrollmentRequired, which means there is no factor yet.
   AuthMFARequired: "AUTH_MFA_REQUIRED",
+  // A TOTP enrollment confirmation was refused: the authenticator code,
+  // the emailed code, or both were wrong, expired, used up or superseded.
+  // Deliberately one code for every cause.
+  AuthMFAEnrollmentConfirmationInvalid:
+    "AUTH_MFA_ENROLLMENT_CONFIRMATION_INVALID",
   AuthResetTokenInvalid: "AUTH_RESET_TOKEN_INVALID",
   AuthUnauthorized: "AUTH_UNAUTHORIZED",
   NotFound: "NOT_FOUND",

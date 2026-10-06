@@ -23,13 +23,22 @@ import (
 // ever satisfy the mandatory-TOTP gate (authz.resolve.go), since this
 // route is NOT under a scoped prefix and therefore never itself gated.
 //
-// It stays ungated ON PURPOSE, and that is now safe. A password-only
-// session can still reach this route and enroll a factor -- an admin
-// with no factor has no other way to acquire one -- but enrolling no
-// longer opens anything: the gate reads the SESSION's own second-factor
-// fact, and the session doing the enrolling was minted without it. The
-// caller must log in again, this time with a code
-// (requireMFAForAdminRoles; review lineage review-0e1833930adf141a).
+// It stays ungated ON PURPOSE. A password-only session can still reach
+// this route -- an admin with no factor has no other way to acquire one
+// -- and enrolling opens no gate by itself: the gate reads the SESSION's
+// own second-factor fact, and the session doing the enrolling was minted
+// without it (requireMFAForAdminRoles; review lineage
+// review-0e1833930adf141a).
+//
+// What a password alone can no longer do is ACTIVATE the factor. With no
+// disable or recovery path, the first active factor is permanent, so an
+// attacker binding their own authenticator to a factor-less owner's
+// account locked the owner out for good. Enrollment therefore also
+// issues a 6-digit code to the STORED users.email, in the same
+// transaction as the pending secret, and confirmation requires it
+// (auth-mfa-totp: Email-Confirmed Enrollment). Re-enrolling supersedes
+// the previous code along with the previous secret.
+//
 // Re-enrolling an ALREADY-ACTIVE factor is refused (409): silently
 // replacing a live secret would strand the caller's current
 // authenticator app with no warning.
@@ -52,13 +61,34 @@ func (d *Deps) EnrollMFA(ctx context.Context, in *dto.MFAEnrollInput) (*dto.MFAE
 		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
 
-	result, err := mfa.Enroll(ctx, d.DB.Write, d.MFAKey, userID)
-	if err != nil {
+	if d.MFAEnrollQueue == nil {
 		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
 
-	user, err := q.GetUserByID(ctx, userID)
+	tx, err := d.DB.Write.Begin(ctx)
 	if err != nil {
+		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	result, err := mfa.Enroll(ctx, tx, d.MFAKey, userID)
+	if err != nil {
+		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+	}
+	user, err := db.New(tx).GetUserByID(ctx, userID)
+	if err != nil {
+		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+	}
+	code, err := mfa.IssueEnrollEmailChallenge(ctx, tx, d.clock(), d.MFAKey, userID)
+	if err != nil {
+		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+	}
+	if err := d.MFAEnrollQueue.EnqueueMFAEnrollEmail(ctx, tx, mfa.EnrollEmail{
+		UserID: userID, Email: user.Email, Code: code,
+	}); err != nil {
+		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
 
@@ -99,7 +129,7 @@ func (d *Deps) VerifyMFA(ctx context.Context, in *dto.MFAVerifyInput) (*dto.MFAV
 	}
 
 	if !row.EnabledAt.Valid {
-		return d.confirmMFAEnrollment(ctx, userID, in.Body.Code)
+		return d.confirmMFAEnrollment(ctx, userID, in.Body.Code, in.Body.EmailCode)
 	}
 	return d.verifyActiveMFA(ctx, row, userID, in.Body.Code)
 }
@@ -112,19 +142,71 @@ func (d *Deps) VerifyMFA(ctx context.Context, in *dto.MFAVerifyInput) (*dto.MFAV
 // recovery-code set, and no way back -- the retry took the
 // already-active branch, which never issues codes. Rolling activation
 // back instead keeps the retry on this branch.
-func (d *Deps) confirmMFAEnrollment(ctx context.Context, userID uuid.UUID, code string) (*dto.MFAVerifyOutput, error) {
+//
+// Activation also requires the email code EnrollMFA issued
+// (auth-mfa-totp: Email-Confirmed Enrollment), checked in this order:
+//
+//  1. One attempt is spent on the latest open challenge in its own
+//     autocommitted statement, BEFORE anything is compared, and refused
+//     when the challenge is expired or already has
+//     mfa.EnrollEmailMaxAttempts. The increment must outlive the
+//     rejection that may follow, and the rejection rolls back the
+//     activation transaction -- so it cannot live in it.
+//  2. Inside the activation transaction the challenge is re-read FOR
+//     UPDATE and must still be open, so two concurrent correct
+//     submissions cannot both spend it.
+//  3. Both codes are checked; any failure is the same generic 401.
+//  4. The challenge is marked verified in the activation transaction:
+//     a rolled-back activation (see above) leaves it usable for the
+//     retry, and a committed one leaves it spent.
+func (d *Deps) confirmMFAEnrollment(ctx context.Context, userID uuid.UUID, code, emailCode string) (*dto.MFAVerifyOutput, error) {
+	rejected := apperr.New(401, apperr.CodeMFAEnrollmentConfirmationInvalid,
+		"invalid enrollment confirmation: check both the authenticator code and the emailed code, or enroll again for a new email code", nil)
+	if emailCode == "" {
+		return nil, rejected
+	}
+
+	now := d.clock().Now()
+	challenge, err := db.New(d.DB.Write).ConsumeOTPChallengeAttempt(ctx, db.ConsumeOTPChallengeAttemptParams{
+		UserID: userID, Purpose: mfa.EnrollEmailPurpose, Now: now, MaxAttempts: mfa.EnrollEmailMaxAttempts,
+	})
+	if err != nil {
+		if isNoRows(err) {
+			return nil, rejected
+		}
+		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+	}
+
 	tx, err := d.DB.Write.Begin(ctx)
 	if err != nil {
 		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	locked, err := db.New(tx).LockOpenOTPChallenge(ctx, challenge.ID)
+	if err != nil {
+		if isNoRows(err) {
+			return nil, rejected
+		}
+		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+	}
+	// Re-checked under the lock: a re-enrollment that committed between
+	// step 1 and here expired this challenge along with its secret. The
+	// clock is read again after the lock: that invalidation set expires_at
+	// to its own clock reading, which is later than the step-1 now.
+	if !locked.ExpiresAt.After(d.clock().Now()) || !mfa.EnrollEmailCodeMatches(d.MFAKey, emailCode, locked.CodeHash) {
+		return nil, rejected
+	}
+
 	ok, err := mfa.ConfirmEnrollment(ctx, tx, d.clock(), d.MFAKey, userID, code)
 	if err != nil {
 		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
 	if !ok {
-		return nil, apperr.New(401, apperr.CodeTOTPInvalid, "invalid TOTP code", nil)
+		return nil, rejected
+	}
+	if err := db.New(tx).MarkOTPChallengeVerified(ctx, locked.ID); err != nil {
+		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
 	}
 
 	rawCodes, hashedCodes, err := d.recoveryCodes()
