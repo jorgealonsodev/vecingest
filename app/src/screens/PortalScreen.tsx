@@ -35,22 +35,11 @@ import {
 import {
   type Membership,
   type PortalContext,
+  ROLE_LABELS,
   resolvePortalContext,
 } from "./portalContext";
 
 type Me = z.infer<typeof schemas.MeResponse>;
-
-/**
- * User-facing Spanish label for each generated `MembershipEntry.role`. A
- * `Record` over the generated union, so a role added to `openapi.yaml`
- * fails the typecheck here instead of rendering a raw enum value.
- */
-const ROLE_LABELS: Record<Membership["role"], string> = {
-  owner: "Propietario",
-  tenant: "Inquilino",
-  admin: "Administrador",
-  admin_staff: "Personal del despacho",
-};
 
 const SCOPE_LABELS: Record<Membership["scope"], string> = {
   community: "Comunidad",
@@ -107,9 +96,9 @@ type LoadState =
  * Still not built: the design's "remember my choice" toggle (no column or
  * endpoint persists that preference, `docs/funcionalidad/app-movil-2.md`)
  * and the fake "Colegiación Oficial nº 4.192" legend (demo-persona copy,
- * not real per-user data). The invitation-code entry point stays disabled
- * (mirroring `LoginScreen`'s `login-invitation-link`) — see
- * `docs/pendientes-funcionalidad.md`.
+ * not real per-user data). The invitation-code entry point
+ * (`portal-invitation-link`) opens `InvitationScreen`, the same sessionless
+ * preview + accept flow `LoginScreen`'s `login-invitation-link` opens.
  *
  * Sign-out (`POST /v1/auth/logout`) is real and is the only enabled action
  * besides the redirect guard: reached with no in-memory access token (a
@@ -256,32 +245,20 @@ export function PortalScreen() {
 
   const invitationRow = (
     <Pressable
-      disabled
       accessibilityRole="link"
-      accessibilityState={{ disabled: true }}
-      accessibilityLabel="Añadir otra comunidad o empresa con código, no disponible todavía"
+      accessibilityState={{ disabled: false }}
+      accessibilityLabel="Añadir otra comunidad o empresa con código"
       testID="portal-invitation-link"
+      onPress={() => router.push("/(auth)/invitation")}
       style={styles.invitationRow}
     >
       <MaterialCommunityIcons
         name="plus-circle-outline"
         size={16}
-        color={activeTheme.colors.onSurfaceVariant}
+        color={activeTheme.colors.primary}
       />
-      <Text
-        variant="labelMedium"
-        style={{ color: activeTheme.colors.onSurfaceVariant }}
-      >
+      <Text variant="labelMedium" style={{ color: activeTheme.colors.primary }}>
         Añadir otra comunidad o empresa con código
-      </Text>
-      <Text
-        variant="labelSmall"
-        style={[
-          styles.invitationBadge,
-          { color: activeTheme.colors.onSurfaceVariant },
-        ]}
-      >
-        Próximamente
       </Text>
     </Pressable>
   );
@@ -636,9 +613,6 @@ const styles = StyleSheet.create({
     gap: spacing.space8,
     minHeight: MIN_TOUCH_TARGET,
     justifyContent: "center",
-  },
-  invitationBadge: {
-    fontStyle: "italic",
   },
   signOutRow: {
     alignItems: "center",

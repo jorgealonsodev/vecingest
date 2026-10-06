@@ -20,9 +20,10 @@ jest.mock("../auth/secureTokens", () => ({
 }));
 
 const mockReplace = jest.fn();
+const mockPush = jest.fn();
 jest.mock("expo-router", () => ({
   ...jest.requireActual("expo-router"),
-  useRouter: () => ({ replace: mockReplace }),
+  useRouter: () => ({ replace: mockReplace, push: mockPush }),
 }));
 
 function renderPortalScreen() {
@@ -272,8 +273,12 @@ describe("PortalScreen — proving the session works (GET /v1/me)", () => {
     const primaryCta = screen.getByTestId("portal-primary-cta");
     expect(primaryCta.props.accessibilityState?.disabled).toBe(true);
 
+    // Invitation-Code Entry Point Enabled: no longer "Próximamente".
     const invitationLink = screen.getByTestId("portal-invitation-link");
-    expect(invitationLink.props.accessibilityState?.disabled).toBe(true);
+    expect(invitationLink.props.accessibilityState?.disabled).toBe(false);
+    expect(screen.queryByText("Próximamente")).toBeNull();
+    await fireEvent.press(invitationLink);
+    expect(mockPush).toHaveBeenCalledWith("/(auth)/invitation");
   });
 
   it("shows a retry affordance when GET /v1/me fails for a reason other than an expired session", async () => {

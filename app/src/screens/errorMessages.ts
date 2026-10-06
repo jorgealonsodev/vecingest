@@ -63,3 +63,28 @@ export function resetPasswordErrorMessage(error: ApiErrorBody): string {
       return "No se ha podido restablecer la contraseña. Inténtalo de nuevo.";
   }
 }
+
+/**
+ * `POST /v1/invitations/preview` answers every unusable code (unknown,
+ * expired, revoked, locked out) with the same generic body so it is not an
+ * existence oracle (design D-6); the UI keeps that property by showing one
+ * message for every failure, whatever the code.
+ */
+export function invitationPreviewErrorMessage(): string {
+  return "El código no es válido o ha caducado.";
+}
+
+/**
+ * `POST /v1/auth/accept-invitation`: `AUTH_MFA_REQUIRED` is the one actionable
+ * answer (the invited address has an account with an active second factor),
+ * so the screen asks for the code and retries. Everything else — wrong
+ * password for an existing account, password policy, used or expired
+ * invitation, lockout — collapses into one generic message, so the screen
+ * never discloses whether the invited address already has an account.
+ */
+export function invitationAcceptErrorMessage(error: ApiErrorBody): string {
+  if (error.code === ErrorCode.AuthMFARequired) {
+    return "Esta cuenta tiene la verificación en dos pasos activada: introduce el código de tu aplicación de autenticación.";
+  }
+  return "No se ha podido aceptar la invitación. Revisa los datos e inténtalo de nuevo.";
+}

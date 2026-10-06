@@ -64,9 +64,9 @@ function nativePlatform(): LoginFormValues["platform"] {
  * `5f83c21f55d9493da67cc330fa8528d4`): a 64px header, then a `content-max`
  * (1120px) rounded card containing the institutional left panel and the
  * capped-width form column, vertically centered on the page — not two
- * full-bleed, top-aligned halves. The invitation-code entry point is
- * visually faithful to the desktop design but has no backend at M0 — see
- * `docs/pendientes-funcionalidad.md`. The design's three-segment profile
+ * full-bleed, top-aligned halves. The invitation-code entry point
+ * (`login-invitation-link`, in both Stitch designs) opens `InvitationScreen`'s
+ * sessionless preview + accept flow. The design's three-segment profile
  * selector ("Vecino / Administrador / Empresa") was removed entirely
  * (2026-09-15, same doc): `POST /v1/auth/login` takes no role parameter, so
  * a disabled control that visually implied one read as broken rather than
@@ -136,24 +136,12 @@ export function LoginScreen() {
     }
   });
 
+  const openInvitation = () => router.push("/(auth)/invitation");
+
   const invitationLabel = (
-    <>
-      <Text
-        variant="labelMedium"
-        style={{ color: activeTheme.colors.onSurfaceVariant }}
-      >
-        Tengo un código de invitación
-      </Text>
-      <Text
-        variant="labelSmall"
-        style={[
-          styles.invitationBadge,
-          { color: activeTheme.colors.onSurfaceVariant },
-        ]}
-      >
-        Próximamente
-      </Text>
-    </>
+    <Text variant="labelMedium" style={{ color: activeTheme.colors.primary }}>
+      Tengo un código de invitación
+    </Text>
   );
 
   const invitationLink = isDesktop ? (
@@ -168,11 +156,11 @@ export function LoginScreen() {
         ¿Primera convocatoria o registro?
       </Text>
       <Pressable
-        disabled
         accessibilityRole="link"
-        accessibilityState={{ disabled: true }}
-        accessibilityLabel="Código de invitación, no disponible todavía"
+        accessibilityState={{ disabled: false }}
+        accessibilityLabel="Tengo un código de invitación"
         testID="login-invitation-link"
+        onPress={openInvitation}
         style={[
           styles.invitationPill,
           { borderColor: activeTheme.colors.outline },
@@ -183,11 +171,11 @@ export function LoginScreen() {
     </View>
   ) : (
     <Pressable
-      disabled
       accessibilityRole="link"
-      accessibilityState={{ disabled: true }}
-      accessibilityLabel="Código de invitación, no disponible todavía"
+      accessibilityState={{ disabled: false }}
+      accessibilityLabel="Tengo un código de invitación"
       testID="login-invitation-link"
+      onPress={openInvitation}
       style={styles.invitationRow}
     >
       {invitationLabel}
@@ -698,9 +686,6 @@ const styles = StyleSheet.create({
     minHeight: MIN_TOUCH_TARGET,
     paddingHorizontal: spacing.space16,
     paddingVertical: spacing.space8,
-  },
-  invitationBadge: {
-    fontStyle: "italic",
   },
   encryptedRow: {
     alignItems: "center",

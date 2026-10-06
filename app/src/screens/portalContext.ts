@@ -6,6 +6,18 @@ import type { z } from "zod";
 export type Membership = z.infer<typeof schemas.MembershipEntry>;
 
 /**
+ * User-facing Spanish label for each generated `MembershipEntry.role`. A
+ * `Record` over the generated union, so a role added to `openapi.yaml`
+ * fails the typecheck here instead of rendering a raw enum value.
+ */
+export const ROLE_LABELS: Record<Membership["role"], string> = {
+  owner: "Propietario",
+  tenant: "Inquilino",
+  admin: "Administrador",
+  admin_staff: "Personal del despacho",
+};
+
+/**
  * The working context a picked membership resolves to, entirely client-side
  * (app-portal-memberships: Context Selector For Multiple Memberships — "no
  * new 'set active context' endpoint is required"). `path` and `params` are
