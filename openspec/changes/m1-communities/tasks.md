@@ -269,8 +269,8 @@ breaking a different invariant each round is what it set out to end.
 - [x] 9.2 GREEN: implement the populated branch in `app/src/screens/PortalScreen.tsx`, replacing the hardcoded empty state
 - [x] 9.3 RED (RNTL, regression guard): a user with an empty `memberships` array still sees the unchanged empty state
 - [x] 9.4 GREEN: confirm the empty-state branch is preserved unchanged
-- [ ] 9.5 RED (RNTL): a user with three memberships (owner/tenant/admin_staff) sees a context selector listing all three with their roles (Context Selector For Multiple Memberships)
-- [ ] 9.6 GREEN: implement the context selector, resolving the chosen membership's scope path parameters client-side, no new endpoint
+- [x] 9.5 RED (RNTL): a user with three memberships (owner/tenant/admin_staff) sees a context selector listing all three with their roles (Context Selector For Multiple Memberships)
+- [x] 9.6 GREEN: implement the context selector, resolving the chosen membership's scope path parameters client-side, no new endpoint
 - [ ] 9.7 RED (RNTL): a valid short code at `portal-invitation-link` shows the preview before account creation; an invalid/expired code shows a generic error (Invitation-Code Entry Point Enabled, both scenarios)
 - [ ] 9.8 GREEN: enable `portal-invitation-link`, wire it to `POST /v1/invitations/preview` then the accept-invitation screen
 - [ ] 9.9 Run `pnpm --filter app test`; confirm the regenerated `packages/shared` memberships types are consumed with no hand-written type

@@ -32,9 +32,13 @@ import {
   WEB_PAGE_BACKGROUND,
   WEB_SURFACE,
 } from "../theme";
+import {
+  type Membership,
+  type PortalContext,
+  resolvePortalContext,
+} from "./portalContext";
 
 type Me = z.infer<typeof schemas.MeResponse>;
-type Membership = Me["memberships"][number];
 
 /**
  * User-facing Spanish label for each generated `MembershipEntry.role`. A
@@ -61,6 +65,19 @@ const SCOPE_ICONS: Record<
   office: "briefcase-outline",
 };
 
+type Selection = { key: string; context: PortalContext };
+
+function membershipKey(membership: Membership): string {
+  return `${membership.scope}-${membership.id}`;
+}
+
+function selectMembership(membership: Membership): Selection {
+  return {
+    key: membershipKey(membership),
+    context: resolvePortalContext(membership),
+  };
+}
+
 type LoadState =
   | { status: "loading" }
   | { status: "redirect" }
@@ -80,6 +97,12 @@ type LoadState =
  * renders one selectable row per membership (app-portal-memberships: Portal
  * Renders Real Membership Rows). An empty array keeps the original honest
  * empty state, unchanged.
+ *
+ * The rows are a radio group (Context Selector For Multiple Memberships):
+ * picking one resolves its working context client-side via
+ * `resolvePortalContext`, with no "set active context" endpoint. "Acceder"
+ * stays disabled: no role portal screen exists yet to navigate into, and
+ * enabling a button that goes nowhere would be dishonest.
  *
  * Still not built: the design's "remember my choice" toggle (no column or
  * endpoint persists that preference, `docs/funcionalidad/app-movil-2.md`)
@@ -105,6 +128,11 @@ export function PortalScreen() {
 
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [signingOut, setSigningOut] = useState(false);
+  // The picked working context, resolved client-side from the membership's
+  // scope (see `./portalContext.ts`). A single membership is preselected —
+  // there is no choice to make — while several start unselected so the
+  // user picks deliberately.
+  const [selection, setSelection] = useState<Selection | null>(null);
 
   // Guards against a stale response (unmount, or a retry started before an
   // earlier request settled) writing state that no longer applies — an
@@ -146,6 +174,11 @@ export function PortalScreen() {
       return;
     }
 
+    setSelection(
+      data.memberships.length === 1
+        ? selectMembership(data.memberships[0])
+        : null,
+    );
     setState({ status: "ready", me: data });
   }, []);
 
@@ -347,8 +380,10 @@ export function PortalScreen() {
           >
             {me.memberships.map((membership) => (
               <MembershipRow
-                key={`${membership.scope}-${membership.id}`}
+                key={membershipKey(membership)}
                 membership={membership}
+                selected={selection?.key === membershipKey(membership)}
+                onSelect={() => setSelection(selectMembership(membership))}
                 theme={activeTheme}
               />
             ))}
@@ -392,7 +427,11 @@ export function PortalScreen() {
           testID="portal-primary-cta"
           accessibilityLabel="Acceder"
           accessibilityState={{ disabled: true }}
-          accessibilityHint="No hay ninguna comunidad ni empresa disponible todavía"
+          accessibilityHint={
+            me.memberships.length > 0
+              ? "El acceso a cada portal todavía no está disponible"
+              : "No hay ninguna comunidad ni empresa disponible todavía"
+          }
           disabled
           style={styles.submit}
         >
@@ -448,17 +487,31 @@ export function PortalScreen() {
 
 function MembershipRow({
   membership,
+  selected,
+  onSelect,
   theme,
 }: {
   membership: Membership;
+  selected: boolean;
+  onSelect: () => void;
   theme: MD3Theme;
 }) {
   return (
     <Pressable
       testID={`portal-membership-${membership.scope}-${membership.id}`}
       accessibilityRole="radio"
+      accessibilityState={{ selected }}
       accessibilityLabel={`${SCOPE_LABELS[membership.scope]} ${membership.name}, ${ROLE_LABELS[membership.role]}`}
-      style={[styles.membershipRow, { borderColor: theme.colors.outline }]}
+      onPress={onSelect}
+      style={[
+        styles.membershipRow,
+        selected
+          ? {
+              borderColor: theme.colors.primary,
+              backgroundColor: theme.colors.secondaryContainer,
+            }
+          : { borderColor: theme.colors.outline },
+      ]}
     >
       <MaterialCommunityIcons
         name={SCOPE_ICONS[membership.scope]}
@@ -476,6 +529,11 @@ function MembershipRow({
           {ROLE_LABELS[membership.role]}
         </Text>
       </View>
+      <MaterialCommunityIcons
+        name={selected ? "radiobox-marked" : "radiobox-blank"}
+        size={20}
+        color={selected ? theme.colors.primary : theme.colors.onSurfaceVariant}
+      />
     </Pressable>
   );
 }

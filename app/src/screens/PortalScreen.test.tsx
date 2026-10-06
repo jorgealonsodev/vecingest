@@ -66,6 +66,8 @@ describe("PortalScreen — membership rows (GET /v1/me memberships)", () => {
 
     const row = screen.getByTestId("portal-membership-community-community-1");
     expect(row.props.accessibilityRole).toBe("radio");
+    // A single membership leaves no choice to make, so it is preselected.
+    expect(row.props.accessibilityState?.selected).toBe(true);
     expect(screen.getByText("C/ Mayor 12, Irun")).toBeTruthy();
     expect(screen.getByText("Propietario")).toBeTruthy();
     expect(screen.queryByTestId("portal-empty-state")).toBeNull();
@@ -102,6 +104,99 @@ describe("PortalScreen — membership rows (GET /v1/me memberships)", () => {
       screen.getByTestId("portal-primary-cta").props.accessibilityState
         ?.disabled,
     ).toBe(true);
+  });
+});
+
+describe("PortalScreen — context selector for multiple memberships", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    clearSession();
+    setSession({ accessToken: "a-valid-access-token", csrfToken: null });
+    (apiClient.GET as jest.Mock).mockResolvedValue({
+      data: {
+        id: "user-1",
+        email: "vecino@example.com",
+        is_superadmin: false,
+        memberships: [
+          {
+            scope: "community",
+            id: "community-1",
+            name: "C/ Mayor 12, Irun",
+            role: "owner",
+          },
+          {
+            scope: "community",
+            id: "community-2",
+            name: "Avda. Navarra 4, Hondarribia",
+            role: "tenant",
+          },
+          {
+            scope: "office",
+            id: "office-1",
+            name: "Fincas Bidasoa",
+            role: "admin_staff",
+          },
+        ],
+      },
+      error: undefined,
+    });
+  });
+
+  it("lists every membership with its role", async () => {
+    await renderPortalScreen();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("portal-memberships")).toBeTruthy();
+    });
+
+    const rows = screen.getAllByTestId(/^portal-membership-/);
+    expect(rows).toHaveLength(3);
+    expect(
+      screen.getByTestId("portal-membership-community-community-1").props
+        .accessibilityLabel,
+    ).toBe("Comunidad C/ Mayor 12, Irun, Propietario");
+    expect(
+      screen.getByTestId("portal-membership-community-community-2").props
+        .accessibilityLabel,
+    ).toBe("Comunidad Avda. Navarra 4, Hondarribia, Inquilino");
+    expect(
+      screen.getByTestId("portal-membership-office-office-1").props
+        .accessibilityLabel,
+    ).toBe("Despacho Fincas Bidasoa, Personal del despacho");
+    expect(screen.getByText("Propietario")).toBeTruthy();
+    expect(screen.getByText("Inquilino")).toBeTruthy();
+    expect(screen.getByText("Personal del despacho")).toBeTruthy();
+  });
+
+  it("lets the user pick exactly one context", async () => {
+    await renderPortalScreen();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("portal-memberships")).toBeTruthy();
+    });
+
+    const selected = (testID: string) =>
+      screen.getByTestId(testID).props.accessibilityState?.selected;
+
+    // Nothing is preselected when there is a real choice to make.
+    expect(selected("portal-membership-community-community-1")).toBe(false);
+    expect(selected("portal-membership-community-community-2")).toBe(false);
+    expect(selected("portal-membership-office-office-1")).toBe(false);
+
+    await fireEvent.press(
+      screen.getByTestId("portal-membership-community-community-2"),
+    );
+
+    expect(selected("portal-membership-community-community-1")).toBe(false);
+    expect(selected("portal-membership-community-community-2")).toBe(true);
+    expect(selected("portal-membership-office-office-1")).toBe(false);
+
+    await fireEvent.press(
+      screen.getByTestId("portal-membership-office-office-1"),
+    );
+
+    expect(selected("portal-membership-community-community-2")).toBe(false);
+    expect(selected("portal-membership-office-office-1")).toBe(true);
   });
 });
 
