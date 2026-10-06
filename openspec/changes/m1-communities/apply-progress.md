@@ -1228,4 +1228,74 @@ Focused: `cd api && go test -count=1 ./internal/http/api/ -run 'TestMe_|TestAuth
 |---|---|---|
 | 8.5 | Planted `ListAuditLogByUser` (`SELECT * FROM audit_log WHERE user_id = $1`) into the real `internal/db/queries/audit_log.sql`: `make lint-scope` → `lintscope: OK …`, exit 0 (the defect). Unit tests: `expected exactly one failure (the tenant-blind ListAuditLogByUser), got: []` and `expected audit_log query exceptions [… GetAuditLogHead … ListAuditLogRange], got []` | after 8.6, `make lint-scope` with the plant → `audit_log.sql: query "ListAuditLogByUser" against tenant-scoped table "audit_log" does not reference its tenant column "community_id"`, `make: *** [lint-scope] Error 1`; plant removed |
 | 8.7 | Did **not** fail: with the plant removed, `make lint-scope` is green and `TestLint_RealSchemaScopesEveryM1TenantTable` passed on first run (lint-scope already sees `office_members`/`communities` → `office_id`, `units`/`unit_members`/`invitations`/`audit_log` → `community_id`). Recorded as a coverage guard, not a RED | green |
-| 8.8 | No query flagged — nothing to fix | `make lint-scope` → OK; `go test ./cmd/lintscope/` → 10 passed |
+| 8.8 | No query flagged — nothing to fix | `make lint-scope` → OK; `go test ./cmd/lintscope/` → 11 passed |
+
+### 8.9–8.13 — Permission matrix generated from `openapi.yaml`
+
+New file `api/internal/http/api/permission_matrix_test.go`:
+
+- **Row set generated at test time** from `api/openapi/openapi.yaml`
+  (`loadDocumentedOperations`, `gopkg.in/yaml.v3`). Every documented operation
+  is either exercised (`matrixCases`, keyed by operationId) or exempt with a
+  reason (`matrixExemptions`, plus every `authz.PublicOperations` entry, whose
+  reason is taken from that reviewed file rather than restated).
+- **Allowed roles are never restated**: they are read from the live
+  registration's own marker (`op.Metadata[authz.MetadataKey]`) via a DB-free
+  `httpapi.New`.
+- `TestPermissionMatrix_CoverageCheckFailsOnAnUncoveredRoute` (8.9, pure):
+  an undocumented-in-matrix scoped route and a stale matrix row are both gaps.
+- `TestPermissionMatrix_RouteCoverage` (8.13, no Docker): document vs rows vs
+  live markers — a marker-bearing (tenant-scoped) operation can be neither
+  exempted nor left out, and an exercised row must carry a marker.
+- `TestPermissionMatrix_ForeignResourceDenied` (8.10/8.11, Testcontainers):
+  17 operations × 6 callers (`admin`, `admin_staff`, `owner`, `tenant` of
+  tenant A; `outsider`; `superadmin`) × own/foreign = **180 assertions**.
+  Foreign resource → 403/404 for every caller; outsider and superadmin → 403/404
+  on tenant A too (superadmin is not a tenant bypass); own resource with a role
+  the marker allows → **2xx** (positive control: a denial is authorization, not
+  a malformed request); own resource, member, role not allowed → 403; no
+  membership in the scope kind → 403/404. The four `scoped.Self` rows assert
+  no 5xx and that the body never carries a tenant-B identifier. Every case
+  builds fresh resources (unit, member, pending invitation), so destructive
+  rows never affect the next one, and each request uses its own simulated
+  client address so the router's 60/min per-IP budget does not turn rows into 429.
+
+| Task | RED observed | GREEN |
+|---|---|---|
+| 8.9 | `matrixCoverageGaps` written as a `return nil` stub first: `expected exactly two gaps (uncovered createWidget, stale deleteGadget), got []` | implemented; pass |
+| 8.10 | — (generator) | `TestPermissionMatrix_RouteCoverage`: `34/34 documented operations covered (100%): 17 exercised (17 tenant-scoped markers), 17 exempt with a reason` |
+| 8.11 | **Passed on first run** — no real gap exists. To prove it is not vacuous, PLANTED in `authz.ResolveCommunity` a fallback letting any office member resolve any community: 24 failures (12 community-kind operations × admin/admin_staff), e.g. `GET /v1/communities/<B> as admin on foreign resource: expected 403 or 404, got 200`, `DELETE /v1/units/<B>/members/<m> as admin_staff … got 204`. `createCommunity` (office-kind) correctly unaffected. Plant reverted (`git checkout`) | 180/180 green |
+| 8.12 | Nothing surfaced by 8.11 → no resolver or role-check change; none of the extra handler files was touched | — |
+| 8.13 | — | full `go test -race -count=1 ./...` green; route coverage 100 % (above) |
+
+**Deviations.**
+1. The matrix lives in `api/internal/http/api/` (package `api_test`), not
+   `api/test/` as the Work Units table's focused command suggests: it needs this
+   package's real-router harness (`newTestServer`, `mintAccessToken`,
+   `seedOfficeWithAdmin`…), and `api/test/`'s existing `TestPrivilegeMatrix` is
+   a different thing — the DB-level append-only privilege matrix
+   (db-access-control), which was left untouched. Focused command:
+   `cd api && go test -count=1 ./internal/http/api/ -run TestPermissionMatrix -v`.
+2. Because roles come from the live marker, the matrix cannot catch an
+   over-wide role set declared at registration; per-endpoint role tests
+   (`TestCommunity_*`, `TestUnit*`, `TestInvitation_*`) still own that.
+3. `createOffice` is exempt (platform-level, superadmin-only, no tenant
+   resource) rather than exercised; its rule is `TestOffice_CreationRestrictedToSuperadmin`.
+
+### Verification (WU-6)
+
+- `cd api && go test -race -count=1 ./...` → every package `ok`, exit 0.
+- `gofumpt -l .` clean; `golangci-lint run ./...` → 0 issues (one G101 on the
+  matrix's deliberately unusable placeholder password hash, annotated like
+  `public_form_protection_test.go`'s fixture).
+- `make lint-scope` → OK. `make gen` → no diff.
+
+### Review Workload / PR Boundary
+
+- Mode: chained PR slice (`feature-branch-chain`); WU-6 / PR6, base PR5.
+- Three work-unit commits: `/v1/me` memberships (8.1–8.4), lint-scope (8.5–8.8),
+  permission matrix (8.9–8.13).
+
+### Status
+
+**13/13 Phase 8.** Phase 9 (WU-7, app portal memberships) not started.

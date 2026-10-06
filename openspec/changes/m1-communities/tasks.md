@@ -257,11 +257,11 @@ breaking a different invariant each round is what it set out to end.
 - [x] 8.6 GREEN: modify `api/cmd/lintscope/main.go` — retire the blanket `audit_log` table exception; add the query-level exception map keyed `file:queryName` holding exactly those two entries with their reason
 - [x] 8.7 RED: `make lint-scope` passes green with all M1 tenant tables and no table-wide `audit_log` exception
 - [x] 8.8 GREEN: fix any query lint-scope flags; re-run and confirm green
-- [ ] 8.9 RED (generated from `openapi.yaml` at test time): the permission-matrix test fails when a newly registered scoped route is not yet reflected in it (A route missing from the generated matrix fails the check)
-- [ ] 8.10 GREEN: implement the matrix generator reading `api/openapi/openapi.yaml`, asserting 403/404 for every operation × role × own/foreign-resource combination
-- [ ] 8.11 RED (Testcontainers): an `admin` of office A gets 403/404 against a community owned by office B, exercised across every M1 scoped route (Foreign community access denied, 100% route coverage)
-- [ ] 8.12 GREEN: fix any resolver or role-check gap 8.11 surfaces across offices/communities/units/invitations
-- [ ] 8.13 Run `cd api && go test -race ./...`; confirm 100% route coverage in the permission-matrix report (PRD §10.1 M1 gate item 1)
+- [x] 8.9 RED (generated from `openapi.yaml` at test time): the permission-matrix test fails when a newly registered scoped route is not yet reflected in it (A route missing from the generated matrix fails the check)
+- [x] 8.10 GREEN: implement the matrix generator reading `api/openapi/openapi.yaml`, asserting 403/404 for every operation × role × own/foreign-resource combination
+- [x] 8.11 RED (Testcontainers): an `admin` of office A gets 403/404 against a community owned by office B, exercised across every M1 scoped route (Foreign community access denied, 100% route coverage)
+- [x] 8.12 GREEN: fix any resolver or role-check gap 8.11 surfaces across offices/communities/units/invitations
+- [x] 8.13 Run `cd api && go test -race ./...`; confirm 100% route coverage in the permission-matrix report (PRD §10.1 M1 gate item 1)
 
 ## Phase 9: App Portal Memberships (WU-7, PR7 — TDD RNTL)
 
