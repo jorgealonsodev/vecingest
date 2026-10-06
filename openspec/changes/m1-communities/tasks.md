@@ -253,10 +253,10 @@ breaking a different invariant each round is what it set out to end.
 - [x] 8.2 GREEN: implement `dto/me.go` `memberships[]` with a `scope` discriminator; modify `api/internal/http/handlers/me.go` to populate it from `authz.Memberships`
 - [x] 8.3 RED: revoking a session via `DELETE /v1/me/sessions/:id` leaves `GET /v1/me`'s `memberships` unchanged (Remote Session Listing and Revocation Endpoints, revoke scenario)
 - [x] 8.4 GREEN: confirm session revocation and membership reads stay independent — no shared cache (D interfaces table: membership lookups deliberately uncached)
-- [ ] 8.5 RED: `make lint-scope` fails on a deliberately tenant-blind new audit query that is not `GetAuditLogHead`/`ListAuditLogRange`
-- [ ] 8.6 GREEN: modify `api/cmd/lintscope/main.go` — retire the blanket `audit_log` table exception; add the query-level exception map keyed `file:queryName` holding exactly those two entries with their reason
-- [ ] 8.7 RED: `make lint-scope` passes green with all M1 tenant tables and no table-wide `audit_log` exception
-- [ ] 8.8 GREEN: fix any query lint-scope flags; re-run and confirm green
+- [x] 8.5 RED: `make lint-scope` fails on a deliberately tenant-blind new audit query that is not `GetAuditLogHead`/`ListAuditLogRange`
+- [x] 8.6 GREEN: modify `api/cmd/lintscope/main.go` — retire the blanket `audit_log` table exception; add the query-level exception map keyed `file:queryName` holding exactly those two entries with their reason
+- [x] 8.7 RED: `make lint-scope` passes green with all M1 tenant tables and no table-wide `audit_log` exception
+- [x] 8.8 GREEN: fix any query lint-scope flags; re-run and confirm green
 - [ ] 8.9 RED (generated from `openapi.yaml` at test time): the permission-matrix test fails when a newly registered scoped route is not yet reflected in it (A route missing from the generated matrix fails the check)
 - [ ] 8.10 GREEN: implement the matrix generator reading `api/openapi/openapi.yaml`, asserting 403/404 for every operation × role × own/foreign-resource combination
 - [ ] 8.11 RED (Testcontainers): an `admin` of office A gets 403/404 against a community owned by office B, exercised across every M1 scoped route (Foreign community access denied, 100% route coverage)

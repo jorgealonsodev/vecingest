@@ -1209,3 +1209,23 @@ memberships" pins that choice.
 Focused: `cd api && go test -count=1 ./internal/http/api/ -run 'TestMe_|TestAuthFlow'` → 15 passed.
 `make gen` regenerated `openapi.yaml`, `openapi-types.ts`, `schemas/index.ts`
 (`memberships: z.array(MembershipEntry)`); `pnpm --filter app typecheck` clean.
+
+### 8.5–8.8 — `lint-scope`: table-wide `audit_log` exception retired
+
+- `api/cmd/lintscope/main.go`: the table-level `exceptions` map and its branch
+  in `lint` are **removed**, not emptied — `queryExceptions` (keyed
+  `file:queryName`) is now the only exception mechanism. It holds exactly
+  `audit_log.sql:GetAuditLogHead` and `audit_log.sql:ListAuditLogRange`, each
+  with its reason, beside the pre-existing `invitations.sql:SweepExpiredInvitations`
+  (Phase 6 introduced the map early for it).
+- Tests (`cmd/lintscope/main_test.go`): `TestLint_DocumentedExceptionSkipsEnforcement`
+  (which asserted the table-wide pass) is replaced by
+  `TestLint_TenantBlindNewAuditQueryFails`; added
+  `TestQueryExceptions_AuditLogHoldsExactlyTheTwoChainReads` and
+  `TestLint_RealSchemaScopesEveryM1TenantTable`.
+
+| Task | RED observed | GREEN |
+|---|---|---|
+| 8.5 | Planted `ListAuditLogByUser` (`SELECT * FROM audit_log WHERE user_id = $1`) into the real `internal/db/queries/audit_log.sql`: `make lint-scope` → `lintscope: OK …`, exit 0 (the defect). Unit tests: `expected exactly one failure (the tenant-blind ListAuditLogByUser), got: []` and `expected audit_log query exceptions [… GetAuditLogHead … ListAuditLogRange], got []` | after 8.6, `make lint-scope` with the plant → `audit_log.sql: query "ListAuditLogByUser" against tenant-scoped table "audit_log" does not reference its tenant column "community_id"`, `make: *** [lint-scope] Error 1`; plant removed |
+| 8.7 | Did **not** fail: with the plant removed, `make lint-scope` is green and `TestLint_RealSchemaScopesEveryM1TenantTable` passed on first run (lint-scope already sees `office_members`/`communities` → `office_id`, `units`/`unit_members`/`invitations`/`audit_log` → `community_id`). Recorded as a coverage guard, not a RED | green |
+| 8.8 | No query flagged — nothing to fix | `make lint-scope` → OK; `go test ./cmd/lintscope/` → 10 passed |
