@@ -48,6 +48,10 @@ type Querier interface {
 	// (e.g. one first created by seed) promotes it, but NEVER touches its
 	// password_hash.
 	EnsureSuperadmin(ctx context.Context, id uuid.UUID) error
+	// Incident creation requires current resident membership before either
+	// common or unit scope is allowed. Return each active role separately so a
+	// stale owner row cannot mask an active tenant when tenant creation is off.
+	GetActiveIncidentCommunityRoles(ctx context.Context, arg GetActiveIncidentCommunityRolesParams) (GetActiveIncidentCommunityRolesRow, error)
 	GetAuditLogHead(ctx context.Context) (GetAuditLogHeadRow, error)
 	// GetCommunityByID reads by the community's own id, which is itself the
 	// tenant root (design D-5) -- the explicit column list (rather than
@@ -107,6 +111,9 @@ type Querier interface {
 	// Detail lookup repeats the complete visibility predicate and binds both
 	// community and caller, so foreign/private ids resolve as no row.
 	GetVisibleIncidentByID(ctx context.Context, arg GetVisibleIncidentByIDParams) (Incident, error)
+	// Incident creation must also prove membership in the exact requested unit;
+	// community-level membership alone is not enough for unit scope.
+	HasActiveUnitMembership(ctx context.Context, arg HasActiveUnitMembershipParams) (bool, error)
 	// IncrementInvitationFailedAttempts records that a preview/accept call
 	// RESOLVED to this real invitation row (design D-6: "invitations.
 	// failed_attempts is still incremented, but only when the code resolved

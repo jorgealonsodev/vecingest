@@ -38,6 +38,43 @@ ORDER BY c.name ASC, um.community_id ASC, um.role ASC;
 -- name: ListUnitMembersByCommunityID :many
 SELECT * FROM unit_members WHERE community_id = $1 AND deleted_at IS NULL ORDER BY created_at ASC;
 
+-- Incident creation requires current resident membership before either
+-- common or unit scope is allowed. Return each active role separately so a
+-- stale owner row cannot mask an active tenant when tenant creation is off.
+-- name: GetActiveIncidentCommunityRoles :one
+WITH active_memberships AS (
+    SELECT um.role
+    FROM unit_members um
+    JOIN units u ON u.id = um.unit_id
+        AND u.community_id = um.community_id
+        AND u.deleted_at IS NULL
+    WHERE um.community_id = sqlc.arg(community_id)
+        AND um.user_id = sqlc.arg(user_id)
+        AND um.role IN ('owner', 'tenant')
+        AND um.deleted_at IS NULL
+        AND (um.valid_from IS NULL OR um.valid_from <= now())
+        AND (um.valid_to IS NULL OR um.valid_to > now())
+)
+SELECT EXISTS (SELECT 1 FROM active_memberships WHERE role = 'owner') AS has_active_owner,
+    EXISTS (SELECT 1 FROM active_memberships WHERE role = 'tenant') AS has_active_tenant;
+
+-- Incident creation must also prove membership in the exact requested unit;
+-- community-level membership alone is not enough for unit scope.
+-- name: HasActiveUnitMembership :one
+SELECT EXISTS (
+    SELECT 1
+    FROM unit_members um
+    JOIN units u ON u.id = um.unit_id
+        AND u.community_id = um.community_id
+        AND u.deleted_at IS NULL
+    WHERE um.community_id = $1
+        AND um.unit_id = $2
+        AND um.user_id = $3
+        AND um.deleted_at IS NULL
+        AND (um.valid_from IS NULL OR um.valid_from <= now())
+        AND (um.valid_to IS NULL OR um.valid_to > now())
+);
+
 -- name: ListUnitMembersByUnitID :many
 SELECT * FROM unit_members WHERE unit_id = $1 AND community_id = $2 AND deleted_at IS NULL ORDER BY created_at ASC;
 

@@ -197,6 +197,26 @@ export interface paths {
         patch: operations["updateCommunity"];
         trace?: never;
     };
+    "/v1/communities/{id}/incidents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create an incident
+         * @description Owners and tenants need active membership in the exact target unit for unit incidents. Tenants also require tenants_can_create_incidents (default true). Admin and admin_staff may target any active unit in their community. Common incidents omit unit_id. New incidents start open with normal priority; creator is the authenticated caller.
+         */
+        post: operations["createIncident"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/communities/{id}/invitations": {
         parameters: {
             query?: never;
@@ -647,6 +667,26 @@ export interface components {
             reserve_fund?: string;
             secretary_is_office?: boolean;
         };
+        CreateIncidentRequest: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/CreateIncidentRequest.json
+             */
+            readonly $schema?: string;
+            /** @enum {string} */
+            category: "elevator" | "plumbing" | "electricity" | "cleaning" | "locksmith" | "gardening" | "works" | "mandatory_works" | "noise" | "other";
+            description: string;
+            location_text?: string;
+            /** @enum {string} */
+            scope: "common" | "unit";
+            title: string;
+            /**
+             * Format: uuid
+             * @description Required for unit scope and forbidden for common scope.
+             */
+            unit_id?: string;
+        };
         CreateInvitationRequest: {
             /**
              * Format: uri
@@ -787,6 +827,31 @@ export interface components {
              */
             readonly $schema?: string;
             accepted: boolean;
+        };
+        IncidentResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/IncidentResponse.json
+             */
+            readonly $schema?: string;
+            /** Format: int32 */
+            affected_count: number;
+            category: string;
+            community_id: string;
+            /** Format: date-time */
+            created_at: string;
+            created_by: string;
+            description: string;
+            id: string;
+            location_text?: string;
+            priority: string;
+            scope: string;
+            status: string;
+            title: string;
+            unit_id?: string;
+            /** Format: date-time */
+            updated_at: string;
         };
         InvitationResponse: {
             /** Format: date-time */
@@ -1656,6 +1721,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CommunityResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createIncident: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateIncidentRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IncidentResponse"];
                 };
             };
             /** @description Error */

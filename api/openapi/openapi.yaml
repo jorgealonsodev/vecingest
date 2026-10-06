@@ -289,6 +289,57 @@ components:
         - office_id
         - name
       type: object
+    CreateIncidentRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/CreateIncidentRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        category:
+          enum:
+            - elevator
+            - plumbing
+            - electricity
+            - cleaning
+            - locksmith
+            - gardening
+            - works
+            - mandatory_works
+            - noise
+            - other
+          type: string
+        description:
+          maxLength: 5000
+          minLength: 1
+          type: string
+        location_text:
+          maxLength: 255
+          type: string
+        scope:
+          enum:
+            - common
+            - unit
+          type: string
+        title:
+          maxLength: 200
+          minLength: 1
+          type: string
+        unit_id:
+          description: Required for unit scope and forbidden for common scope.
+          format: uuid
+          maxLength: 36
+          minLength: 1
+          type: string
+      required:
+        - title
+        - description
+        - category
+        - scope
+      type: object
     CreateInvitationRequest:
       additionalProperties: false
       properties:
@@ -542,6 +593,61 @@ components:
           type: boolean
       required:
         - accepted
+      type: object
+    IncidentResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/IncidentResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        affected_count:
+          format: int32
+          type: integer
+        category:
+          type: string
+        community_id:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        created_by:
+          type: string
+        description:
+          type: string
+        id:
+          type: string
+        location_text:
+          type: string
+        priority:
+          type: string
+        scope:
+          type: string
+        status:
+          type: string
+        title:
+          type: string
+        unit_id:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+        - id
+        - community_id
+        - created_by
+        - title
+        - description
+        - category
+        - priority
+        - status
+        - scope
+        - affected_count
+        - created_at
+        - updated_at
       type: object
     InvitationResponse:
       additionalProperties: false
@@ -1781,6 +1887,37 @@ paths:
       summary: Update a community (admin/admin_staff only)
       tags:
         - communities
+  /v1/communities/{id}/incidents:
+    post:
+      description: Owners and tenants need active membership in the exact target unit for unit incidents. Tenants also require tenants_can_create_incidents (default true). Admin and admin_staff may target any active unit in their community. Common incidents omit unit_id. New incidents start open with normal priority; creator is the authenticated caller.
+      operationId: createIncident
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: uuid
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateIncidentRequest"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IncidentResponse"
+          description: Created
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Create an incident
   /v1/communities/{id}/invitations:
     get:
       operationId: listInvitations

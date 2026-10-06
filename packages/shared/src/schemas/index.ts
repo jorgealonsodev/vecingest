@@ -160,6 +160,43 @@ const UpdateCommunityRequest = z
     secretary_is_office: z.boolean(),
   })
   .partial();
+const CreateIncidentRequest = z.object({
+  $schema: z.string().url().optional(),
+  category: z.enum([
+    "elevator",
+    "plumbing",
+    "electricity",
+    "cleaning",
+    "locksmith",
+    "gardening",
+    "works",
+    "mandatory_works",
+    "noise",
+    "other",
+  ]),
+  description: z.string().min(1).max(5000),
+  location_text: z.string().max(255).optional(),
+  scope: z.enum(["common", "unit"]),
+  title: z.string().min(1).max(200),
+  unit_id: z.string().min(1).max(36).uuid().optional(),
+});
+const IncidentResponse = z.object({
+  $schema: z.string().url().optional(),
+  affected_count: z.number().int(),
+  category: z.string(),
+  community_id: z.string(),
+  created_at: z.string().datetime({ offset: true }),
+  created_by: z.string(),
+  description: z.string(),
+  id: z.string(),
+  location_text: z.string().optional(),
+  priority: z.string(),
+  scope: z.string(),
+  status: z.string(),
+  title: z.string(),
+  unit_id: z.string().optional(),
+  updated_at: z.string().datetime({ offset: true }),
+});
 const InvitationResponse = z.object({
   accepted_at: z.string().datetime({ offset: true }).optional(),
   community_id: z.string(),
@@ -421,6 +458,8 @@ export const schemas = {
   CreateCommunityRequest,
   CommunityDetailResponse,
   UpdateCommunityRequest,
+  CreateIncidentRequest,
+  IncidentResponse,
   InvitationResponse,
   ListInvitationsResponse,
   CreateInvitationRequest,

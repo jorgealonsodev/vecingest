@@ -191,6 +191,12 @@ var matrixCases = map[string]func(w matrixWorld, nonce string) matrixRequest{
 			"unit_id": w.UnitID, "email": "matrix-invite-" + n + "@example.com", "role": "owner",
 		}}
 	},
+	"createIncident": func(w matrixWorld, n string) matrixRequest {
+		return matrixRequest{Method: "POST", Path: "/v1/communities/" + w.CommunityID.String() + "/incidents", JSON: map[string]any{
+			"title": "Matrix incident " + n, "description": "An incident created by the permission matrix.",
+			"category": "other", "scope": "common",
+		}}
+	},
 	"createUnit": func(w matrixWorld, _ string) matrixRequest {
 		return matrixRequest{Method: "POST", Path: "/v1/communities/" + w.CommunityID.String() + "/units", JSON: map[string]any{"type": "flat"}}
 	},
