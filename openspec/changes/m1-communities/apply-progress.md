@@ -1299,3 +1299,87 @@ New file `api/internal/http/api/permission_matrix_test.go`:
 ### Status
 
 **13/13 Phase 8.** Phase 9 (WU-7, app portal memberships) not started.
+
+## Work Unit: WU-7 / PR7 — Phase 9: App Portal Memberships
+
+**Branch**: `feature/m1-communities-pr7-app-portal` (base: `feature/m1-communities-pr6-me-memberships`).
+Not pushed, no PR — delivery is the user's decision.
+
+### 9.1–9.4 — populated portal rows, empty state preserved (`1e849a8`)
+
+- `PortalScreen` renders one `radio` row per `GET /v1/me` membership
+  (`testID="portal-membership-<scope>-<id>"`, inside the `radiogroup`
+  `portal-memberships`), showing the office/community name and a Spanish role
+  label (`Propietario`, `Inquilino`, `Administrador`, `Personal del despacho`)
+  typed as `Record<Membership["role"], string>`, so a new generated role fails
+  the typecheck. An empty array renders the original empty state.
+- Existing `PortalScreen` and route-test fixtures were missing `memberships`
+  (they predate PR6) and crashed on `me.memberships.length` once the populated
+  branch landed (`TypeError: Cannot read properties of undefined (reading
+  'length')`, 6 tests). They were updated to the real contract
+  (`memberships: []`, never null), not guarded with `?? []`.
+
+| Task | RED observed | GREEN |
+|---|---|---|
+| 9.1 | `Unable to find an element with testID: /^portal-membership-/` | pass after 9.2 |
+| 9.3 | **Passed on first run** — 9.2 had kept the branch. To prove it is not vacuous, PLANTED `memberships.length >= 0`: `Unable to find an element with testID: portal-empty-state`. Plant reverted | — |
+| 9.4 | Confirmation by inspection: `git diff -w` of the empty-state block shows no removed lines (indentation only, it moved under the conditional) | 11/11 portal tests green |
+
+### 9.5–9.6 — context selector (`0d119aa`)
+
+- Rows are selectable: pressing one sets `accessibilityState.selected` on it and
+  clears the others. A single membership is preselected; several start
+  unselected.
+- `app/src/screens/portalContext.ts` — `resolvePortalContext(membership)`
+  resolves the pick client-side into a path + params pair shaped for the
+  generated `apiClient`: community → `/v1/communities/{id}` with
+  `{path: {id}}`; office → `/v1/offices/me` with no path parameter (office
+  routes are caller-scoped server-side). No new endpoint.
+
+| Task | RED observed | GREEN |
+|---|---|---|
+| 9.5 (listing) | **Passed on first run** — 9.2's rows already carry name + role; stated honestly | — |
+| 9.5 (selection) | `Expected: false, Received: undefined` (no `accessibilityState.selected`) | pass after 9.6 |
+| 9.6 (resolver) | `Cannot find module './portalContext'` | `portalContext.test.ts` 2/2 |
+| 9.6 (single-membership preselect) | Assertion written after the implementation; PLANTED `length === -1`: `Received: false`. Plant reverted | pass |
+
+**Deviation (9.6) — "Acceder" stays disabled.** The spec requires letting the
+user "pick one to proceed", but no role portal screen exists to navigate into
+(the spec says "No new screen"). The pick is resolved and held in state; the
+CTA keeps `disabled` with the hint "El acceso a cada portal todavía no está
+disponible" rather than a button that goes nowhere.
+
+### 9.7–9.8 — NOT DONE (blocked on a product decision)
+
+No accept-invitation screen exists in `app/`, and the specs/design do not
+define its content or flow for the caller this entry point serves: an
+**already-authenticated** portal user. `POST /v1/auth/accept-invitation` is the
+unauthenticated, session-minting flow (`name`, `password`, `consent`,
+`platform`, optional `phone`/`totp_code`), and the invitation is bound to the
+email its creator typed, which may differ from the signed-in account's. Open
+questions: does the logged-in user re-enter their own password (and TOTP) to
+link; what if the invited email is not theirs; does the minted session replace
+the current one; is code entry inline on the portal or the Stitch "Código de
+invitación" screen (`4b98138c2d4747a7bd0567e5ac174f2a`) followed by
+"Invitación reconocida" (`607f8aeb9682403987dc2b297615be76`). No 9.7 RED was
+committed: a red test would break `pnpm --filter app test` for the slice.
+`portal-invitation-link` remains disabled ("Próximamente").
+
+### 9.9 — generated types consumed
+
+`Membership = z.infer<typeof schemas.MembershipEntry>` and the screen's `Me`
+from `schemas.MeResponse`; `PortalContext.path` is constrained to
+`keyof paths` from `@vecingest/shared/client`. No hand-written membership type
+in `app/src` (grep for literal role/scope unions outside tests: none).
+
+### Verification (WU-7)
+
+- `pnpm --filter app test` → 11 suites, 46 tests passed.
+- `pnpm --filter app typecheck` → exit 0.
+- `pnpm --filter app lint` → `Checked 37 files … No fixes applied`, exit 0.
+- `make gen` → exit 0; `git status --short` empty afterwards.
+
+### Status
+
+**7/9 Phase 9** (9.1–9.6, 9.9). 9.7–9.8 pending a product decision on the
+authenticated accept-invitation flow.

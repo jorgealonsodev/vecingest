@@ -273,7 +273,7 @@ breaking a different invariant each round is what it set out to end.
 - [x] 9.6 GREEN: implement the context selector, resolving the chosen membership's scope path parameters client-side, no new endpoint
 - [ ] 9.7 RED (RNTL): a valid short code at `portal-invitation-link` shows the preview before account creation; an invalid/expired code shows a generic error (Invitation-Code Entry Point Enabled, both scenarios)
 - [ ] 9.8 GREEN: enable `portal-invitation-link`, wire it to `POST /v1/invitations/preview` then the accept-invitation screen
-- [ ] 9.9 Run `pnpm --filter app test`; confirm the regenerated `packages/shared` memberships types are consumed with no hand-written type
+- [x] 9.9 Run `pnpm --filter app test`; confirm the regenerated `packages/shared` memberships types are consumed with no hand-written type
 
 ## Phase 10: PRD Corrections, Security Gate, Checkpoint A Closure (WU-8, PR8 — document discipline)
 
