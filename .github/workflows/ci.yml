@@ -242,6 +242,10 @@ jobs:
       - name: full integration suite
         run: make test-e2e
 
+      - name: API authorization and integration suite (Testcontainers)
+        working-directory: api
+        run: go test -v -race -count=1 ./internal/http/api/...
+
   scope:
     name: scope (make lint-scope, tenant-column enforcement)
     needs: changes
