@@ -608,6 +608,17 @@ components:
           format: int32
           type: integer
         category:
+          enum:
+            - elevator
+            - plumbing
+            - electricity
+            - cleaning
+            - locksmith
+            - gardening
+            - works
+            - mandatory_works
+            - noise
+            - other
           type: string
         community_id:
           type: string
@@ -623,10 +634,25 @@ components:
         location_text:
           type: string
         priority:
+          enum:
+            - low
+            - normal
+            - high
+            - urgent
           type: string
         scope:
+          enum:
+            - common
+            - unit
           type: string
         status:
+          enum:
+            - open
+            - assigned
+            - in_progress
+            - resolved
+            - closed
+            - rejected
           type: string
         title:
           type: string
@@ -707,6 +733,28 @@ components:
             - "null"
       required:
         - communities
+      type: object
+    ListIncidentsResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/ListIncidentsResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        items:
+          items:
+            $ref: "#/components/schemas/IncidentResponse"
+          type:
+            - array
+            - "null"
+        next_cursor:
+          type: string
+      required:
+        - items
+        - next_cursor
       type: object
     ListInvitationsResponse:
       additionalProperties: false
@@ -1888,6 +1936,88 @@ paths:
       tags:
         - communities
   /v1/communities/{id}/incidents:
+    get:
+      description: "Filters: status (open, assigned, in_progress, resolved, closed, rejected), category (documented public categories; noise maps to noise_and_coexistence), unit_id (a non-deleted unit in this community), limit (default 20, range 1–100), and cursor. Results use stable descending (created_at, id) keyset pagination. Each page rechecks visibility; stale cursors require restarting pagination."
+      operationId: listIncidents
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: uuid
+            type: string
+        - description: Filter by incident status.
+          explode: false
+          in: query
+          name: status
+          schema:
+            description: Filter by incident status.
+            enum:
+              - open
+              - assigned
+              - in_progress
+              - resolved
+              - closed
+              - rejected
+            type: string
+        - description: Filter by public incident category; noise maps to the stored noise_and_coexistence category.
+          explode: false
+          in: query
+          name: category
+          schema:
+            description: Filter by public incident category; noise maps to the stored noise_and_coexistence category.
+            enum:
+              - elevator
+              - plumbing
+              - electricity
+              - cleaning
+              - locksmith
+              - gardening
+              - works
+              - mandatory_works
+              - noise
+              - other
+            type: string
+        - description: Filter to incidents for this non-deleted unit in the community.
+          explode: false
+          in: query
+          name: unit_id
+          schema:
+            description: Filter to incidents for this non-deleted unit in the community.
+            format: uuid
+            type: string
+        - description: Page size (default 20, maximum 100).
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 20
+            description: Page size (default 20, maximum 100).
+            format: int64
+            maximum: 100
+            minimum: 1
+            type: integer
+        - description: Opaque keyset cursor from the previous page; restart pagination if it is stale.
+          explode: false
+          in: query
+          name: cursor
+          schema:
+            description: Opaque keyset cursor from the previous page; restart pagination if it is stale.
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListIncidentsResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: List visible community incidents
     post:
       description: Owners and tenants need active membership in the exact target unit for unit incidents. Tenants also require tenants_can_create_incidents (default true). Admin and admin_staff may target any active unit in their community. Common incidents omit unit_id. New incidents start open with normal priority; creator is the authenticated caller.
       operationId: createIncident
@@ -2114,6 +2244,31 @@ paths:
       summary: Readiness probe
       tags:
         - health
+  /v1/incidents/{id}:
+    get:
+      description: Returns a safe incident projection only when the authenticated caller can currently view it; absent, deleted, foreign, and invisible incidents all return 404.
+      operationId: getIncident
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            format: uuid
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IncidentResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Get a visible incident
   /v1/invitations/preview:
     post:
       operationId: previewInvitation

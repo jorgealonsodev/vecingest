@@ -204,7 +204,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List visible community incidents
+         * @description Filters: status (open, assigned, in_progress, resolved, closed, rejected), category (documented public categories; noise maps to noise_and_coexistence), unit_id (a non-deleted unit in this community), limit (default 20, range 1–100), and cursor. Results use stable descending (created_at, id) keyset pagination. Each page rechecks visibility; stale cursors require restarting pagination.
+         */
+        get: operations["listIncidents"];
         put?: never;
         /**
          * Create an incident
@@ -312,6 +316,26 @@ export interface paths {
         };
         /** Readiness probe */
         get: operations["healthReady"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/incidents/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a visible incident
+         * @description Returns a safe incident projection only when the authenticated caller can currently view it; absent, deleted, foreign, and invisible incidents all return 404.
+         */
+        get: operations["getIncident"];
         put?: never;
         post?: never;
         delete?: never;
@@ -837,7 +861,8 @@ export interface components {
             readonly $schema?: string;
             /** Format: int32 */
             affected_count: number;
-            category: string;
+            /** @enum {string} */
+            category: "elevator" | "plumbing" | "electricity" | "cleaning" | "locksmith" | "gardening" | "works" | "mandatory_works" | "noise" | "other";
             community_id: string;
             /** Format: date-time */
             created_at: string;
@@ -845,9 +870,12 @@ export interface components {
             description: string;
             id: string;
             location_text?: string;
-            priority: string;
-            scope: string;
-            status: string;
+            /** @enum {string} */
+            priority: "low" | "normal" | "high" | "urgent";
+            /** @enum {string} */
+            scope: "common" | "unit";
+            /** @enum {string} */
+            status: "open" | "assigned" | "in_progress" | "resolved" | "closed" | "rejected";
             title: string;
             unit_id?: string;
             /** Format: date-time */
@@ -879,6 +907,16 @@ export interface components {
              */
             readonly $schema?: string;
             communities: components["schemas"]["CommunityResponse"][] | null;
+        };
+        ListIncidentsResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/ListIncidentsResponse.json
+             */
+            readonly $schema?: string;
+            items: components["schemas"]["IncidentResponse"][] | null;
+            next_cursor: string;
         };
         ListInvitationsResponse: {
             /**
@@ -1734,6 +1772,48 @@ export interface operations {
             };
         };
     };
+    listIncidents: {
+        parameters: {
+            query?: {
+                /** @description Filter by incident status. */
+                status?: "open" | "assigned" | "in_progress" | "resolved" | "closed" | "rejected";
+                /** @description Filter by public incident category; noise maps to the stored noise_and_coexistence category. */
+                category?: "elevator" | "plumbing" | "electricity" | "cleaning" | "locksmith" | "gardening" | "works" | "mandatory_works" | "noise" | "other";
+                /** @description Filter to incidents for this non-deleted unit in the community. */
+                unit_id?: string;
+                /** @description Page size (default 20, maximum 100). */
+                limit?: number;
+                /** @description Opaque keyset cursor from the previous page; restart pagination if it is stale. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListIncidentsResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     createIncident: {
         parameters: {
             query?: never;
@@ -1984,6 +2064,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReadyResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getIncident: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IncidentResponse"];
                 };
             };
             /** @description Error */

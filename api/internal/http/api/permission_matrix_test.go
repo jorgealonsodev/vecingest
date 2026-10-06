@@ -157,8 +157,10 @@ type matrixWorld struct {
 	CommunityID  uuid.UUID
 	UnitID       uuid.UUID
 	MemberID     uuid.UUID
+	MemberUserID uuid.UUID
 	MemberEmail  string
 	InvitationID uuid.UUID
+	IncidentID   uuid.UUID
 }
 
 // matrixRequest is one HTTP request a matrix case issues.
@@ -196,6 +198,12 @@ var matrixCases = map[string]func(w matrixWorld, nonce string) matrixRequest{
 			"title": "Matrix incident " + n, "description": "An incident created by the permission matrix.",
 			"category": "other", "scope": "common",
 		}}
+	},
+	"listIncidents": func(w matrixWorld, _ string) matrixRequest {
+		return matrixRequest{Method: "GET", Path: "/v1/communities/" + w.CommunityID.String() + "/incidents"}
+	},
+	"getIncident": func(w matrixWorld, _ string) matrixRequest {
+		return matrixRequest{Method: "GET", Path: "/v1/incidents/" + w.IncidentID.String()}
 	},
 	"createUnit": func(w matrixWorld, _ string) matrixRequest {
 		return matrixRequest{Method: "POST", Path: "/v1/communities/" + w.CommunityID.String() + "/units", JSON: map[string]any{"type": "flat"}}
@@ -428,7 +436,7 @@ func newMatrixWorld(t *testing.T, q *db.Queries, officeID, communityID uuid.UUID
 	}
 	return matrixWorld{
 		OfficeID: officeID, CommunityID: communityID, UnitID: unit.ID,
-		MemberID: member.ID, MemberEmail: email, InvitationID: inv.ID,
+		MemberID: member.ID, MemberUserID: memberUser, MemberEmail: email, InvitationID: inv.ID,
 	}
 }
 
@@ -584,6 +592,17 @@ func TestPermissionMatrix_ForeignResourceDenied(t *testing.T) {
 				} else {
 					w = newMatrixWorld(t, q, officeB, communityB)
 				}
+				if opID == "getIncident" {
+					incident, err := q.InsertIncident(t.Context(), db.InsertIncidentParams{
+						ID: uuid.New(), CommunityID: w.CommunityID, CreatedBy: w.MemberUserID,
+						Title: "Matrix readable incident", Description: "Visible common incident.",
+						Category: "other", Scope: "common",
+					})
+					if err != nil {
+						t.Fatalf("insert matrix incident: %v", err)
+					}
+					w.IncidentID = incident.ID
+				}
 				req := build(w, uuid.NewString()[:8])
 				status, body := doMatrixRequest(t, client, srv.URL, c.Token, req)
 				assertions++
@@ -593,6 +612,10 @@ func TestPermissionMatrix_ForeignResourceDenied(t *testing.T) {
 				case side == "foreign" || !memberOfScope:
 					if status != http.StatusForbidden && status != http.StatusNotFound {
 						t.Errorf("%s %s as %s on %s resource: expected 403 or 404, got %d body=%s", req.Method, req.Path, c.Name, side, status, body)
+					}
+				case marker.Kind == authz.KindIncident:
+					if status < 200 || status > 299 {
+						t.Errorf("%s %s as %s on own visible incident: expected 2xx, got %d body=%s", req.Method, req.Path, c.Name, status, body)
 					}
 				case authz.RoleAllowed(c.Role, marker.Roles):
 					if status < 200 || status > 299 {

@@ -3,10 +3,13 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -191,10 +194,7 @@ func incidentResponse(incident db.Incident) dto.IncidentResponse {
 		id := uuid.UUID(incident.UnitID.Bytes)
 		unitID = &id
 	}
-	category := incident.Category
-	if category == "noise_and_coexistence" {
-		category = "noise"
-	}
+	category := incidentPublicCategory(incident.Category)
 	location := ""
 	if incident.LocationText.Valid {
 		location = incident.LocationText.String
@@ -208,10 +208,264 @@ func incidentResponse(incident db.Incident) dto.IncidentResponse {
 	}
 }
 
-// RegisterIncidents registers only POST creation in C1; list/detail are a
-// separate C2 slice. All community member roles reach the handler for the
-// exact unit-level checks and tenant setting policy above.
+const (
+	defaultIncidentPageSize = 20
+	maxIncidentPageSize     = 100
+	maxIncidentCursorLength = 1024
+)
+
+var incidentListRoles = []authz.Role{
+	authz.RoleAdmin, authz.RoleAdminStaff, authz.RoleOwner, authz.RoleTenant,
+}
+
+type incidentCursor struct {
+	Version    int    `json:"v"`
+	Community  string `json:"community"`
+	Caller     string `json:"caller"`
+	Status     string `json:"status"`
+	Category   string `json:"category"`
+	UnitID     string `json:"unit_id"`
+	CreatedAt  string `json:"created_at"`
+	IncidentID string `json:"id"`
+}
+
+type incidentCursorPivot struct {
+	CreatedAt time.Time
+	ID        uuid.UUID
+}
+
+// ListIncidents applies the existing tenant/caller visibility SQL for every
+// page. The cursor is pagination state only: its anchor must itself remain
+// visible and match the page filters, and the next page always reruns SQL.
+func (d *Deps) ListIncidents(ctx context.Context, in *dto.ListIncidentsInput, membership authz.Membership) (*dto.ListIncidentsOutput, error) {
+	communityID, callerID := membership.CommunityID(), membership.UserID()
+	status, category, unitFilter := "", "", ""
+	statusArg, categoryArg, unitArg := pgtype.Text{}, pgtype.Text{}, pgtype.UUID{}
+
+	if in.Status != "" {
+		status = in.Status
+		if !validIncidentStatus(status) {
+			return nil, incidentValidationError()
+		}
+		statusArg = pgtype.Text{String: status, Valid: true}
+	}
+	if in.Category != "" {
+		category = in.Category
+		stored, ok := incidentStorageCategory(category)
+		if !ok {
+			return nil, incidentValidationError()
+		}
+		categoryArg = pgtype.Text{String: stored, Valid: true}
+	}
+	if in.UnitID != "" {
+		id, err := uuid.Parse(in.UnitID)
+		if err != nil {
+			return nil, incidentValidationError()
+		}
+		unitFilter = id.String()
+		unitArg = pgtype.UUID{Bytes: id, Valid: true}
+		unit, err := db.New(d.DB.Read).GetUnitByID(ctx, id)
+		if err != nil {
+			if isNoRows(err) {
+				return nil, incidentValidationError()
+			}
+			return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+		}
+		if unit.CommunityID != communityID {
+			return nil, incidentValidationError()
+		}
+	}
+
+	limit := in.Limit
+	if limit == 0 {
+		limit = defaultIncidentPageSize
+	}
+	if limit < 1 || limit > maxIncidentPageSize {
+		return nil, incidentValidationError()
+	}
+
+	q := db.New(d.DB.Read)
+	var pivot *incidentCursorPivot
+	if in.Cursor != "" {
+		decoded, err := decodeIncidentCursor(in.Cursor, communityID, callerID, status, category, unitFilter)
+		if err != nil {
+			return nil, incidentValidationError()
+		}
+		anchor, err := q.GetVisibleIncidentByID(ctx, db.GetVisibleIncidentByIDParams{
+			ID: decoded.ID, CommunityID: communityID, UserID: callerID,
+		})
+		if err != nil {
+			if isNoRows(err) {
+				return nil, incidentValidationError()
+			}
+			return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+		}
+		if !anchor.CreatedAt.Equal(decoded.CreatedAt) ||
+			(status != "" && anchor.Status != status) ||
+			(category != "" && incidentPublicCategory(anchor.Category) != category) ||
+			(unitFilter != "" && (!anchor.UnitID.Valid || uuid.UUID(anchor.UnitID.Bytes).String() != unitFilter)) {
+			return nil, incidentValidationError()
+		}
+		pivot = &decoded
+	}
+
+	query := db.ListVisibleIncidentsParams{
+		CommunityID: communityID, UserID: callerID, Status: statusArg,
+		Category: categoryArg, UnitID: unitArg, PageSize: int32(limit + 1),
+	}
+	if pivot != nil {
+		query.CursorCreatedAt = pgtype.Timestamptz{Time: pivot.CreatedAt, Valid: true}
+		query.CursorID = pgtype.UUID{Bytes: pivot.ID, Valid: true}
+	}
+	rows, err := q.ListVisibleIncidents(ctx, query)
+	if err != nil {
+		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+	}
+	more := len(rows) > limit
+	if more {
+		rows = rows[:limit]
+	}
+	items := make([]dto.IncidentResponse, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, incidentResponse(row))
+	}
+	next := ""
+	if more {
+		last := rows[len(rows)-1]
+		next = encodeIncidentCursor(incidentCursor{
+			Version: 1, Community: communityID.String(), Caller: callerID.String(),
+			Status: status, Category: category, UnitID: unitFilter,
+			CreatedAt: last.CreatedAt.UTC().Format(time.RFC3339Nano), IncidentID: last.ID.String(),
+		})
+	}
+	return &dto.ListIncidentsOutput{Body: dto.ListIncidentsResponse{Items: items, NextCursor: next}}, nil
+}
+
+// GetIncident repeats the visibility SQL after scoped.Incident has minted the
+// exact resource grant, so the handler only projects the safe C1 DTO.
+func (d *Deps) GetIncident(ctx context.Context, _ *dto.GetIncidentInput, access authz.IncidentAccess) (*dto.GetIncidentOutput, error) {
+	incident, err := db.New(d.DB.Read).GetVisibleIncidentByID(ctx, db.GetVisibleIncidentByIDParams{
+		ID: access.IncidentID(), CommunityID: access.CommunityID(), UserID: access.CallerID(),
+	})
+	if err != nil {
+		if isNoRows(err) {
+			return nil, apperr.New(404, apperr.CodeNotFound, "not found", nil)
+		}
+		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+	}
+	return &dto.GetIncidentOutput{Body: incidentResponse(incident)}, nil
+}
+
+func validIncidentStatus(status string) bool {
+	switch status {
+	case "open", "assigned", "in_progress", "resolved", "closed", "rejected":
+		return true
+	default:
+		return false
+	}
+}
+
+func incidentPublicCategory(category string) string {
+	if category == "noise_and_coexistence" {
+		return "noise"
+	}
+	return category
+}
+
+func encodeIncidentCursor(cursor incidentCursor) string {
+	payload, _ := json.Marshal(cursor)
+	return base64.RawURLEncoding.EncodeToString(payload)
+}
+
+func decodeIncidentCursor(encoded string, communityID, callerID uuid.UUID, status, category, unitID string) (incidentCursorPivot, error) {
+	if encoded == "" || len(encoded) > maxIncidentCursorLength {
+		return incidentCursorPivot{}, errors.New("invalid incident cursor length")
+	}
+	payload, err := base64.RawURLEncoding.Strict().DecodeString(encoded)
+	if err != nil || len(payload) > 768 {
+		return incidentCursorPivot{}, errors.New("invalid incident cursor encoding")
+	}
+	if err := validateIncidentCursorJSON(payload); err != nil {
+		return incidentCursorPivot{}, err
+	}
+	var cursor incidentCursor
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cursor); err != nil {
+		return incidentCursorPivot{}, err
+	}
+	if cursor.Version != 1 || cursor.Community != communityID.String() || cursor.Caller != callerID.String() ||
+		cursor.Status != status || cursor.Category != category || cursor.UnitID != unitID {
+		return incidentCursorPivot{}, errors.New("incident cursor context mismatch")
+	}
+	id, err := uuid.Parse(cursor.IncidentID)
+	if err != nil || id.String() != cursor.IncidentID {
+		return incidentCursorPivot{}, errors.New("invalid incident cursor id")
+	}
+	if !strings.HasSuffix(cursor.CreatedAt, "Z") {
+		return incidentCursorPivot{}, errors.New("incident cursor timestamp must be UTC")
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, cursor.CreatedAt)
+	if err != nil || createdAt.UTC().Format(time.RFC3339Nano) != cursor.CreatedAt {
+		return incidentCursorPivot{}, errors.New("invalid incident cursor timestamp")
+	}
+	return incidentCursorPivot{CreatedAt: createdAt, ID: id}, nil
+}
+
+func validateIncidentCursorJSON(payload []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return errors.New("incident cursor must be an object")
+	}
+	allowed := map[string]bool{"v": true, "community": true, "caller": true, "status": true, "category": true, "unit_id": true, "created_at": true, "id": true}
+	seen := make(map[string]bool, len(allowed))
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := token.(string)
+		if !ok || !allowed[key] || seen[key] {
+			return errors.New("invalid incident cursor field")
+		}
+		seen[key] = true
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return err
+		}
+		if key == "v" {
+			var version int
+			if bytes.Equal(bytes.TrimSpace(value), []byte("null")) || json.Unmarshal(value, &version) != nil {
+				return errors.New("invalid incident cursor version type")
+			}
+		} else {
+			var text string
+			if bytes.Equal(bytes.TrimSpace(value), []byte("null")) || json.Unmarshal(value, &text) != nil {
+				return errors.New("invalid incident cursor field type")
+			}
+		}
+	}
+	if _, err := decoder.Token(); err != nil {
+		return err
+	}
+	if len(seen) != len(allowed) {
+		return errors.New("incident cursor fields are incomplete")
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return errors.New("trailing incident cursor data")
+	}
+	return nil
+}
+
+// RegisterIncidents registers creation and list on the community resource,
+// plus detail through the independent typed incident-access scope.
 func RegisterIncidents(api huma.API, d *Deps) {
+	scoped.Community(api, huma.Operation{
+		OperationID: "listIncidents", Method: "GET", Path: "/v1/communities/{id}/incidents",
+		Summary:     "List visible community incidents",
+		Description: "Filters: status (open, assigned, in_progress, resolved, closed, rejected), category (documented public categories; noise maps to noise_and_coexistence), unit_id (a non-deleted unit in this community), limit (default 20, range 1–100), and cursor. Results use stable descending (created_at, id) keyset pagination. Each page rechecks visibility; stale cursors require restarting pagination.",
+	}, incidentListRoles, d.ListIncidents)
 	scoped.Community(api, huma.Operation{
 		OperationID:   "createIncident",
 		Method:        "POST",
@@ -220,4 +474,9 @@ func RegisterIncidents(api huma.API, d *Deps) {
 		Description:   "Owners and tenants need active membership in the exact target unit for unit incidents. Tenants also require tenants_can_create_incidents (default true). Admin and admin_staff may target any active unit in their community. Common incidents omit unit_id. New incidents start open with normal priority; creator is the authenticated caller.",
 		DefaultStatus: http.StatusCreated,
 	}, incidentCreateRoles, d.CreateIncident)
+	scoped.Incident(api, huma.Operation{
+		OperationID: "getIncident", Method: "GET", Path: "/v1/incidents/{id}",
+		Summary:     "Get a visible incident",
+		Description: "Returns a safe incident projection only when the authenticated caller can currently view it; absent, deleted, foreign, and invisible incidents all return 404.",
+	}, d.GetIncident)
 }

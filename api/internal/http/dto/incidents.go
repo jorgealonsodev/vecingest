@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
 	"github.com/google/uuid"
 )
 
@@ -46,6 +47,51 @@ type CreateIncidentInput struct {
 	Body        CreateIncidentRequest
 }
 
+type ListIncidentsInput struct {
+	CommunityID string `path:"id" format:"uuid"`
+	Status      string `query:"status" enum:"open,assigned,in_progress,resolved,closed,rejected" doc:"Filter by incident status."`
+	Category    string `query:"category" enum:"elevator,plumbing,electricity,cleaning,locksmith,gardening,works,mandatory_works,noise,other" doc:"Filter by public incident category; noise maps to the stored noise_and_coexistence category."`
+	UnitID      string `query:"unit_id" format:"uuid" doc:"Filter to incidents for this non-deleted unit in the community."`
+	Limit       int    `query:"limit" minimum:"1" maximum:"100" default:"20" doc:"Page size (default 20, maximum 100)."`
+	Cursor      string `query:"cursor" doc:"Opaque keyset cursor from the previous page; restart pagination if it is stale."`
+}
+
+func (i *ListIncidentsInput) ScopeCommunityID() uuid.UUID {
+	id, _ := uuid.Parse(i.CommunityID)
+	return id
+}
+
+func (i *ListIncidentsInput) Resolve(ctx huma.Context) []error {
+	allowed := map[string]bool{"status": true, "category": true, "unit_id": true, "limit": true, "cursor": true}
+	var issues []error
+	requestURL := ctx.URL()
+	for name, values := range requestURL.Query() {
+		if !allowed[name] || len(values) != 1 || values[0] == "" {
+			issues = append(issues, &huma.ErrorDetail{
+				Location: "query." + name, Message: "unknown or invalid query parameter",
+			})
+		}
+	}
+	return issues
+}
+
+type GetIncidentInput struct {
+	IncidentID string `path:"id" format:"uuid"`
+}
+
+func (i *GetIncidentInput) ScopeIncidentID() uuid.UUID {
+	id, _ := uuid.Parse(i.IncidentID)
+	return id
+}
+
+func (i *GetIncidentInput) Resolve(ctx huma.Context) []error {
+	requestURL := ctx.URL()
+	if len(requestURL.Query()) == 0 {
+		return nil
+	}
+	return []error{&huma.ErrorDetail{Location: "query", Message: "incident detail does not accept query parameters"}}
+}
+
 // ScopeCommunityID satisfies authz.CommunityScoped; the caller's membership
 // is resolved for this route community before the create handler runs.
 func (i *CreateIncidentInput) ScopeCommunityID() uuid.UUID {
@@ -63,10 +109,10 @@ type IncidentResponse struct {
 	CreatedBy     uuid.UUID  `json:"created_by"`
 	Title         string     `json:"title"`
 	Description   string     `json:"description"`
-	Category      string     `json:"category"`
-	Priority      string     `json:"priority"`
-	Status        string     `json:"status"`
-	Scope         string     `json:"scope"`
+	Category      string     `json:"category" enum:"elevator,plumbing,electricity,cleaning,locksmith,gardening,works,mandatory_works,noise,other"`
+	Priority      string     `json:"priority" enum:"low,normal,high,urgent"`
+	Status        string     `json:"status" enum:"open,assigned,in_progress,resolved,closed,rejected"`
+	Scope         string     `json:"scope" enum:"common,unit"`
 	LocationText  string     `json:"location_text,omitempty"`
 	AffectedCount int32      `json:"affected_count"`
 	CreatedAt     time.Time  `json:"created_at"`
@@ -74,5 +120,18 @@ type IncidentResponse struct {
 }
 
 type CreateIncidentOutput struct {
+	Body IncidentResponse
+}
+
+type ListIncidentsResponse struct {
+	Items      []IncidentResponse `json:"items"`
+	NextCursor string             `json:"next_cursor"`
+}
+
+type ListIncidentsOutput struct {
+	Body ListIncidentsResponse
+}
+
+type GetIncidentOutput struct {
 	Body IncidentResponse
 }
