@@ -1379,3 +1379,70 @@ func TestInvitation_AcceptPolicyViolationIsIndistinguishableAcrossBranches(t *te
 		t.Fatalf("expected 401 for a policy-compliant wrong password on an existing account, got %d body=%v", resp.StatusCode, body)
 	}
 }
+
+// The lockout half of the disclosure parity above. A policy-violating
+// password on the linking branch is a failed credential guess, so it drives
+// the account lockout and the invitation enumeration counter; if the create
+// branch answered the same password with a bare 422 and recorded nothing, an
+// existing address would flip to 429 after lockout.Threshold guesses while an
+// unknown one kept answering 422 forever -- prior existence, disclosed by the
+// lockout instead of the status code. Both branches must reach the same
+// state, exactly as POST /v1/auth/login counts an unknown address's failures.
+func TestInvitation_AcceptPolicyViolationLocksOutIdenticallyAcrossBranches(t *testing.T) {
+	srv, deps, handlesDB := newTestServer(t)
+	client := newClient(srv, nil)
+
+	officeID, adminID := seedOfficeWithAdmin(t, handlesDB, "invite-lock-parity-admin@example.com")
+	communityID := seedCommunity(t, handlesDB, officeID, "Invite Lockout Parity Community")
+	adminToken := mintAccessToken(t, deps, handlesDB, adminID, false)
+	auth := map[string]string{"Authorization": "Bearer " + adminToken}
+
+	invite := func(email string) string {
+		unitID := seedUnit(t, handlesDB, communityID)
+		_, created := doJSON(t, client, http.MethodPost, srv.URL+"/v1/communities/"+communityID.String()+"/invitations", map[string]any{
+			"unit_id": unitID.String(), "email": email, "role": "owner",
+		}, auth)
+		code, _ := created["short_code"].(string)
+		if code == "" {
+			t.Fatalf("test setup: expected a short_code from invitation creation, got %v", created)
+		}
+		return code
+	}
+	accept := func(code, pw, ip string) (*http.Response, map[string]any) {
+		return doFromIPClient(t, client, srv.URL+"/v1/auth/accept-invitation", http.MethodPost, ip,
+			map[string]any{
+				"short_code": code, "name": "Lockout Parity", "password": pw,
+				"consent": true, "platform": "web",
+			}, inviteHeaders("web", "1.0.0"))
+	}
+
+	existingEmail := "invite-lock-parity-existing@example.com"
+	createUser(t, handlesDB, existingEmail, false)
+	branches := []struct {
+		name, code, ip string
+	}{
+		{"unknown", invite("invite-lock-parity-unknown@example.com"), "203.0.113.160"},
+		{"existing", invite(existingEmail), "203.0.113.161"},
+	}
+
+	final := make(map[string]map[string]any, len(branches))
+	finalStatus := make(map[string]int, len(branches))
+	for _, b := range branches {
+		for i := range lockout.Threshold {
+			resp, body := accept(b.code, fmt.Sprintf("short-gues%02d", i), b.ip)
+			if resp.StatusCode != http.StatusUnprocessableEntity {
+				t.Fatalf("%s branch, guess %d: expected 422 for a policy-violating password, got %d body=%v", b.name, i+1, resp.StatusCode, body)
+			}
+		}
+		resp, body := accept(b.code, "short-gues99", b.ip)
+		finalStatus[b.name], final[b.name] = resp.StatusCode, body
+	}
+
+	if finalStatus["existing"] != http.StatusTooManyRequests {
+		t.Fatalf("test premise: expected the existing account to be locked out (429) after %d failed guesses, got %d body=%v", lockout.Threshold, finalStatus["existing"], final["existing"])
+	}
+	if finalStatus["unknown"] != finalStatus["existing"] || final["unknown"]["code"] != final["existing"]["code"] {
+		t.Fatalf("expected the unknown address to reach the same lockout state as the existing one after %d policy-violating guesses, got unknown=%d %v vs existing=%d %v",
+			lockout.Threshold, finalStatus["unknown"], final["unknown"], finalStatus["existing"], final["existing"])
+	}
+}

@@ -377,8 +377,9 @@ func (d *Deps) PreviewInvitation(ctx context.Context, in *dto.PreviewInvitationI
 //     and re-litigating it locked the owner out of every invitation
 //     (R3-accept-invitation-applies-password-policy-to-an-existing-credential).
 //     A candidate that does NOT match still goes through the policy, so a
-//     policy-violating password answers the same 422 on both branches and
-//     prior existence stays undisclosed.
+//     policy-violating password answers the same 422 on both branches, and
+//     it is recorded as a failure on both branches so they also lock out
+//     identically; prior existence stays undisclosed either way.
 //  4. THEN THE TRANSACTION, holding the writes and nothing else.
 //
 // What each inversion cost, so the next reader does not have to rediscover
@@ -504,6 +505,16 @@ func (d *Deps) AcceptInvitation(ctx context.Context, in *dto.AcceptInvitationInp
 		userID = existing.ID
 	case isNoRows(err):
 		if perr := d.acceptPolicyError(ctx, in.Body.Password); perr != nil {
+			// Counted exactly as the linking branch counts the same
+			// password (it never matches, so it lands in that branch's
+			// mismatch path): otherwise an existing address would lock
+			// to 429 after lockout.Threshold policy-violating guesses
+			// while an unknown one answered 422 forever. accountExists
+			// is false as on POST /v1/auth/login's unknown-address path;
+			// it suppresses only the victim alert, never the counting
+			// or the lock.
+			_, _ = d.InviteAttempts.Fail(ctx, key, inviteLockoutWindow)
+			_, _ = d.Lockout.RecordFailure(ctx, inv.Email.String, ip, false)
 			return nil, perr
 		}
 		// Argon2id, deliberately slow -- which is exactly why it runs
