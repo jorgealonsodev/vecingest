@@ -1349,21 +1349,61 @@ user "pick one to proceed", but no role portal screen exists to navigate into
 CTA keeps `disabled` with the hint "El acceso a cada portal todavía no está
 disponible" rather than a button that goes nowhere.
 
-### 9.7–9.8 — NOT DONE (blocked on a product decision)
+### 9.7–9.8 — invitation-code entry enabled (`07dcf71`)
 
-No accept-invitation screen exists in `app/`, and the specs/design do not
-define its content or flow for the caller this entry point serves: an
-**already-authenticated** portal user. `POST /v1/auth/accept-invitation` is the
-unauthenticated, session-minting flow (`name`, `password`, `consent`,
-`platform`, optional `phone`/`totp_code`), and the invitation is bound to the
-email its creator typed, which may differ from the signed-in account's. Open
-questions: does the logged-in user re-enter their own password (and TOTP) to
-link; what if the invited email is not theirs; does the minted session replace
-the current one; is code entry inline on the portal or the Stitch "Código de
-invitación" screen (`4b98138c2d4747a7bd0567e5ac174f2a`) followed by
-"Invitación reconocida" (`607f8aeb9682403987dc2b297615be76`). No 9.7 RED was
-committed: a red test would break `pnpm --filter app test` for the slice.
-`portal-invitation-link` remains disabled ("Próximamente").
+**Product decision (user, 2026-10-06).** Use the EXISTING sessionless backend
+flow, no new endpoint, following the Stitch screens "Código de invitación"
+(`4b98138c2d4747a7bd0567e5ac174f2a`) and "Invitación reconocida"
+(`607f8aeb9682403987dc2b297615be76`). Design D-6 stays intact: preview never
+returns or shows the invited email (an earlier orchestrator note asking to
+show it was withdrawn — `PreviewInvitationResponse` has no email field).
+
+- Both entry points are enabled: `portal-invitation-link` (PortalScreen) and
+  `login-invitation-link` (LoginScreen; the Stitch "Iniciar sesión" design
+  shows it). Each `router.push("/(auth)/invitation")`.
+- New route `app/app/(auth)/invitation.tsx` → `InvitationScreen`, three steps
+  held in local state on one route. The short code is never a route param: it
+  is a credential (same reason preview is POST, D-6).
+  1. Code: 8 alphanumeric characters, uppercased as typed; "Continuar" enables
+     at 8. `POST /v1/invitations/preview {short_code}`. Any failure → one
+     generic "El código no es válido o ha caducado."
+  2. Preview: community name, "Inmueble: Asignado por tu administración" when
+     `unit_id` is present (the response carries an id, not a label), role
+     label (`ROLE_LABELS`, moved to `portalContext.ts`), "Válida hasta el
+     dd/mm/aaaa". "No soy yo" leaves (`router.back()`, or login with no
+     history) with no call.
+  3. Accept: name, password (≥12, validated with the generated
+     `schemas.AcceptInvitationRequest`), consent checkbox, platform →
+     `POST /v1/auth/accept-invitation`. On `AUTH_MFA_REQUIRED` the TOTP field
+     appears and the user retries with `totp_code`. Success stores the session
+     exactly as `LoginScreen` does (`setSession` with both tokens, so any
+     current one is replaced; `persistRefreshToken` when a refresh token is
+     returned) and `router.replace("/portal")`. Any other failure → one
+     generic message, current session untouched.
+- The `.expo/types/router.d.ts` typed-routes file (gitignored, local) had to be
+  regenerated (`expo start` once) for `tsc` to accept the new route.
+
+| Test | RED observed | GREEN |
+|---|---|---|
+| 9.7 Continuar disabled <8, uppercased | stub `InvitationScreen` returning `null`: `Unable to find an element with testID: invitation-code-input` | pass |
+| 9.7 valid code → preview before account action | same | pass |
+| 9.7 invalid/expired → generic error | same | pass |
+| "No soy yo" backs out, no accept call | same | pass |
+| accept success → session replaced, lands on `/portal` | same | pass |
+| `AUTH_MFA_REQUIRED` → TOTP field, retry with `totp_code` | same | pass |
+| accept failure → generic error, session kept | same | pass |
+| no consent → blocked before accept | same | pass |
+| `portal-invitation-link` enabled, pushes route | `Expected: false, Received: true` (`accessibilityState.disabled`) | pass |
+| `login-invitation-link` enabled, pushes route | `Expected: false, Received: true` | pass |
+| invitation route smoke test | `Cannot find module '../../app/(auth)/invitation'` | pass |
+
+**Deviations.**
+- No name prefill: `MeResponse` has no `name` field. `name` is required by the
+  contract on both branches (the handler ignores it when linking).
+- "¿No has recibido la invitación?" is shown as plain guidance text ("Contacta
+  con tu administración de fincas."), not a link: it has no defined behaviour.
+- The design's "Paso 1 de 3" stepper and administration-office card are not
+  built (preview returns no office data).
 
 ### 9.9 — generated types consumed
 
@@ -1379,7 +1419,14 @@ in `app/src` (grep for literal role/scope unions outside tests: none).
 - `pnpm --filter app lint` → `Checked 37 files … No fixes applied`, exit 0.
 - `make gen` → exit 0; `git status --short` empty afterwards.
 
+After 9.7–9.8 (`07dcf71`):
+
+- `pnpm --filter app test` → 13 suites, 55 tests passed.
+- `pnpm --filter app typecheck` → exit 0.
+- `pnpm --filter app lint` → `Checked 41 files … No fixes applied`, exit 0.
+- `make gen` → exit 0; only these doc edits pending in `git status --short`.
+
 ### Status
 
-**7/9 Phase 9** (9.1–9.6, 9.9). 9.7–9.8 pending a product decision on the
-authenticated accept-invitation flow.
+**9/9 Phase 9** (9.1–9.9). 9.7–9.8 implemented per the user's product
+decision (sessionless preview + accept, session replacement, D-6 intact).
