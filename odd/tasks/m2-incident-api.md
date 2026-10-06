@@ -28,8 +28,8 @@ Implement incident creation, list and detail without photos, following PRD_go.md
 
 ## Tasks and chained slices
 - [x] M2-1: Settled contract and tracking document; passive documentation work-unit commit 082f84d. Structural readback and staged diff whitespace check passed; no behavioral RED applies.
-- [ ] M2-2 (in progress, slice A): Schema/query persistence and deterministic integrity tests, including generated sqlc outputs.
-- [ ] M2-5 (pending, slice B): Typed incident authorization and household visibility with deterministic tests.
+- [x] M2-2 (slice A): Schema/query persistence, generated sqlc and integrity tests; commit 5634883. Independent functional verification and native review approved/acknowledged.
+- [ ] M2-5 (in progress, slice B): Typed incident authorization implemented by mux3neoi-9-b5me; source review and commit pending. Independent IncidentAccess validates row visibility before handler; no synthetic role/membership.
 - [ ] M2-3 (pending, slice C): Create/list/detail transport, permission matrix, generated OpenAPI/shared outputs and behavior tests.
 - [ ] M2-4 (pending): Independent functional regression and native review/assessment of coherent candidates, recording each commit and evidence.
 
@@ -48,11 +48,18 @@ Implement incident creation, list and detail without photos, following PRD_go.md
 - Slice A writer mux2u8y7-5-ve7r returned completed: 6 source/generated/test files, 485 authored + 307 generated additions. Cohesive integrity tests retained despite 400-line advisory.
 - Writer RED: focused test command failed compilation because incident sqlc types/methods were absent; no test bodies ran. GREEN: cd api && go test -race -count=1 ./test/... -run IncidentPersistence passed with PostgreSQL 17/Docker in 3.956s. Fixture isolation initially failed and was corrected; rerun passed. sqlc generation, lint-scope, short suite and diff-check passed; short deliberately skipped DB integration, separately exercised focused.
 - Independent verifier mux3ccl9-6-ejiw: focused Docker PASS 4.574s; full api/test suite PASS 37.670s including existing Up/Down/Up coverage; lint-scope and short PASS, short cached and DB tests intentionally skip. Diff-check clean and no unintended mutations. No per-test counts reported. RED not independently replayed; generated files read for consistency, not regenerated; migration-12-only rollback not separately executed.
-- Verifier partial disposition due to creator policy conflict is being reconciled to explicit PRD creator grant; no source correction needed for unit membership expiry. ASSESS unassessable due to undeclared untracked files; conservative high-risk independent verification applied. Slice A not yet committed/reviewed/closed.
+- Verifier reconciliation mux3fxug-7-q6qx withdrew creator-policy conflict; status verified for tested persistence scope, no other concrete unit issue. Accepted PRD creator grant remains independent of unit membership expiry. Initial ASSESS unassessable due to untracked declaration; conservative independent verification applied.
+- Slice A commit 5634883 (802 insertions/4 deletions including tracker). Native target sha256:e158f68390d99194d8ad55e668435628ab752cdde8c8c86d2123e7dd7d2370cd, lineage review-f2cf665b0c59617e, medium tier, consolidated review-reliability approved and acknowledgement burned authority. One informational advisory R3-001 at api/test/incidents_persistence_test.go:150–159 is separate follow-up, not a correction or reopened review.
 - Passive tracker delta target b7f38c7d was natively approved/acknowledged, lineage review-32792ed44949a3b2, authority burned. This does not review source.
 - Meaningful persistence RED: missing incident table and same-community unit integrity tests. HTTP RED later covers false tenant setting, invalid targets, common/unit visibility, creator forgery and foreign-resource 404.
 - Per-slice checks: applicable focused DB/API tests, generation, lint-scope and short regressions; full database-backed API and e2e at closure when available. Documentation has no meaningful behavioral RED.
 - Provisional surfaces and commands are explorer recommendations; writer must verify existing naming/conventions rather than trusting child tool availability.
 
+## Slice B evidence
+- Worker mux3neoi-9-b5me completed 10 source/test/generated files: 443 authored changed lines (424 additions/19 removals), 25 generated additions. Cohesive security tests retained beyond advisory 400.
+- RED: focused race authz tests failed due to missing scoped.Incident/IncidentAccess plus unmarked incident route incorrectly passing boot assertion. GREEN: same command passed, package times 1.430s/1.033s. Intermediate test-fixture binding/counter failures corrected, rerun passed.
+- sqlc generation, lint-scope, short suite and diff-check PASS. Short deliberately skips DB integration; separate Docker IncidentPersistence run PASS 3.889s. No declared pre-existing failures. No transport routes added.
+- Native ASSESS: medium risk, large runtime writer, current candidate unconsumed, reviewDue slice_budget_reached; self-verification stands, independentVerifier false. Follow native review instead of adding redundant separate verification. Exact continuation returned review.status with native target cwd/contract/next-transition.
+
 ## Next step
-Await slice A independent verification, resolve any findings, normalize/commit the coherent persistence unit and complete native review before moving to slice B. No concurrent source writer while verification inspects this candidate. User requests autonomous optimal choices until completion and maximum useful delegation, subject to mandatory consent and safety boundaries.
+Complete native review and work-unit commit for slice B, then map/delegate slice C transport. IncidentAccess is minted only after lookup and caller visibility; deleted/absent/invisible rows map to 404, genuine DB failures remain internal errors. Transport remains pending. User requests autonomous optimal choices until completion and maximum useful delegation, subject to mandatory consent and safety boundaries.

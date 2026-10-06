@@ -47,6 +47,20 @@ func TestAssertScopedRegistration_A1_UnregisteredScopedOperationBlocksBoot(t *te
 	}
 }
 
+func TestAssertScopedRegistration_A1_UnmarkedIncidentOperationBlocksBoot(t *testing.T) {
+	api, r := newInMemoryAPI()
+	huma.Register(api, huma.Operation{
+		OperationID: "unmarkedIncidentOp",
+		Method:      http.MethodGet,
+		Path:        "/v1/incidents/{incidentId}",
+	}, assertFixtureHandler)
+
+	err := AssertScopedRegistration(api.OpenAPI(), r, nil)
+	if err == nil || !strings.Contains(err.Error(), "unmarkedIncidentOp") {
+		t.Fatalf("expected the unmarked incident operation to block boot and be named, got: %v", err)
+	}
+}
+
 // authz-membership: Marker without a registered resolver blocks boot
 // (A2) (task 1.18). A marked operation whose declared scope kind has no
 // registered resolver must fail A2.

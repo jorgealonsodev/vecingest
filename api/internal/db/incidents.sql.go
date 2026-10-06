@@ -12,6 +12,26 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const getIncidentCommunityID = `-- name: GetIncidentCommunityID :one
+SELECT i.community_id
+FROM incidents i
+JOIN communities c ON c.id = i.community_id
+WHERE i.id = $1
+    AND i.deleted_at IS NULL
+    AND c.deleted_at IS NULL
+`
+
+// Route-resource lookup for typed incident authorization. Resolve the
+// tenant key without granting access; the visibility-aware detail query
+// must separately authorize the authenticated caller before scope is built.
+// Deleted incidents and deleted communities both resolve as no row.
+func (q *Queries) GetIncidentCommunityID(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, getIncidentCommunityID, id)
+	var community_id uuid.UUID
+	err := row.Scan(&community_id)
+	return community_id, err
+}
+
 const getVisibleIncidentByID = `-- name: GetVisibleIncidentByID :one
 SELECT i.id, i.community_id, i.unit_id, i.created_by, i.title, i.description, i.category, i.priority, i.status, i.scope, i.location_text, i.affected_count, i.deleted_at, i.created_at, i.updated_at
 FROM incidents i

@@ -24,7 +24,7 @@ import (
 // scopedPathPrefixes are the literal path prefixes A1 treats as
 // tenant-scoped (design D-2). Every operation under one of these MUST
 // carry the registration marker.
-var scopedPathPrefixes = []string{"/v1/communities", "/v1/units", "/v1/offices"}
+var scopedPathPrefixes = []string{"/v1/communities", "/v1/units", "/v1/offices", "/v1/incidents"}
 
 // invitationsPrefix is handled separately from scopedPathPrefixes: only
 // "/v1/invitations/{invitationId}"-shaped routes are tenant-scoped.
@@ -52,6 +52,7 @@ var resolverRegisteredKinds = map[Kind]bool{
 	KindCommunity: true,
 	KindOffice:    true,
 	KindSelf:      true,
+	KindIncident:  true,
 }
 
 // kindRequiresRoles reports whether A2 must also check a non-empty role
@@ -106,7 +107,7 @@ func assertA1AndA2(oapi *huma.OpenAPI) error {
 
 			if !hasMarker {
 				if isScopedPath(path) {
-					return fmt.Errorf("authz: A1 failed: operation %q (%s %s) is under a scoped prefix but carries no registration marker -- register it through scoped.Community/scoped.Office/scoped.Self", op.OperationID, method, path)
+					return fmt.Errorf("authz: A1 failed: operation %q (%s %s) is under a scoped prefix but carries no registration marker -- register it through scoped.Community/scoped.Office/scoped.Self/scoped.Incident", op.OperationID, method, path)
 				}
 				continue
 			}
@@ -204,6 +205,6 @@ func EagerCheck(_ *huma.OpenAPI, op *huma.Operation) {
 		return
 	}
 	if isScopedPath(op.Path) {
-		panic(fmt.Sprintf("authz: operation %q (%s %s) is under a scoped prefix but was registered with no authz marker -- register it through scoped.Community/scoped.Office/scoped.Self", op.OperationID, op.Method, op.Path))
+		panic(fmt.Sprintf("authz: operation %q (%s %s) is under a scoped prefix but was registered with no authz marker -- register it through scoped.Community/scoped.Office/scoped.Self/scoped.Incident", op.OperationID, op.Method, op.Path))
 	}
 }

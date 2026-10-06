@@ -144,6 +144,15 @@ func TestIncidentPersistence(t *testing.T) {
 		if err != nil || len(creatorRows) != 1 || creatorRows[0].ID != privateOne.ID {
 			t.Fatalf("creator lost access after membership ended: rows=%v err=%v", incidentIDs(creatorRows), err)
 		}
+		resolvedCommunity, err := q.GetIncidentCommunityID(ctx, privateOne.ID)
+		if err != nil || resolvedCommunity != f.community {
+			t.Fatalf("route lookup community = %s, err=%v; want %s", resolvedCommunity, err, f.community)
+		}
+		if _, err := q.GetVisibleIncidentByID(ctx, incidentdb.GetVisibleIncidentByIDParams{
+			ID: privateOne.ID, CommunityID: resolvedCommunity, UserID: f.creator,
+		}); err != nil {
+			t.Fatalf("creator's independent visibility proof failed after membership ended: %v", err)
+		}
 		if _, err := sqlDB.ExecContext(ctx, `UPDATE unit_members SET valid_to = NULL WHERE community_id = $1 AND user_id = $2`, f.community, f.creator); err != nil {
 			t.Fatalf("restore creator membership: %v", err)
 		}
@@ -188,6 +197,22 @@ func TestIncidentPersistence(t *testing.T) {
 		})
 		if err != nil || len(secondPage) != 1 || secondPage[0].ID != allIDs[2] {
 			t.Fatalf("second keyset page = %v err=%v, want [%s]", incidentIDs(secondPage), err, allIDs[2])
+		}
+
+		if _, err := q.GetIncidentCommunityID(ctx, common.ID); err != nil {
+			t.Fatalf("active incident route lookup failed: %v", err)
+		}
+		if _, err := sqlDB.ExecContext(ctx, `UPDATE incidents SET deleted_at = now() WHERE id = $1`, common.ID); err != nil {
+			t.Fatalf("soft-delete incident route lookup fixture: %v", err)
+		}
+		if _, err := q.GetIncidentCommunityID(ctx, common.ID); !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("deleted incident still resolved its community: err=%v", err)
+		}
+		if _, err := sqlDB.ExecContext(ctx, `UPDATE communities SET deleted_at = now() WHERE id = $1`, f.community); err != nil {
+			t.Fatalf("soft-delete community route lookup fixture: %v", err)
+		}
+		if _, err := q.GetIncidentCommunityID(ctx, privateTwo.ID); !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("incident in deleted community still resolved: err=%v", err)
 		}
 	})
 }

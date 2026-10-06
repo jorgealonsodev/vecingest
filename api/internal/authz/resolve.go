@@ -1,10 +1,10 @@
-// resolve.go implements the D-4 membership resolvers: one indexed
-// lookup per scope kind, called by the scoped.* adapter before the
-// handler runs. Resolution reads ONLY the route's own path resource
-// (via the input's ScopeCommunityID()/ScopeOfficeID() method) and the
-// already-authenticated caller's user id from context -- never a
-// header or body (authz-membership: "Membership Resolved From Route
-// Resource, Never From Header Or Body").
+// resolve.go implements scoped resource resolution before the handler
+// runs. Membership resolvers use one indexed lookup per scope kind;
+// incident resolution separately requires a visibility-aware detail
+// query. Every resolver reads its path resource from the typed input and
+// caller identity from authenticated context, never from a header or
+// body (authz-membership: "Membership Resolved From Route Resource,
+// Never From Header Or Body").
 package authz
 
 import (
@@ -21,6 +21,15 @@ import (
 // the requested resource -- a foreign resource resolves to nothing,
 // never partial data (design D-4: "Foreign resource → 404").
 var ErrNoMembership = errors.New("authz: no membership for this resource")
+
+// ErrNoIncidentAccess means the incident is absent, deleted, or is not
+// visible to the authenticated caller; scoped.Incident maps it to an
+// opaque 404 without invoking the handler.
+var ErrNoIncidentAccess = errors.New("authz: no visible incident for this caller")
+
+// ErrNoAuthenticatedCaller is returned when an incident resolver has no
+// authenticated identity in its context.
+var ErrNoAuthenticatedCaller = errors.New("authz: no authenticated caller in context")
 
 // ErrMFAEnrollmentRequired is returned when the caller's resolved role
 // is admin or admin_staff and NO second factor exists on their account
@@ -84,6 +93,12 @@ type Querier interface {
 	// for cross-tenant isolation purposes (invitations spec:
 	// "Cross-Tenant Isolation Proven By Test").
 	GetInvitationCommunityID(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
+	// GetIncidentCommunityID resolves the route incident's owning community
+	// while excluding deleted incidents and communities.
+	GetIncidentCommunityID(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
+	// GetVisibleIncidentByID is the visibility proof for an incident grant;
+	// it binds incident, community and authenticated caller together.
+	GetVisibleIncidentByID(ctx context.Context, arg db.GetVisibleIncidentByIDParams) (db.Incident, error)
 	// IsUserMFAEnabled tells the mandatory-TOTP gate's two failure modes
 	// apart (auth-mfa-totp delta): no factor on the account means the
 	// caller must ENROLL, a factor that this session simply never used
@@ -259,6 +274,50 @@ func ResolveCommunityViaInvitation(ctx context.Context, invitationID, userID uui
 	}
 
 	return ResolveCommunity(ctx, communityID, userID)
+}
+
+// ResolveIncidentAccess derives caller identity only from ctx, resolves
+// the route incident's owning community, and requires the existing
+// visibility-aware detail query to return that exact resource before it
+// mints an IncidentAccess. It deliberately does not resolve membership:
+// the incident's creator grant survives membership expiry.
+func ResolveIncidentAccess(ctx context.Context, incidentID uuid.UUID) (IncidentAccess, error) {
+	callerID, ok := UserIDFromContext(ctx)
+	if !ok || callerID == uuid.Nil {
+		return IncidentAccess{}, ErrNoAuthenticatedCaller
+	}
+	if incidentID == uuid.Nil {
+		return IncidentAccess{}, ErrNoIncidentAccess
+	}
+	if queries == nil {
+		return IncidentAccess{}, errNotConfigured
+	}
+
+	communityID, err := queries.GetIncidentCommunityID(ctx, incidentID)
+	if err != nil {
+		if isNoRows(err) {
+			return IncidentAccess{}, ErrNoIncidentAccess
+		}
+		return IncidentAccess{}, err
+	}
+	if communityID == uuid.Nil {
+		return IncidentAccess{}, errors.New("authz: incident lookup returned an empty community id")
+	}
+
+	visible, err := queries.GetVisibleIncidentByID(ctx, db.GetVisibleIncidentByIDParams{
+		ID: incidentID, CommunityID: communityID, UserID: callerID,
+	})
+	if err != nil {
+		if isNoRows(err) {
+			return IncidentAccess{}, ErrNoIncidentAccess
+		}
+		return IncidentAccess{}, err
+	}
+	if visible.ID != incidentID || visible.CommunityID != communityID {
+		return IncidentAccess{}, errors.New("authz: visibility lookup returned a different incident resource")
+	}
+
+	return IncidentAccess{incidentID: incidentID, communityID: communityID, callerID: callerID, valid: true}, nil
 }
 
 // ResolveSelf resolves the caller's full membership set (design D-4:

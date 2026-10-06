@@ -127,3 +127,15 @@ WHERE i.id = sqlc.arg(id)
             )
         )
     );
+
+-- Route-resource lookup for typed incident authorization. Resolve the
+-- tenant key without granting access; the visibility-aware detail query
+-- must separately authorize the authenticated caller before scope is built.
+-- Deleted incidents and deleted communities both resolve as no row.
+-- name: GetIncidentCommunityID :one
+SELECT i.community_id
+FROM incidents i
+JOIN communities c ON c.id = i.community_id
+WHERE i.id = sqlc.arg(id)
+    AND i.deleted_at IS NULL
+    AND c.deleted_at IS NULL;

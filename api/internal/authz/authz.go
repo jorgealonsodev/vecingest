@@ -1,12 +1,12 @@
 // Package authz is the tenant-isolation enforcement layer PRD §7.7 names
-// (design D-1/D-2): an unconstructible Membership type, typed scoped
-// registration constructors, route-resource-only membership resolution,
+// (design D-1/D-2): unconstructible Membership and IncidentAccess types,
+// typed scoped registration constructors, route-resource-only resolution,
 // and a fail-closed boot assertion.
 package authz
 
 import "github.com/google/uuid"
 
-// Kind is the scope a resolved Membership (or a scoped.* marker) carries.
+// Kind identifies a resolved authorization scope or a scoped.* marker.
 type Kind int
 
 const (
@@ -17,6 +17,8 @@ const (
 	// KindSelf carries no path resource: the caller's own full
 	// membership set (scoped.Self).
 	KindSelf
+	// KindIncident carries a verified incident grant, not a role.
+	KindIncident
 )
 
 // String renders Kind for error messages (A1/A2 failure text).
@@ -28,6 +30,8 @@ func (k Kind) String() string {
 		return "office"
 	case KindSelf:
 		return "self"
+	case KindIncident:
+		return "incident"
 	default:
 		return "unknown"
 	}
@@ -70,6 +74,40 @@ type Membership struct {
 // valid membership can be fabricated from outside authz.
 type Memberships []Membership
 
+// IncidentAccess is an unforgeable grant for one incident, its resolved
+// community and the authenticated caller. It is minted only after the
+// visibility-aware incident query accepts those exact identifiers.
+type IncidentAccess struct {
+	incidentID  uuid.UUID
+	communityID uuid.UUID
+	callerID    uuid.UUID
+	valid       bool
+}
+
+func (a IncidentAccess) requireValid() {
+	if !a.valid || a.incidentID == uuid.Nil || a.communityID == uuid.Nil || a.callerID == uuid.Nil {
+		panic("authz: IncidentAccess is invalid (zero value or not resolved)")
+	}
+}
+
+// IncidentID returns the incident this grant authorizes.
+func (a IncidentAccess) IncidentID() uuid.UUID {
+	a.requireValid()
+	return a.incidentID
+}
+
+// CommunityID returns the incident's resolved owning community.
+func (a IncidentAccess) CommunityID() uuid.UUID {
+	a.requireValid()
+	return a.communityID
+}
+
+// CallerID returns the authenticated caller this grant authorizes.
+func (a IncidentAccess) CallerID() uuid.UUID {
+	a.requireValid()
+	return a.callerID
+}
+
 // CommunityScoped is the type constraint scoped.Community's input type
 // parameter must satisfy: the input itself declares which community it
 // targets, because huma parses path parameters into the typed input
@@ -100,6 +138,13 @@ type UnitScoped interface {
 // community id.
 type InvitationScoped interface {
 	ScopeInvitationID() uuid.UUID
+}
+
+// IncidentScoped is scoped.Incident's path-resource constraint. The
+// route supplies only the incident id; authz derives and verifies the
+// community and authenticated caller independently.
+type IncidentScoped interface {
+	ScopeIncidentID() uuid.UUID
 }
 
 // UserID returns the resolved user id. It panics on an invalid

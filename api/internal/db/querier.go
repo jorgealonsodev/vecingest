@@ -55,6 +55,11 @@ type Querier interface {
 	// lookup already scoped to one exact id has no other tenant's row to
 	// leak.
 	GetCommunityByID(ctx context.Context, id uuid.UUID) (Community, error)
+	// Route-resource lookup for typed incident authorization. Resolve the
+	// tenant key without granting access; the visibility-aware detail query
+	// must separately authorize the authenticated caller before scope is built.
+	// Deleted incidents and deleted communities both resolve as no row.
+	GetIncidentCommunityID(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
 	// GetInvitationByID is tenant-scoped by both id and community_id: the
 	// caller's community membership was already resolved and role-checked
 	// by scoped.Community/scoped.Invitation before this query ever runs,
