@@ -18,6 +18,13 @@ type Querier interface {
 	// rather than racing a prior read.
 	AcceptInvitation(ctx context.Context, arg AcceptInvitationParams) (uuid.UUID, error)
 	ConfirmUserMFAEnrollment(ctx context.Context, userID uuid.UUID) error
+	// Spends one attempt on the latest open challenge for user_id+purpose
+	// and returns it, or no row when there is none, it has expired, or its
+	// attempts are exhausted. It is a single autocommitted statement on
+	// purpose: the increment must survive the rejection that follows it, and
+	// Postgres re-evaluates `attempts < max` against the newest row version
+	// when two requests race for the same challenge.
+	ConsumeOTPChallengeAttempt(ctx context.Context, arg ConsumeOTPChallengeAttemptParams) (OtpChallenge, error)
 	ConsumePasswordResetToken(ctx context.Context, id uuid.UUID) error
 	ConsumeUserMFARecoveryCode(ctx context.Context, arg ConsumeUserMFARecoveryCodeParams) (int64, error)
 	// CountOfficeMembersByOfficeID backs community-management: Community
@@ -138,6 +145,10 @@ type Querier interface {
 	// caller is expected to load the existing row (GetUserByEmail) and, for
 	// bootstrap-superadmin only, ensure is_superadmin via EnsureSuperadmin.
 	InsertUserIgnoreConflict(ctx context.Context, arg InsertUserIgnoreConflictParams) (int64, error)
+	// Closes every still-open challenge for user_id+purpose by expiring it
+	// at `now` (the caller's clock). Issuing a new code calls this first, so a
+	// code from a superseded enrollment can never confirm the new one.
+	InvalidateOpenOTPChallenges(ctx context.Context, arg InvalidateOpenOTPChallengesParams) error
 	// auth-mfa-totp delta: Mandatory TOTP For Admin And Admin_staff Scope
 	// Access. Always returns exactly one row (true/false), never
 	// pgx.ErrNoRows, so a caller who never enrolled resolves cleanly to
@@ -159,6 +170,10 @@ type Querier interface {
 	// for GET /v1/me.
 	ListUnitMembershipsByUserID(ctx context.Context, userID uuid.UUID) ([]ListUnitMembershipsByUserIDRow, error)
 	ListUnitsByCommunityID(ctx context.Context, communityID uuid.UUID) ([]Unit, error)
+	// Re-reads one challenge FOR UPDATE inside the transaction that will
+	// mark it verified, so two concurrent correct submissions cannot both
+	// consume it: the second waits on the lock and then finds verified_at set.
+	LockOpenOTPChallenge(ctx context.Context, id uuid.UUID) (OtpChallenge, error)
 	MarkOTPChallengeVerified(ctx context.Context, id uuid.UUID) error
 	// Community resolver, office leg (design D-4): an admin/admin_staff
 	// reaches a community whose office_id matches one of their
