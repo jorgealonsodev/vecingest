@@ -249,6 +249,29 @@ var matrixCases = map[string]func(w matrixWorld, nonce string) matrixRequest{
 	},
 }
 
+// matrixRowFixtures seed resources that only the named row addresses, into
+// the world under test and for that row alone. Every other row builds its
+// world without them, so no row can pass on state seeded for a different
+// operation, and a row whose path still carries a zero identifier fails
+// instead of silently relying on a fixture it never seeded.
+var matrixRowFixtures = map[string]func(t *testing.T, q *db.Queries, w *matrixWorld){
+	// A common incident of the world's own community, created by that world's
+	// member: every allowed role of the own tenant may read it, while the
+	// foreign world's copy proves denial on an existing resource.
+	"getIncident": func(t *testing.T, q *db.Queries, w *matrixWorld) {
+		t.Helper()
+		incident, err := q.InsertIncident(t.Context(), db.InsertIncidentParams{
+			ID: uuid.New(), CommunityID: w.CommunityID, CreatedBy: w.MemberUserID,
+			Title: "Matrix readable incident", Description: "Visible common incident.",
+			Category: "other", Scope: "common",
+		})
+		if err != nil {
+			t.Fatalf("insert matrix incident: %v", err)
+		}
+		w.IncidentID = incident.ID
+	},
+}
+
 // matrixExemptions are documented operations with no tenant resource to
 // own or to be foreign to, each with the reason and where its own
 // access rule is tested instead. authz.PublicOperations entries are
@@ -557,6 +580,11 @@ func TestPermissionMatrix_ForeignResourceDenied(t *testing.T) {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
+	for id := range matrixRowFixtures {
+		if _, ok := matrixCases[id]; !ok {
+			t.Fatalf("matrix row fixture %s names no matrix row (stale fixture)", id)
+		}
+	}
 
 	assertions := 0
 	for _, opID := range ids {
@@ -592,18 +620,13 @@ func TestPermissionMatrix_ForeignResourceDenied(t *testing.T) {
 				} else {
 					w = newMatrixWorld(t, q, officeB, communityB)
 				}
-				if opID == "getIncident" {
-					incident, err := q.InsertIncident(t.Context(), db.InsertIncidentParams{
-						ID: uuid.New(), CommunityID: w.CommunityID, CreatedBy: w.MemberUserID,
-						Title: "Matrix readable incident", Description: "Visible common incident.",
-						Category: "other", Scope: "common",
-					})
-					if err != nil {
-						t.Fatalf("insert matrix incident: %v", err)
-					}
-					w.IncidentID = incident.ID
+				if seed, ok := matrixRowFixtures[opID]; ok {
+					seed(t, q, &w)
 				}
 				req := build(w, uuid.NewString()[:8])
+				if strings.Contains(req.Path, uuid.Nil.String()) {
+					t.Fatalf("%s %s addresses an identifier its %s world never seeded; add a matrixRowFixtures entry", req.Method, req.Path, side)
+				}
 				status, body := doMatrixRequest(t, client, srv.URL, c.Token, req)
 				assertions++
 
@@ -616,6 +639,15 @@ func TestPermissionMatrix_ForeignResourceDenied(t *testing.T) {
 				case marker.Kind == authz.KindIncident:
 					if status < 200 || status > 299 {
 						t.Errorf("%s %s as %s on own visible incident: expected 2xx, got %d body=%s", req.Method, req.Path, c.Name, status, body)
+					} else {
+						// The answer must be this row's own fixture, not any
+						// other incident that happens to exist in the community.
+						var read struct {
+							ID string `json:"id"`
+						}
+						if err := json.Unmarshal([]byte(body), &read); err != nil || read.ID != w.IncidentID.String() {
+							t.Errorf("%s %s as %s: expected the row's own incident %s, got err=%v body=%s", req.Method, req.Path, c.Name, w.IncidentID, err, body)
+						}
 					}
 				case authz.RoleAllowed(c.Role, marker.Roles):
 					if status < 200 || status > 299 {

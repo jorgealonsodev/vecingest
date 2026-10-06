@@ -47,6 +47,22 @@ type CreateIncidentInput struct {
 	Body        CreateIncidentRequest
 }
 
+// ListIncidentsInput is GET /v1/communities/{id}/incidents. Its query
+// contract is strict: an input the caller sent but that cannot be honoured is
+// rejected with a validation error, never silently ignored or defaulted.
+//   - status and category outside their enums and a malformed unit_id are
+//     rejected by the schema tags or by the handler's revalidation; the
+//     handler also rejects a unit_id that is deleted or in another community.
+//   - limit outside 1–100 (including 0, negatives and non-numbers) is
+//     rejected rather than clamped. Only an omitted limit defaults to 20.
+//   - a cursor that is malformed, stale, or bound to another community,
+//     caller or filter set is rejected rather than restarting at page one.
+//   - Resolve rejects unknown, repeated and empty-valued parameters.
+//
+// Silent fallbacks would answer a different question than the one asked: a
+// misspelled or ignored filter widens the result set, a clamped limit or
+// restarted cursor hides that pagination state was lost, and `status=` would
+// be indistinguishable from an absent filter in the cursor's filter binding.
 type ListIncidentsInput struct {
 	CommunityID string `path:"id" format:"uuid"`
 	Status      string `query:"status" enum:"open,assigned,in_progress,resolved,closed,rejected" doc:"Filter by incident status."`
@@ -61,6 +77,9 @@ func (i *ListIncidentsInput) ScopeCommunityID() uuid.UUID {
 	return id
 }
 
+// Resolve enforces the parts of the strict query contract that the struct
+// tags cannot express: only the five documented parameters, each at most
+// once and never with an empty value.
 func (i *ListIncidentsInput) Resolve(ctx huma.Context) []error {
 	allowed := map[string]bool{"status": true, "category": true, "unit_id": true, "limit": true, "cursor": true}
 	var issues []error
@@ -84,6 +103,8 @@ func (i *GetIncidentInput) ScopeIncidentID() uuid.UUID {
 	return id
 }
 
+// Resolve rejects every query parameter: detail has no options, so a
+// parameter is a client error rather than something to ignore.
 func (i *GetIncidentInput) Resolve(ctx huma.Context) []error {
 	requestURL := ctx.URL()
 	if len(requestURL.Query()) == 0 {

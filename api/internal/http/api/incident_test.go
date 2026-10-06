@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -123,7 +124,7 @@ func TestIncident_CreateAuthorizationValidationAndSafeProjection(t *testing.T) {
 			t.Fatalf("safe incident projection exposed %q: %v", forbidden, adminOutput)
 		}
 	}
-	createdID, err := uuid.Parse(adminOutput["id"].(string))
+	createdID, err := uuid.Parse(incidentStringField(t, adminOutput, "id"))
 	if err != nil {
 		t.Fatalf("response omitted a valid incident id: %v", adminOutput)
 	}
@@ -281,8 +282,8 @@ func TestIncident_ListAndDetailRoutes(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("list incidents: expected 200, got %d body=%v", response.StatusCode, list)
 	}
-	items, ok := list["items"].([]any)
-	if !ok || len(items) != 1 || items[0].(map[string]any)["id"] != incident.ID.String() {
+	items := incidentResponseItems(t, list)
+	if len(items) != 1 || items[0]["id"] != incident.ID.String() {
 		t.Fatalf("list should return the visible incident in items: %v", list)
 	}
 
@@ -374,7 +375,7 @@ func TestIncident_ListAndDetailVisibilityFiltersAndValidation(t *testing.T) {
 	items := incidentResponseItems(t, response)
 	seen := make(map[string]bool, len(items))
 	for _, item := range items {
-		seen[item["id"].(string)] = true
+		seen[incidentStringField(t, item, "id")] = true
 		for _, forbidden := range []string{"deleted_at", "company_id", "company_name", "annual_budget", "reserve_fund", "rejection_reason", "max_budget", "notes", "comments", "attachments", "events"} {
 			if _, exists := item[forbidden]; exists {
 				t.Fatalf("list projection exposed %q: %v", forbidden, item)
@@ -438,7 +439,7 @@ func TestIncident_ListAndDetailVisibilityFiltersAndValidation(t *testing.T) {
 		}
 		ids := make(map[string]bool)
 		for _, item := range incidentResponseItems(t, body) {
-			ids[item["id"].(string)] = true
+			ids[incidentStringField(t, item, "id")] = true
 		}
 		if len(ids) != len(test.want) {
 			t.Errorf("%s unit filter: want %v, got %v", test.name, test.want, ids)
@@ -538,55 +539,52 @@ func TestIncident_KeysetPaginationAndVisibilityRecheck(t *testing.T) {
 		}
 		return doJSON(t, client, http.MethodGet, path, nil, map[string]string{"Authorization": "Bearer " + token})
 	}
-	firstResp, firstBody := requestPage(communityID, pagerToken, nil)
-	if firstResp.StatusCode != http.StatusOK {
-		t.Fatalf("default first page: got %d body=%v", firstResp.StatusCode, firstBody)
-	}
-	first := incidentResponseItems(t, firstBody)
-	if len(first) != 20 || firstBody["next_cursor"] == "" {
-		t.Fatalf("default page size/cursor: got %d items next=%v", len(first), firstBody["next_cursor"])
-	}
-	cursor := firstBody["next_cursor"].(string)
-	observed := make([]string, 0, len(all))
-	for _, item := range first {
-		observed = append(observed, item["id"].(string))
-	}
-	for cursor != "" {
-		resp, body := requestPage(communityID, pagerToken, url.Values{"cursor": {cursor}})
+	// The default page is 20, so 105 rows need six pages; the bound fails the
+	// test instead of looping forever if the cursor chain never terminates.
+	pages := collectIncidentPages(t, "default traversal", len(all)/20+2, func(cursor string) map[string]any {
+		query := url.Values{}
+		if cursor != "" {
+			query.Set("cursor", cursor)
+		}
+		resp, body := requestPage(communityID, pagerToken, query)
 		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("default next page: got %d body=%v", resp.StatusCode, body)
+			t.Fatalf("default page (cursor=%q): got %d body=%v", cursor, resp.StatusCode, body)
 		}
-		items := incidentResponseItems(t, body)
-		if len(items) > 20 {
-			t.Fatalf("default page exceeded 20: %d", len(items))
-		}
-		for _, item := range items {
-			observed = append(observed, item["id"].(string))
-		}
-		cursor = body["next_cursor"].(string)
+		return body
+	})
+	firstBody := pages[0]
+	firstCursor := incidentStringField(t, firstBody, "next_cursor")
+	if first := incidentResponseItems(t, firstBody); len(first) != 20 || firstCursor == "" {
+		t.Fatalf("default page size/cursor: got %d items next=%q", len(first), firstCursor)
 	}
-	if len(observed) != len(expected) {
-		t.Fatalf("default traversal returned %d/%d incidents", len(observed), len(expected))
-	}
-	for i := range expected {
-		if observed[i] != expected[i] {
-			t.Fatalf("same-timestamp keyset order/skip at %d: want %s got %s", i, expected[i], observed[i])
+	observed := make([]string, 0, len(all))
+	for i, body := range pages {
+		ids := incidentPageIDs(t, body)
+		if len(ids) > 20 {
+			t.Fatalf("default page %d exceeded 20: %d", i, len(ids))
 		}
+		observed = append(observed, ids...)
 	}
+	assertIncidentIDs(t, "same-timestamp default traversal", observed, expected)
 
 	capResp, capBody := requestPage(communityID, pagerToken, url.Values{"limit": {"100"}})
-	capItems := incidentResponseItems(t, capBody)
-	if capResp.StatusCode != http.StatusOK || len(capItems) != 100 || capBody["next_cursor"] == "" {
-		t.Fatalf("100-item cap page: got %d items status=%d body=%v", len(capItems), capResp.StatusCode, capBody)
+	if capResp.StatusCode != http.StatusOK {
+		t.Fatalf("100-item cap page: got %d body=%v", capResp.StatusCode, capBody)
 	}
-	lastCursor := capBody["next_cursor"].(string)
+	capItems := incidentResponseItems(t, capBody)
+	lastCursor := incidentStringField(t, capBody, "next_cursor")
+	if len(capItems) != 100 || lastCursor == "" {
+		t.Fatalf("100-item cap page: got %d items next=%q", len(capItems), lastCursor)
+	}
 	finalResp, finalBody := requestPage(communityID, pagerToken, url.Values{"limit": {"100"}, "cursor": {lastCursor}})
+	if finalResp.StatusCode != http.StatusOK {
+		t.Fatalf("final cap page: got %d body=%v", finalResp.StatusCode, finalBody)
+	}
 	finalItems := incidentResponseItems(t, finalBody)
-	if finalResp.StatusCode != http.StatusOK || len(finalItems) != 5 || finalBody["next_cursor"] != "" {
-		t.Fatalf("final page should contain five items and empty cursor: got %d status=%d body=%v", len(finalItems), finalResp.StatusCode, finalBody)
+	if finalNext := incidentStringField(t, finalBody, "next_cursor"); len(finalItems) != 5 || finalNext != "" {
+		t.Fatalf("final page should contain five items and empty cursor: got %d items next=%q", len(finalItems), finalNext)
 	}
 
-	firstCursor := firstBody["next_cursor"].(string)
 	for _, test := range []struct {
 		name      string
 		community uuid.UUID
@@ -621,6 +619,53 @@ func TestIncident_KeysetPaginationAndVisibilityRecheck(t *testing.T) {
 		}
 	}
 
+	// The admin administers both communities through one office, so the same
+	// caller is legitimately allowed to page either of them. Replaying or
+	// rebinding a cursor therefore keeps caller, version and filters equal and
+	// isolates the community component of the cursor binding.
+	otherRows := make([]string, 0, 2)
+	for range 2 {
+		row := insertIncidentFixture(t, handlesDB, otherCommunityID, uuid.Nil, adminID, "elevator", "open", "common", "Other community page item")
+		if _, err := handlesDB.Write.Exec(t.Context(), "UPDATE incidents SET created_at = $1 WHERE id = $2", fixedTime, row.ID); err != nil {
+			t.Fatalf("set other-community cursor timestamp: %v", err)
+		}
+		otherRows = append(otherRows, row.ID.String())
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(otherRows)))
+	adminPage := func(community uuid.UUID, query url.Values) map[string]any {
+		t.Helper()
+		resp, body := requestPage(community, adminToken, query)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("admin page in community %s %v: got %d body=%v", community, query, resp.StatusCode, body)
+		}
+		return body
+	}
+	adminCursorA := incidentStringField(t, adminPage(communityID, url.Values{"limit": {"1"}}), "next_cursor")
+	otherFirst := adminPage(otherCommunityID, url.Values{"limit": {"1"}})
+	adminCursorB := incidentStringField(t, otherFirst, "next_cursor")
+	if adminCursorA == "" || adminCursorB == "" {
+		t.Fatalf("admin cursors must be non-empty: community A %q, community B %q", adminCursorA, adminCursorB)
+	}
+	// Positive controls: the same caller continues its own community-B cursor,
+	// and re-encoding that cursor without changing a value is still accepted,
+	// so a rejection below comes from the rewritten community and nothing else.
+	otherSecond := adminPage(otherCommunityID, url.Values{"limit": {"1"}, "cursor": {adminCursorB}})
+	assertIncidentIDs(t, "admin community-B traversal", append(incidentPageIDs(t, otherFirst), incidentPageIDs(t, otherSecond)...), otherRows)
+	reencoded := adminPage(otherCommunityID, url.Values{"limit": {"1"}, "cursor": {tamperIncidentCursor(t, adminCursorB, "community", otherCommunityID.String())}})
+	assertIncidentIDs(t, "re-encoded community-B cursor", incidentPageIDs(t, reencoded), otherRows[1:])
+	for _, test := range []struct {
+		name   string
+		cursor string
+	}{
+		{"same caller replays a community-A cursor in community B", adminCursorA},
+		{"community-B cursor rebound only in its community field", tamperIncidentCursor(t, adminCursorB, "community", communityID.String())},
+	} {
+		resp, body := requestPage(otherCommunityID, adminToken, url.Values{"limit": {"1"}, "cursor": {test.cursor}})
+		if resp.StatusCode != http.StatusBadRequest && resp.StatusCode != http.StatusUnprocessableEntity {
+			t.Errorf("%s: expected 400/422, got %d body=%v", test.name, resp.StatusCode, body)
+		}
+	}
+
 	anchor := insertIncidentFixture(t, handlesDB, communityID, uuid.Nil, adminID, "other", "open", "common", "Visibility anchor")
 	private := insertIncidentFixture(t, handlesDB, communityID, unitA, adminID, "other", "open", "unit", "Membership-dependent private row")
 	fallback := insertIncidentFixture(t, handlesDB, communityID, uuid.Nil, adminID, "other", "open", "common", "Visibility fallback")
@@ -632,22 +677,44 @@ func TestIncident_KeysetPaginationAndVisibilityRecheck(t *testing.T) {
 			t.Fatalf("order visibility-change fixture: %v", err)
 		}
 	}
-	anchorResp, anchorBody := requestPage(communityID, pagerToken, url.Values{"limit": {"1"}})
-	if anchorResp.StatusCode != http.StatusOK || incidentResponseItems(t, anchorBody)[0]["id"] != anchor.ID.String() {
-		t.Fatalf("visibility anchor page: status=%d body=%v", anchorResp.StatusCode, anchorBody)
+	visiblePage := func(label string, query url.Values) []string {
+		t.Helper()
+		resp, body := requestPage(communityID, pagerToken, query)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: got %d body=%v", label, resp.StatusCode, body)
+		}
+		return incidentPageIDs(t, body)
 	}
-	anchorCursor := anchorBody["next_cursor"].(string)
+	anchorResp, anchorBody := requestPage(communityID, pagerToken, url.Values{"limit": {"1"}})
+	if anchorResp.StatusCode != http.StatusOK {
+		t.Fatalf("visibility anchor page: got %d body=%v", anchorResp.StatusCode, anchorBody)
+	}
+	assertIncidentIDs(t, "visibility anchor page", incidentPageIDs(t, anchorBody), []string{anchor.ID.String()})
+	anchorCursor := incidentStringField(t, anchorBody, "next_cursor")
+	privateAnchorResp, privateAnchorBody := requestPage(communityID, pagerToken, url.Values{"limit": {"2"}})
+	if privateAnchorResp.StatusCode != http.StatusOK {
+		t.Fatalf("private anchor page: got %d body=%v", privateAnchorResp.StatusCode, privateAnchorBody)
+	}
+	assertIncidentIDs(t, "private anchor page", incidentPageIDs(t, privateAnchorBody), []string{anchor.ID.String(), private.ID.String()})
+	privateCursor := incidentStringField(t, privateAnchorBody, "next_cursor")
+
+	// Positive recheck: while unit A membership is current, a common anchor and
+	// a unit-private anchor both stay visible, so each cursor continues with
+	// exactly the next rows in (created_at, id) order.
+	assertIncidentIDs(t, "still-visible common anchor", visiblePage("still-visible common anchor", url.Values{"limit": {"10"}, "cursor": {anchorCursor}}),
+		append([]string{private.ID.String()}, expected[:9]...))
+	assertIncidentIDs(t, "still-visible private anchor", visiblePage("still-visible private anchor", url.Values{"limit": {"10"}, "cursor": {privateCursor}}), expected[:10])
+
 	if _, err := handlesDB.Write.Exec(t.Context(), "UPDATE unit_members SET valid_to = $1 WHERE unit_id = $2 AND user_id = $3", time.Now().Add(-time.Hour), unitA, pagerID); err != nil {
 		t.Fatalf("expire private-unit membership: %v", err)
 	}
-	afterChangeResp, afterChangeBody := requestPage(communityID, pagerToken, url.Values{"limit": {"10"}, "cursor": {anchorCursor}})
-	if afterChangeResp.StatusCode != http.StatusOK {
-		t.Fatalf("page after visibility change: got %d body=%v", afterChangeResp.StatusCode, afterChangeBody)
-	}
-	for _, item := range incidentResponseItems(t, afterChangeBody) {
-		if item["id"] == private.ID.String() {
-			t.Fatal("next page reused a stale visibility grant for the private unit row")
-		}
+	// The still-visible common anchor keeps paginating: the private row drops
+	// out without skipping any other row, while the anchor that lost its grant
+	// requires a pagination restart.
+	assertIncidentIDs(t, "common anchor after visibility change", visiblePage("common anchor after visibility change", url.Values{"limit": {"10"}, "cursor": {anchorCursor}}), expected[:10])
+	lostResp, lostBody := requestPage(communityID, pagerToken, url.Values{"limit": {"10"}, "cursor": {privateCursor}})
+	if lostResp.StatusCode != http.StatusBadRequest && lostResp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("anchor that lost visibility should require pagination restart: got %d body=%v", lostResp.StatusCode, lostBody)
 	}
 
 	stale := firstCursor
@@ -658,6 +725,153 @@ func TestIncident_KeysetPaginationAndVisibilityRecheck(t *testing.T) {
 	staleResp, staleBody := requestPage(communityID, pagerToken, url.Values{"cursor": {stale}})
 	if staleResp.StatusCode != http.StatusBadRequest && staleResp.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("deleted cursor anchor should require pagination restart: got %d body=%v", staleResp.StatusCode, staleBody)
+	}
+}
+
+func TestIncident_FilteredKeysetPaginationTraversal(t *testing.T) {
+	srv, deps, handlesDB := newTestServer(t)
+	client := newClient(srv, nil)
+	officeID, adminID := seedOfficeWithAdmin(t, handlesDB, "incident-filter-page-admin@example.com")
+	communityID := seedCommunity(t, handlesDB, officeID, "Incident Filter Page Community")
+	unitA, unitB := seedUnit(t, handlesDB, communityID), seedUnit(t, handlesDB, communityID)
+	memberID := createUser(t, handlesDB, "incident-filter-page-member@example.com", false)
+	seedIncidentUnitMember(t, handlesDB, unitA, communityID, memberID, "owner")
+	adminToken := mintAccessToken(t, deps, handlesDB, adminID, false)
+	memberToken := mintAccessToken(t, deps, handlesDB, memberID, false)
+
+	// Status, category and target cycle with coprime periods, so every filter
+	// matches rows interleaved with non-matching ones. created_at repeats in
+	// groups of three, so tied timestamps fall inside filtered pages, and some
+	// matching rows are soft-deleted and must never appear.
+	type pagedIncident struct {
+		id        string
+		createdAt time.Time
+		status    string
+		category  string
+		unit      uuid.UUID
+	}
+	statuses := []string{"open", "assigned", "closed"}
+	categories := []string{"elevator", "plumbing", "noise_and_coexistence", "other"}
+	base := time.Now().UTC().Truncate(time.Microsecond)
+	rows := make([]pagedIncident, 0, 90)
+	for i := range 90 {
+		unit, scope := uuid.Nil, "common"
+		switch i % 5 {
+		case 2, 3:
+			unit, scope = unitA, "unit"
+		case 4:
+			unit, scope = unitB, "unit"
+		}
+		row := insertIncidentFixture(t, handlesDB, communityID, unit, adminID, categories[i%4], statuses[i%3], scope, "Filtered page item")
+		createdAt := base.Add(-time.Duration(i/3) * time.Minute)
+		if _, err := handlesDB.Write.Exec(t.Context(), "UPDATE incidents SET created_at = $1 WHERE id = $2", createdAt, row.ID); err != nil {
+			t.Fatalf("set filtered page timestamp: %v", err)
+		}
+		if i%11 == 7 {
+			if _, err := handlesDB.Write.Exec(t.Context(), "UPDATE incidents SET deleted_at = now() WHERE id = $1", row.ID); err != nil {
+				t.Fatalf("soft-delete filtered page fixture: %v", err)
+			}
+			continue
+		}
+		rows = append(rows, pagedIncident{id: row.ID.String(), createdAt: createdAt, status: statuses[i%3], category: categories[i%4], unit: unit})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if !rows[i].createdAt.Equal(rows[j].createdAt) {
+			return rows[i].createdAt.After(rows[j].createdAt)
+		}
+		return rows[i].id > rows[j].id
+	})
+
+	for _, test := range []struct {
+		name     string
+		token    string
+		admin    bool // admins also see private rows of units they do not hold
+		status   string
+		category string // public vocabulary: noise is stored as noise_and_coexistence
+		unit     uuid.UUID
+		limit    int
+	}{
+		{"member status", memberToken, false, "assigned", "", uuid.Nil, 4},
+		{"member public noise category", memberToken, false, "", "noise", uuid.Nil, 4},
+		{"member own unit", memberToken, false, "", "", unitA, 5},
+		{"member status, category and unit", memberToken, false, "assigned", "noise", unitA, 1},
+		{"admin other unit", adminToken, true, "", "", unitB, 3},
+		{"admin status and category", adminToken, true, "closed", "plumbing", uuid.Nil, 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			query := url.Values{"limit": {strconv.Itoa(test.limit)}}
+			if test.status != "" {
+				query.Set("status", test.status)
+			}
+			if test.category != "" {
+				query.Set("category", test.category)
+			}
+			if test.unit != uuid.Nil {
+				query.Set("unit_id", test.unit.String())
+			}
+			var want []string
+			for _, row := range rows {
+				publicCategory := row.category
+				if publicCategory == "noise_and_coexistence" {
+					publicCategory = "noise"
+				}
+				visible := test.admin || row.unit == uuid.Nil || row.unit == unitA
+				if visible && (test.status == "" || row.status == test.status) &&
+					(test.category == "" || publicCategory == test.category) &&
+					(test.unit == uuid.Nil || row.unit == test.unit) {
+					want = append(want, row.id)
+				}
+			}
+			if len(want) <= test.limit {
+				t.Fatalf("fixture must span several pages: %d matching rows for limit %d", len(want), test.limit)
+			}
+
+			pages := collectIncidentPages(t, test.name, len(want)/test.limit+2, func(cursor string) map[string]any {
+				pageQuery := url.Values{}
+				for key, values := range query {
+					pageQuery[key] = values
+				}
+				if cursor != "" {
+					pageQuery.Set("cursor", cursor)
+				}
+				resp, body := doJSON(t, client, http.MethodGet,
+					srv.URL+"/v1/communities/"+communityID.String()+"/incidents?"+pageQuery.Encode(), nil,
+					map[string]string{"Authorization": "Bearer " + test.token})
+				if resp.StatusCode != http.StatusOK {
+					t.Fatalf("filtered page %v: got %d body=%v", pageQuery, resp.StatusCode, body)
+				}
+				return body
+			})
+			seen := make(map[string]int, len(want))
+			got := make([]string, 0, len(want))
+			for page, body := range pages {
+				items := incidentResponseItems(t, body)
+				if len(items) > test.limit {
+					t.Fatalf("page %d exceeded limit %d: %d items", page, test.limit, len(items))
+				}
+				for _, item := range items {
+					id := incidentStringField(t, item, "id")
+					if previous, duplicate := seen[id]; duplicate {
+						t.Fatalf("incident %s returned on page %d and again on page %d", id, previous, page)
+					}
+					seen[id] = page
+					got = append(got, id)
+					if test.status != "" && item["status"] != test.status {
+						t.Errorf("page %d row %s violates status filter %q: %v", page, id, test.status, item)
+					}
+					if test.category != "" && item["category"] != test.category {
+						t.Errorf("page %d row %s violates category filter %q: %v", page, id, test.category, item)
+					}
+					if test.unit != uuid.Nil && item["unit_id"] != test.unit.String() {
+						t.Errorf("page %d row %s violates unit filter %s: %v", page, id, test.unit, item)
+					}
+				}
+			}
+			assertIncidentIDs(t, test.name, got, want)
+			if wantPages := (len(want) + test.limit - 1) / test.limit; len(pages) != wantPages {
+				t.Errorf("%d matching rows at limit %d should take %d pages, took %d", len(want), test.limit, wantPages, len(pages))
+			}
+		})
 	}
 }
 
@@ -698,6 +912,62 @@ func incidentResponseItems(t *testing.T, response map[string]any) []map[string]a
 		out = append(out, row)
 	}
 	return out
+}
+
+// incidentStringField fails the test with the decoded object, instead of
+// panicking on a type assertion, when a string field it relies on is absent.
+func incidentStringField(t *testing.T, object map[string]any, field string) string {
+	t.Helper()
+	value, ok := object[field].(string)
+	if !ok {
+		t.Fatalf("expected string field %q in %v", field, object)
+	}
+	return value
+}
+
+// incidentPageIDs returns the ids of one list page in response order.
+func incidentPageIDs(t *testing.T, body map[string]any) []string {
+	t.Helper()
+	items := incidentResponseItems(t, body)
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, incidentStringField(t, item, "id"))
+	}
+	return ids
+}
+
+// assertIncidentIDs requires an exact ordered match, so a missing, extra,
+// duplicated or reordered row is reported at its first differing position.
+func assertIncidentIDs(t *testing.T, label string, got, want []string) {
+	t.Helper()
+	for i := range min(len(got), len(want)) {
+		if got[i] != want[i] {
+			t.Fatalf("%s: order/skip at %d: want %s got %s", label, i, want[i], got[i])
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("%s: returned %d/%d incidents: got %v want %v", label, len(got), len(want), got, want)
+	}
+}
+
+// collectIncidentPages fetches the first page (empty cursor) and follows
+// next_cursor until it is empty. A chain longer than maxPages fails the test
+// rather than looping forever when pagination never terminates.
+func collectIncidentPages(t *testing.T, label string, maxPages int, fetch func(cursor string) map[string]any) []map[string]any {
+	t.Helper()
+	var pages []map[string]any
+	cursor := ""
+	for {
+		if len(pages) == maxPages {
+			t.Fatalf("%s: cursor chain did not end within %d pages", label, maxPages)
+		}
+		body := fetch(cursor)
+		pages = append(pages, body)
+		cursor = incidentStringField(t, body, "next_cursor")
+		if cursor == "" {
+			return pages
+		}
+	}
 }
 
 func tamperIncidentCursor(t *testing.T, cursor, field string, value any) string {
