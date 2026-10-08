@@ -61,10 +61,26 @@ UPDATE invitations SET status = 'revoked', updated_at = now()
 WHERE id = $1 AND community_id = $2 AND status = 'pending'
 RETURNING id;
 
--- name: IncrementInvitationSentCount :one
-UPDATE invitations SET sent_count = sent_count + 1, updated_at = now()
+-- RotateInvitationShortCode backs POST /v1/invitations/:id/resend. It
+-- re-issues the short code and counts the send in ONE statement, because the
+-- two must never diverge: sent_count is the operator-visible evidence that a
+-- delivery happened, and it used to be incremented by a resend that dispatched
+-- nothing at all (R3-resend-invitation-dispatches-nothing, review lineage
+-- review-f855997b550a986d).
+--
+-- Re-issuing rather than redelivering is forced by the storage model and
+-- chosen deliberately: only one-way digests of the code (an HMAC) and the
+-- token are persisted, so the plaintext an invitation email renders is
+-- unrecoverable here. See the handler for why a recoverable copy was rejected.
+--
+-- Pending-only and tenant-scoped, exactly like RevokeInvitation: zero rows
+-- means the invitation is no longer pending, which the handler maps to 409
+-- rather than silently reporting a send. email is returned because the job
+-- payload needs it and the caller has only the invitation id in hand.
+-- name: RotateInvitationShortCode :one
+UPDATE invitations SET short_code_hash = $3, sent_count = sent_count + 1, updated_at = now()
 WHERE id = $1 AND community_id = $2 AND status = 'pending'
-RETURNING sent_count;
+RETURNING id, email, sent_count;
 
 -- IncrementInvitationFailedAttempts records that a preview/accept call
 -- RESOLVED to this real invitation row (design D-6: "invitations.

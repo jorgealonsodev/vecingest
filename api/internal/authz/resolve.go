@@ -22,6 +22,29 @@ import (
 // never partial data (design D-4: "Foreign resource → 404").
 var ErrNoMembership = errors.New("authz: no membership for this resource")
 
+// ErrMFAEnrollmentRequired is returned when the caller's resolved role
+// is admin or admin_staff and NO second factor exists on their account
+// yet (auth-mfa-totp delta: Mandatory TOTP For Admin And Admin_staff
+// Scope Access; design D-7). It is DISTINCT from ErrNoMembership: the
+// caller genuinely has the membership, they just cannot use it until
+// they enroll -- scoped.* renders this as its own 403 code
+// (apperr.CodeMFAEnrollmentRequired), never the generic 404 a foreign
+// resource gets.
+var ErrMFAEnrollmentRequired = errors.New("authz: TOTP enrollment required for this role")
+
+// ErrMFAAuthenticationRequired is returned when the caller's resolved
+// role is admin or admin_staff, a second factor DOES exist on their
+// account, and the session in hand simply never used it -- it
+// authenticated on a password alone.
+//
+// It is deliberately distinct from ErrMFAEnrollmentRequired because the
+// two demand different things of the client: enroll a factor (a flow
+// that starts at /v1/me/mfa/enroll) versus log in again carrying a code
+// (a flow that starts at /v1/auth/login). Collapsing them would send a
+// caller who already has an authenticator app to an enrollment screen
+// that refuses them with a 409.
+var ErrMFAAuthenticationRequired = errors.New("authz: second-factor authentication required for this role")
+
 // errNotConfigured is returned when a resolver runs before Configure
 // was ever called (a boot-wiring bug, not a caller error).
 var errNotConfigured = errors.New("authz: not configured (Configure was never called)")
@@ -61,6 +84,14 @@ type Querier interface {
 	// for cross-tenant isolation purposes (invitations spec:
 	// "Cross-Tenant Isolation Proven By Test").
 	GetInvitationCommunityID(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
+	// IsUserMFAEnabled tells the mandatory-TOTP gate's two failure modes
+	// apart (auth-mfa-totp delta): no factor on the account means the
+	// caller must ENROLL, a factor that this session simply never used
+	// means they must LOG IN AGAIN with a code. It no longer decides
+	// whether the gate opens -- the session's own fact does. It always
+	// returns exactly one row (true/false), never pgx.ErrNoRows -- a
+	// caller who never enrolled resolves cleanly to false.
+	IsUserMFAEnabled(ctx context.Context, userID uuid.UUID) (bool, error)
 }
 
 var queries Querier
@@ -74,6 +105,51 @@ func Configure(q Querier) { queries = q }
 // distinguishing "caller has no membership" from a real infrastructure
 // failure.
 func isNoRows(err error) bool { return errors.Is(err, pgx.ErrNoRows) }
+
+// requireMFAForAdminRoles implements the mandatory-TOTP gate (design
+// D-7; auth-mfa-totp delta: Mandatory TOTP For Admin And Admin_staff
+// Scope Access) at the ONE point every community/office resolution
+// passes through, regardless of which route shape got there
+// ({communityId}, {officeId}, {unitId} or {invitationId} all end up
+// here). owner/tenant (and any role neither admin nor admin_staff) are
+// untouched -- TOTP stays optional for them.
+//
+// What it enforces is SECOND-FACTOR AUTHENTICATION OF THIS SESSION, not
+// enrollment on the account. The distinction is the whole fix for
+// R1-mandatory-totp-gate-is-only-an-enrollment-flag (review lineages
+// review-0e1833930adf141a and review-e72754dc7521b57a): the previous
+// implementation read IsUserMFAEnabled, a durable per-account flag, so
+// a session that had proved nothing but a password satisfied it as long
+// as the victim had ever enrolled -- and where the victim had not, that
+// same session could enroll a fresh factor through the ungated
+// /v1/me/mfa/enroll + /v1/me/mfa/verify pair and pass. Reading the
+// session's own fact closes both: an attacker may still enroll, but the
+// session they hold was minted with mfa=false and no endpoint can
+// promote it. Only a fresh login through the TOTP challenge produces an
+// elevated session.
+//
+// The account query survives for ONE purpose: telling the two failure
+// modes apart. An admin with no factor at all must be sent to enroll
+// (the bootstrap path, which is why the enroll endpoints stay reachable
+// from a password-only session); an admin who HAS a factor must be sent
+// back to log in with a code. Those are different screens, so they are
+// different errors.
+func requireMFAForAdminRoles(ctx context.Context, role Role, userID uuid.UUID) error {
+	if role != RoleAdmin && role != RoleAdminStaff {
+		return nil
+	}
+	if MFAAuthenticatedFromContext(ctx) {
+		return nil
+	}
+	enrolled, err := queries.IsUserMFAEnabled(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if !enrolled {
+		return ErrMFAEnrollmentRequired
+	}
+	return ErrMFAAuthenticationRequired
+}
 
 // ResolveCommunity resolves the caller's membership for communityID via
 // office_members ∪ unit_members for that community_id (design D-4):
@@ -90,6 +166,9 @@ func ResolveCommunity(ctx context.Context, communityID, userID uuid.UUID) (Membe
 		UserID:      userID,
 	})
 	if err == nil {
+		if merr := requireMFAForAdminRoles(ctx, Role(role), userID); merr != nil {
+			return Membership{}, merr
+		}
 		return Membership{userID: userID, scope: scope{kind: KindCommunity, id: communityID}, role: Role(role), valid: true}, nil
 	}
 	if !isNoRows(err) {
@@ -101,6 +180,9 @@ func ResolveCommunity(ctx context.Context, communityID, userID uuid.UUID) (Membe
 		UserID:      userID,
 	})
 	if err == nil {
+		if merr := requireMFAForAdminRoles(ctx, Role(role), userID); merr != nil {
+			return Membership{}, merr
+		}
 		return Membership{userID: userID, scope: scope{kind: KindCommunity, id: communityID}, role: Role(role), valid: true}, nil
 	}
 	if isNoRows(err) {
@@ -125,6 +207,9 @@ func ResolveOffice(ctx context.Context, officeID, userID uuid.UUID) (Membership,
 			return Membership{}, ErrNoMembership
 		}
 		return Membership{}, err
+	}
+	if merr := requireMFAForAdminRoles(ctx, Role(row.Role), userID); merr != nil {
+		return Membership{}, merr
 	}
 	return Membership{userID: userID, scope: scope{kind: KindOffice, id: officeID}, role: Role(row.Role), valid: true}, nil
 }
@@ -178,7 +263,38 @@ func ResolveCommunityViaInvitation(ctx context.Context, invitationID, userID uui
 
 // ResolveSelf resolves the caller's full membership set (design D-4:
 // "no path resource ⇒ scoped.Self ⇒ the caller's full membership set"),
-// for GET /v1/me and GET /v1/communities.
+// for GET /v1/communities and the /v1/offices/me routes.
+//
+// It runs the SAME mandatory-TOTP gate ResolveCommunity and ResolveOffice
+// run, over every admin/admin_staff membership it is about to hand out
+// (R1-self-scope-skips-mandatory-totp-gate, review lineage
+// review-c4efc3f92d076299). It previously ran no gate at all, on the
+// assumption that a route with no path resource grants nothing --
+// which is false: addOfficeMember is registered through scoped.Self and
+// inserts an office_members row with role admin_staff, granting
+// office-wide reach into every community of that office through the
+// community resolver's own office leg.
+//
+// The gate belongs HERE, on the whole route class, rather than on the
+// subset of Self routes someone judges privileged. Two reasons:
+//
+//  1. The privilege IS the membership. This function's entire output is
+//     the admin membership set; a handler that receives it can already
+//     act on it, so deciding per route means deciding again in every
+//     handler -- the manual, per-handler authorization check the scoped.*
+//     mechanism exists to replace, and the one that let this through.
+//  2. It makes the default safe. A Self route added tomorrow inherits
+//     the gate without anyone remembering to classify it. "Self means
+//     harmless" is exactly the assumption that produced this hole, and
+//     a per-route rule would preserve it as the default.
+//
+// The deliberate cost: an admin who has not enrolled loses GET
+// /v1/communities and the /v1/offices/me routes until they do. The
+// bootstrap path survives intact because it is not Self-registered --
+// GET /v1/me, POST /v1/me/mfa/enroll and POST /v1/me/mfa/verify are
+// plain huma.Register operations (handlers.RegisterMe/RegisterMFA), so
+// an un-enrolled admin can still read their profile, enroll a factor,
+// and log in again with a code.
 func ResolveSelf(ctx context.Context, userID uuid.UUID) (Memberships, error) {
 	if queries == nil {
 		return nil, errNotConfigured
@@ -195,9 +311,19 @@ func ResolveSelf(ctx context.Context, userID uuid.UUID) (Memberships, error) {
 
 	memberships := make(Memberships, 0, len(officeRows)+len(unitRows))
 	for _, r := range officeRows {
+		if merr := requireMFAForAdminRoles(ctx, Role(r.Role), userID); merr != nil {
+			return nil, merr
+		}
 		memberships = append(memberships, Membership{userID: userID, scope: scope{kind: KindOffice, id: r.OfficeID}, role: Role(r.Role), valid: true})
 	}
 	for _, r := range unitRows {
+		// A no-op today (the unit_members.role CHECK permits only
+		// owner/tenant), kept for the same reason the gate lives in this
+		// function at all: if that role set ever widens, the safe
+		// behaviour must be the one already written down.
+		if merr := requireMFAForAdminRoles(ctx, Role(r.Role), userID); merr != nil {
+			return nil, merr
+		}
 		memberships = append(memberships, Membership{userID: userID, scope: scope{kind: KindCommunity, id: r.CommunityID}, role: Role(r.Role), valid: true})
 	}
 	return memberships, nil

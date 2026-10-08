@@ -47,6 +47,17 @@ func base32Secret(secret []byte) string {
 	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(secret)
 }
 
+// Base32Secret is base32Secret's exported form (auth-mfa-totp delta:
+// Non-Superadmin TOTP HTTP Endpoints): the HTTP enroll handler shows
+// this to the caller exactly once, for manual entry into an
+// authenticator app that cannot scan ProvisioningURI's QR code. No new
+// domain logic -- the identical encoding ProvisioningURI already uses
+// internally, exported at this package's existing point of use rather
+// than duplicated in the handlers package.
+func Base32Secret(secret []byte) string {
+	return base32Secret(secret)
+}
+
 // ProvisioningURI builds the otpauth:// URI an authenticator app scans
 // (D-P).
 func ProvisioningURI(secret []byte, email string) string {

@@ -59,6 +59,14 @@ type RotateResult struct {
 	SessionID       uuid.UUID
 	RawRefreshToken string
 	ExpiresAt       time.Time
+	// MFAAuthenticated is the rotated-from session's own second-factor
+	// fact, carried forward onto the new row (auth-mfa-totp; review
+	// lineage review-0e1833930adf141a). Rotation is not a new
+	// authentication: it neither grants nor removes the second factor,
+	// it preserves what the original login established. The caller
+	// stamps it onto the reissued access token, which is the only
+	// reason an elevated session survives past its first 15 minutes.
+	MFAAuthenticated bool
 }
 
 // Rotator implements single-use refresh rotation with family
@@ -138,6 +146,7 @@ func (r Rotator) Rotate(ctx context.Context, wdb db.WriteDB, in RotateInput) (Ro
 		Platform:         in.Platform,
 		Ip:               in.IP,
 		ExpiresAt:        newExpiresAt,
+		MfaAt:            row.MfaAt,
 	})
 	if err != nil {
 		return RotateResult{}, fmt.Errorf("session: insert rotated session: %w", err)
@@ -151,11 +160,12 @@ func (r Rotator) Rotate(ctx context.Context, wdb db.WriteDB, in RotateInput) (Ro
 	}
 
 	return RotateResult{
-		UserID:          newRow.UserID,
-		FamilyID:        newRow.FamilyID,
-		SessionID:       newRow.ID,
-		RawRefreshToken: newRaw,
-		ExpiresAt:       newRow.ExpiresAt,
+		UserID:           newRow.UserID,
+		FamilyID:         newRow.FamilyID,
+		SessionID:        newRow.ID,
+		RawRefreshToken:  newRaw,
+		ExpiresAt:        newRow.ExpiresAt,
+		MFAAuthenticated: newRow.MfaAt.Valid,
 	}, nil
 }
 

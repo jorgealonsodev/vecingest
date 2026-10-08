@@ -48,8 +48,11 @@ func Enroll(ctx context.Context, wdb db.WriteDB, key [32]byte, userID uuid.UUID)
 // let the confirmation code itself be replayed as the first live TOTP
 // code; the design's replay protection is scoped to VerifyTOTP,
 // invoked separately once enrollment is active.
-func ConfirmEnrollment(ctx context.Context, wdb db.WriteDB, clock Clock, key [32]byte, userID uuid.UUID, code string) (bool, error) {
-	q := db.New(wdb)
+// It takes a db.DBTX rather than a db.WriteDB so the caller can pass an
+// open transaction: activation and recovery-code issuance MUST commit
+// or roll back together (review lineage review-0e1833930adf141a).
+func ConfirmEnrollment(ctx context.Context, dbtx db.DBTX, clock Clock, key [32]byte, userID uuid.UUID, code string) (bool, error) {
+	q := db.New(dbtx)
 	row, err := q.GetUserMFA(ctx, userID)
 	if err != nil {
 		return false, fmt.Errorf("mfa: get user_mfa: %w", err)

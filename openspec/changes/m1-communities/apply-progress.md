@@ -491,3 +491,676 @@ pending-past-expiry-reads-as-expired-before-sweep) — all three are in
 - Current work unit: WU-4 (Phase 6, tasks 6.1–6.20, this run) — invitations, PR4 (base: `feature/m1-communities-pr3-units`, which already carries PR1+PR2+PR3).
 - Boundary: starts from PR3's tip; ends with a fully green `go test -race ./...` (348/348) including 10 new invitation integration tests, 3 new `scoped.Invitation` tests, and 1 new `cmd/lintscope` test; clean `go vet`/`gofumpt`/`golangci-lint`; no new gosec finding class (one more instance of an already-accepted generated-file false-positive category); a clean, idempotent `make gen`; and a fixed pre-existing River sequence-grant bug that this phase's own first real producer surfaced.
 - Estimated review budget impact: well above 400 authored lines (see Issues Found #4) — recommend `size:exception` for PR4, consistent with the PR1/PR3 precedent.
+
+## Work Unit: WU-5 / PR5 — Phase 7: Public-Form Protection + Non-Superadmin TOTP
+
+**Status**: Phase 7 (tasks 7.1–7.15) COMPLETE. Phase 8 (WU-6) explicitly NOT
+started per this run's instruction.
+
+**Branch**: `feature/m1-communities-pr5-turnstile` (base: `feature/m1-communities-pr4-invitations`,
+which already carries PR1+PR2+PR3+PR4). No commit created yet within this
+run's own tool access — created by the operator after this report; not
+merged, not pushed — delivery is the user's decision.
+
+### Completed Tasks (Phase 7, 7.1–7.15)
+
+All 15 tasks marked `[x]` in `tasks.md`.
+
+- [x] 7.1/7.2 `captcha.Verifier` interface (`internal/domain/auth/captcha/captcha.go`); `captcha.Turnstile` + `captcha.AlwaysPass` (`internal/platform/captcha/turnstile.go`)
+- [x] 7.3/7.4 Turnstile wired into `Login`'s failure-count branch (`lockout.Service.FailureCount`, new, read-only)
+- [x] 7.5/7.6 Turnstile wired unconditionally into `ForgotPassword`
+- [x] 7.7/7.8 Confirmed `limiter.LoginReset` (chi middleware, runs BEFORE the handler) enforces its budget independent of Turnstile — no production code change needed, only the test
+- [x] 7.9/7.10 Confirmed by inspection AND by a genuine RED/GREEN plant that no `register-company`/contact-form operation exists in the API surface
+- [x] 7.11/7.12 `api/internal/http/handlers/mfa.go` — `EnrollMFA`/`VerifyMFA`/`RegisterMFA`, wiring M0's existing `internal/domain/auth/mfa` enroll/verify/recovery-code generation for ANY authenticated non-superadmin caller
+- [x] 7.13/7.14 Mandatory-TOTP gate: `authz.ErrMFARequired` + `requireMFAForAdminRoles`, wired into `ResolveCommunity` and `ResolveOffice` (the one point every community/office resolution passes through, regardless of route shape); new sqlc query `IsUserMFAEnabled`
+- [x] 7.15 `make gen` run twice; second run byte-identical (`git diff --stat` clean on `openapi.yaml`, TS client, Zod schemas, sqlc code)
+
+### Files Changed
+
+| File | Action | What Was Done |
+|------|--------|----------------|
+| `api/internal/domain/auth/captcha/captcha.go` | Created | `Verifier` interface (the design's "CaptchaVerifier") |
+| `api/internal/platform/captcha/turnstile.go` | Created | `Turnstile` (real Cloudflare HTTP client) + `AlwaysPass` test double |
+| `api/internal/platform/captcha/turnstile_test.go` | Created | 4 unit tests against a local `httptest.Server` fake — no network dependency |
+| `api/internal/domain/auth/mfa/totp.go` | Modified | Added exported `Base32Secret` (thin wrapper over the existing unexported `base32Secret` — no new domain logic) |
+| `api/internal/domain/auth/lockout/lockout.go` | Modified | Added `FailureCount` (read-only; `RecordFailure`/`RecordSuccess`/`IsLocked` unchanged) |
+| `api/internal/domain/auth/lockout/lockout_test.go` | Modified | Added `TestFailureCount_ReturnsTheHigherOfEmailAndIPWithoutRecording` |
+| `api/internal/db/queries/user_mfa.sql` | Modified | Added `IsUserMFAEnabled` (`SELECT EXISTS(...)`, always exactly one row) |
+| `api/internal/db/user_mfa.sql.go`, `querier.go` | Generated | `go tool sqlc generate` |
+| `api/internal/authz/resolve.go` | Modified | Added `ErrMFARequired`, `Querier.IsUserMFAEnabled`, `requireMFAForAdminRoles`; wired into `ResolveCommunity` (both the office leg and the unit leg) and `ResolveOffice` |
+| `api/internal/authz/scoped/register.go` | Modified | `resolveErrorResponse` maps `ErrMFARequired` → 403 `apperr.CodeMFAEnrollmentRequired` |
+| `api/internal/authz/scoped/register_test.go` | Modified | `fakeQuerier` gained `mfaDisabledUsers` + `IsUserMFAEnabled` (defaults to enabled=true, so every PRE-EXISTING test keeps resolving exactly as before); added `officeInput`/`officeOutput`/`newOfficeTestAPI` fixture; 6 new tests for the gate (admin/admin_staff rejected without TOTP, admin allowed with TOTP, owner unaffected, both `scoped.Community` and `scoped.Office` paths) |
+| `api/internal/http/apperr/apperr.go` | Modified | Added `CodeCaptchaRequired` |
+| `api/internal/http/dto/auth.go` | Modified | `LoginRequest`/`ForgotPasswordRequest` gained `TurnstileToken` (both `omitempty` at the schema level, so an absent token renders the domain-level captcha error, never huma's generic 422) |
+| `api/internal/http/dto/mfa.go` | Created | `MFAEnrollInput/Output`, `MFAVerifyInput/Output` and their request/response bodies |
+| `api/internal/http/handlers/deps.go` | Modified | Added `Deps.Captcha captcha.Verifier` |
+| `api/internal/http/handlers/captcha.go` | Created | `verifyCaptcha` (fails closed on nil `Captcha` or empty token), `captchaRequired`, `captchaAfterFailures` (=2) |
+| `api/internal/http/handlers/auth_login.go` | Modified | `Login` checks `FailureCount` before any credential lookup; captcha required once `failures >= 2` |
+| `api/internal/http/handlers/auth_password_reset.go` | Modified | `ForgotPassword` checks captcha unconditionally, before any user lookup |
+| `api/internal/http/handlers/mfa.go` | Created | `EnrollMFA`, `VerifyMFA` (+`confirmMFAEnrollment`/`verifyActiveMFA` helpers), `RegisterMFA` |
+| `api/internal/http/api/api.go` | Modified | Wired `handlers.RegisterMFA(authGroup, d)` |
+| `api/cmd/vecingest/serve.go` | Modified | `buildServeDeps` wires `Captcha: captcha.Turnstile{Secret: holder.TurnstileSecret()}` |
+| `api/internal/http/api/api_integration_test.go` | Modified | `newTestServer`'s `Deps` gained `Captcha: captcha.AlwaysPass{}`; fixed `TestAuthFlow_ForgotPasswordEnumerationSafe` (pre-existing test, needed a `turnstile_token` now that forgot-password requires one) |
+| `api/internal/http/api/office_test.go` | Modified | `seedOfficeWithAdmin` now also seeds ACTIVE TOTP (new `seedActiveMFA` helper) — see Deviations #1 |
+| `api/internal/http/api/community_test.go` | Modified | The one inline `admin_staff` caller (`TestCommunity_CreationRestrictedToAdminScopedToOffice`) also seeded with active TOTP, so its observed 403 is unambiguously the ROLE check, not the MFA gate |
+| `api/internal/http/api/public_form_protection_test.go` | Created | 4 integration tests: login-captcha (both scenarios in one test), forgot-password-captcha, rate-limit-independent-of-captcha, no-register-company-in-surface |
+| `api/internal/http/api/mfa_test.go` | Created | 5 integration tests: enroll→verify→activate (+ recovery-code persistence, +encrypted-secret assertion), verify-against-already-active, invalid-code-stays-inactive, re-enroll-conflicts, and one full-stack admin-gate test (`POST /v1/communities` blocked then allowed) |
+| `api/openapi/openapi.yaml`, `packages/shared/src/client/openapi-types.ts`, `packages/shared/src/schemas/index.ts` | Generated | `make gen` |
+
+### TDD Cycle Evidence
+
+Every RED below was produced by PLANTING a targeted logic violation in already-implemented
+production code (route registration always left intact where a route already existed), confirming
+the SPECIFIC test fails at the assertion naming the scenario, then reverting and re-confirming
+GREEN — per this run's explicit instruction. `FailureCount`/the MFA gate/register-company-absence
+are NEW code with no pre-existing route to gut non-vacuously any other way, so each got the
+identical planted-violation treatment against ITS OWN new logic rather than a route-absence RED.
+
+| Task | Test | What was PLANTED | RED assertion observed | GREEN after revert |
+|---|---|---|---|---|
+| 7.1–7.2 | `internal/platform/captcha` (4 tests) | N/A — written test-first against the not-yet-existing `captcha` package; genuine compile-time RED (`undefined: captcha.Turnstile`) before implementation | compile-time RED | ✅ implemented, 4/4 pass |
+| lockout.FailureCount | `TestFailureCount_ReturnsTheHigherOfEmailAndIPWithoutRecording` | `FailureCount` body replaced with `return 0, nil` | `lockout_test.go:306: expected 2 failures after 2 RecordFailure calls, got 0` | ✅ reverted, 8/8 lockout tests pass |
+| 7.3/7.4 | `TestPublicForm_LoginRequiresTurnstileAfterThirdFailure` | `if failures >= captchaAfterFailures` → `if failures >= 999999` (threshold effectively disabled) | `public_form_protection_test.go:53: expected 400 captcha-required on the third attempt with no token...` (got 200 — the correct-password/no-token attempt silently succeeded) | ✅ reverted, pass |
+| 7.5/7.6 | `TestPublicForm_ForgotPasswordAlwaysRequiresTurnstile` | `verifyCaptcha` call short-circuited to `ok, cerr := true, error(nil)` | `public_form_protection_test.go:87: expected 400 captcha-required with no token... got 200` | ✅ reverted, pass |
+| 7.9/7.10 | `TestPublicForm_NoRegisterCompanyOrContactFormInAPISurface` | Planted a temporary `POST /v1/auth/register-company` registration in `api.go`'s `Register()` | `public_form_protection_test.go:162: expected no register-company operation in the M1 API surface` | ✅ reverted, pass |
+| 7.11/7.12 (activation persists) | `TestMFA_EnrollThenVerifyActivates` | `confirmMFAEnrollment`'s call to `mfa.ConfirmEnrollment` short-circuited to `ok, err := true, error(nil)` — the exact "echoes success without persisting" shape this run's instructions named | `mfa_test.go:85: expected TOTP to be active after a valid verification` (re-read via a SEPARATE `GetUserMFA` query, independent of the handler's own 200 response) | ✅ reverted, pass |
+| 7.11/7.12 (recovery codes persist) | `TestMFA_EnrollThenVerifyActivates` | `SetUserMFARecoveryCodes` call skipped (codes still returned in the response body, never written) | `mfa_test.go:88: expected 10 persisted recovery-code hashes, got 0` | ✅ reverted, pass |
+| 7.13/7.14 | `TestCommunity_AdminWithoutMFARejected`, `TestCommunity_AdminStaffWithoutMFARejected`, `TestOffice_AdminWithoutMFARejected` | `requireMFAForAdminRoles`'s `if role != RoleAdmin && role != RoleAdminStaff` → `if true` (gate unconditionally skipped) | All three: `expected 403 ..., got 200` | ✅ reverted, 34/34 `internal/authz/...` tests pass |
+
+**Every write endpoint answers "if gutted, does a test fail?"**: `EnrollMFA`
+(gutting the `mfa.Enroll` call or the conflict check would surface via
+`TestMFA_ReEnrollAlreadyActiveConflicts` and the encrypted-secret assertion
+in `TestMFA_EnrollThenVerifyActivates`); `VerifyMFA`'s two branches are
+BOTH covered by the two planted-violation rows above. Login/ForgotPassword
+are not new write endpoints (no new persistence), so their coverage is the
+planted-violation rows for the new READ/branch logic (`FailureCount`,
+`verifyCaptcha`) rather than a write re-read.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `cd api && go test -race ./internal/platform/captcha/... ./internal/domain/auth/lockout/... ./internal/authz/... ./internal/http/api/... -run "TestTurnstile\|TestAlwaysPass\|TestFailureCount\|TestCommunity_Admin\|TestCommunity_Owner\|TestOffice_Admin\|TestPublicForm\|TestMFA" -v` → **32/32 pass** |
+| Runtime harness command/scenario and exact result | Testcontainers Postgres 17, real HTTP round-trip through the actual chi/huma router for every `internal/http/api` test (login, forgot-password, enroll/verify, and the full-stack `POST /v1/communities` admin-gate test going through the REAL `bearerAuthAndRateLimit` → `scoped.Community` → `authz.ResolveCommunity` → `requireMFAForAdminRoles` chain, not a mock); `internal/authz/scoped`'s 6 new gate tests use the in-memory humachi fixture pattern already established there (unit-layer, per the Testing Strategy table) |
+| Rollback boundary | Revert `api/internal/domain/auth/captcha/`, `api/internal/platform/captcha/`, `api/internal/http/handlers/{mfa,captcha}.go`, `api/internal/http/dto/mfa.go`, `api/internal/http/api/{mfa_test,public_form_protection_test}.go`; revert the `TurnstileToken`/`Captcha` additions in `dto/auth.go`/`handlers/deps.go`/`handlers/auth_login.go`/`handlers/auth_password_reset.go`/`api/api.go`/`cmd/vecingest/serve.go`; revert `authz/resolve.go`'s `ErrMFARequired`/`requireMFAForAdminRoles`/`IsUserMFAEnabled` and `authz/scoped/register.go`'s error-mapping addition; revert `authz/scoped/register_test.go`'s `mfaDisabledUsers`/office-fixture additions; revert `lockout.go`'s `FailureCount`; revert `mfa/totp.go`'s `Base32Secret`; revert `queries/user_mfa.sql`'s `IsUserMFAEnabled` and re-run `go tool sqlc generate`; revert `office_test.go`'s `seedActiveMFA` call inside `seedOfficeWithAdmin` and `community_test.go`'s one `seedActiveMFA` call (this LAST pair is the one revert that is NOT independent of the rest: if the MFA gate is reverted, these seed calls become harmless no-ops rather than required, so they can stay or go either way without breaking anything) |
+
+### Full-Suite Verification
+
+- `cd api && go build ./...` → clean
+- `cd api && go vet ./...` → clean
+- `cd api && go test -race ./...` → **368/368 pass**, 39 packages (up from Phase 6's 348; +20: 4 captcha unit tests, 1 lockout unit test, 6 authz/scoped gate tests, 4 public-form-protection integration tests, 5 mfa integration tests — net +20). One PRE-EXISTING test (`TestAuthFlow_ForgotPasswordEnumerationSafe`) needed a one-line fix (add `turnstile_token`) since forgot-password now requires one — not a new test, a required adjustment to an existing one, called out explicitly rather than silently patched
+- `export PATH="$PATH:$(go env GOPATH)/bin"; gofumpt -l .` → clean (no files listed)
+- `golangci-lint run ./...` → **0 issues**
+- `gosec -quiet ./...` → **27 issues**, IDENTICAL COUNT to the environment's documented baseline (PR4's own final count). Grepped the full output for every file this run created/modified and found ZERO new findings — the 27 are the same pre-existing set (config.go, seed.go, cmd/lintscope/parse.go, cmd/lintcompose/main.go, cmd/openapi-gen/main.go, internal/platform/hibp/client.go, internal/domain/auth/token/csrf.go, internal/domain/audit/hash.go, migrations/bootstrap/00001_roles.go, internal/db/{users,sessions,invitations,password_reset_tokens}.sql.go — none of them touched by this run)
+- `cd api && go run ./cmd/lintscope internal/db/queries migrations/schema` → `OK` (the new `IsUserMFAEnabled` query is against `user_mfa`, a global per-user table with no tenant column, so lint-scope correctly has nothing to say about it)
+- `make gen` (openapi-gen + sqlc generate + `pnpm --filter @vecingest/shared build`) → run twice; `git diff --stat` on `openapi.yaml`, the TS client, the Zod schemas, and every `internal/db/*` file → **byte-identical across both runs**
+
+### Deviations from Design
+
+1. **Every existing test seeding an admin/admin_staff caller via `seedOfficeWithAdmin` (or the one inline `community_test.go` case) now ALSO seeds active TOTP**, via a new `seedActiveMFA` helper. This is NOT a design deviation but a NECESSARY consequence of implementing task 7.14 literally ("the office/community resolver path" — i.e. every resolution, not just new routes): the mandatory-TOTP gate correctly rejects EVERY pre-existing Phase 2–6 admin/admin_staff test caller that never enrolled TOTP, since `authz.Configure` wires a REAL Testcontainers-backed `Querier` in every `internal/http/api` test. Flagging this explicitly because it is the single largest blast-radius decision in this run: it touches two files outside Phase 7's own new files, but touches NOTHING in Phases 2–6's actual assertions or production code — only what each admin test caller's PRECONDITION seeds. The one test that specifically wants an admin WITHOUT TOTP (to exercise the gate itself, `TestMFA_AdminWithoutTOTPBlockedFromAdminScopedRoute`) seeds its own caller directly, bypassing the helper.
+2. **`docs/security/gates/M1.md` (task 7.10's "record the scoped exception") is deliberately NOT created in this run.** That file's creation is explicitly task 10.4 ("Create `docs/security/gates/M1.md` — Checkpoint A/B split... including the scoped exception row for deferred Turnstile coverage on `register-company`/contact forms"), and this run's own instructions say "Do NOT start Phase 8" (Phase 10 is further still). Task 7.10's parenthetical "(Phase 10)" reads as a forward pointer to where that documentation lands, not an instruction to create the file two phases early. 7.10's actual GREEN — "verify by inspection that no such handler exists" — is satisfied by `TestPublicForm_NoRegisterCompanyOrContactFormInAPISurface` plus the genuine RED/GREEN plant proving that test would catch a regression.
+3. **A recovery-code CONSUMPTION HTTP endpoint (e.g. "verify using a recovery code instead of a TOTP code") is NOT implemented.** `mfa.ConsumeRecoveryCode` exists in the domain (M0) but is wired into NO HTTP path anywhere in this codebase, including the pre-existing superadmin login flow — `SuperadminLogin` only ever calls `VerifyTOTP`, never `ConsumeRecoveryCode`. M1's own mandatory-TOTP gate (task 7.14) checks only `user_mfa.enabled_at`, never a live per-request TOTP/recovery challenge, so there is no login-time or admin-route-time moment in M1's actual flow where a recovery code would ever be presented. `VerifyMFA` DOES generate and persist real recovery codes (task's own "recovery flow" wording, satisfied for the enrollment half), but consuming one to bypass a lost authenticator is out of this run's assigned task list (7.11–7.12 name only "enroll/verify" as the HTTP surface) and would need its own spec scenario to be more than an invented feature. Flagging this explicitly rather than silently shipping a partial recovery flow.
+4. **`captchaAfterFailures = 2`** (i.e., the THIRD attempt is the first one requiring Turnstile) is a Go constant in `handlers/captcha.go`, matching `public-form-protection/spec.md`'s literal wording ("starting on the third failed attempt") — not a `legal_rules` row, since this is a security/product threshold, not an LPH legal deadline/majority/percentage (`rules.apply.guidelines`'s legal-rules-are-data rule scopes explicitly to those).
+5. **`CaptchaVerifier` is named `captcha.Verifier`** in Go (package `captcha`, type `Verifier`), not the literally-stuttering `captcha.CaptchaVerifier` design.md's prose uses — this repo's existing seams (`lockout.AttemptCounter`, `mfa.AttemptCounter`, `password.ResetRequester`) never stutter their own package name either, and `.golangci.yml` has no stutter/revive check that would have caught the opposite choice.
+
+### Issues Found
+
+None beyond the one pre-existing test fix (`TestAuthFlow_ForgotPasswordEnumerationSafe`) already called out under Full-Suite Verification.
+
+### Review Workload / PR Boundary
+
+- Mode: chained PR slice (`feature-branch-chain`, per `tasks.md`).
+- Current work unit: WU-5 (Phase 7, tasks 7.1–7.15, this run) — public-form Turnstile protection + non-superadmin TOTP, PR5 (base: `feature/m1-communities-pr4-invitations`, which already carries PR1+PR2+PR3+PR4).
+- Boundary: starts from PR4's tip; ends with a fully green `go test -race ./...` (368/368) including 20 new tests across 5 files, clean `gofumpt`/`golangci-lint`, no new `gosec` finding, a clean `lintscope`, and a clean, idempotent `make gen`.
+- Authored line count (git diff --stat, excluding generated `openapi.yaml`/TS client/Zod artifacts and `tasks.md`'s own checkbox edits): new files (`captcha.go`+`turnstile.go`+`turnstile_test.go`+`mfa.go`(handler)+`mfa.go`(dto)+`captcha.go`(handler)+`mfa_test.go`+`public_form_protection_test.go`) plus modifications across `resolve.go`, `register.go`/`register_test.go`, `lockout.go`/`lockout_test.go`, `totp.go`, `apperr.go`, `auth.go`(dto), `deps.go`, `auth_login.go`, `auth_password_reset.go`, `api.go`, `serve.go`, `api_integration_test.go`, `office_test.go`, `community_test.go`, `user_mfa.sql` — well above the 400-line budget, consistent with the PR1/PR3/PR4 precedent. This run's instructions state the 400-line figure is "an advisory planning heuristic, not a cap" for this session; the Turnstile and TOTP-gate halves share no natural split point that would avoid duplicating the `captcha`/`verifyCaptcha` seam or leaving the mandatory-TOTP gate half-wired (an admin gated on TOTP with no enroll/verify endpoint yet would be locked out with no way to satisfy the gate). Flagging honestly: a `size:exception` recommendation for PR5, consistent with the PR1/PR3/PR4 precedent.
+
+### Status
+
+25/25 Phase 1. 9/9 Phase 2. 11/11 Phase 3. 13/13 Phase 4. 11/11 Phase 5. 20/20 Phase 6. **15/15 Phase 7 (this run).** Phase 8 (WU-6, PR6 — GET /v1/me memberships, lint-scope, permission matrix) NOT started per this run's explicit instruction to stop after Phase 7.
+
+## Bounded security correction — review lineage review-0e1833930adf141a (post-PR5)
+
+Not a `tasks.md` work unit: an out-of-band correction of five adversarial-review
+findings against already-delivered Phase 6/7 code, on
+`feature/m1-communities-pr5-turnstile`. Budget: 200 changed lines. Actual: 320
+(282 additions + 38 deletions), all in `api/`.
+
+Mode: Strict TDD. Every fix had its test written first and observed failing
+against the unfixed code before any production change.
+
+| Finding | Severity | Status |
+|---|---|---|
+| R1-accept-invitation-account-takeover / R3-accept-links-existing-account-without-credential-proof | BLOCKER | Fixed |
+| R3-enumeration-lockout-keyed-on-client-controlled-headers | CRITICAL | Fixed |
+| R3-mfa-activation-not-atomic-with-recovery-codes | CRITICAL | Fixed |
+| R1-mandatory-totp-gate-ineffective | CRITICAL | NOT fixed — documented as KNOWN INCOMPLETE |
+
+### TDD cycle evidence
+
+| Finding | RED test | Assertion observed failing against the unfixed code |
+|---|---|---|
+| Accept takeover | `TestInvitation_AcceptRequiresTheExistingAccountsOwnPassword` | `expected accept for a pre-existing account WITHOUT that account's password to be rejected, got 200 body=map[... access_token:eyJ... refresh_token:nik_99uty...]` |
+| Accept takeover (rewritten existing test) | `TestInvitation_AcceptCreatesOrLinksAnAccount`, scenario 2 | `expected accept for an existing account with the WRONG password to be refused with no session, got 200 body=map[... access_token:eyJ...]` |
+| Lockout key | `TestInvitation_EnumerationLockoutIgnoresClientControlledDeviceHeaders` | `expected the 11th attempt from the SAME address to be locked out despite a different X-Platform/X-App-Version pair on every request, got 404` |
+| MFA atomicity | `TestMFA_ActivationIsAtomicWithRecoveryCodeIssuance` | `expected TOTP to remain INACTIVE after a failed activation, got enabled_at=2026-09-17 15:01:10 ... -- the account now has an active factor and no recovery path` |
+
+### Work unit evidence
+
+- Focused: `go test -race -run 'TestInvitation_' ./internal/http/api/` → 12 passed.
+- Full: `cd api && go test -race ./...` → 371 passed, 0 failed (one Testcontainers
+  container-creation flake on the first run, `TestWorkerSubcommand_LeadershipAndGracefulShutdown`,
+  passed on a re-run in isolation).
+- `gofumpt -l .` → clean. `golangci-lint run ./...` → `0 issues.`
+- `make gen` run twice → no generated artifact changed (no DTO or SQL change).
+- Rollback boundary: the single commit on `feature/m1-communities-pr5-turnstile`;
+  reverting it restores the pre-correction behaviour with no other work removed.
+
+### Deviations recorded
+
+1. `invitations` spec, "Accept Creates Or Links An Account Without Revealing Prior
+   Existence": requiring the existing account's password makes a mismatch
+   distinguishable from the account-creation path, so a holder of a valid
+   invitation secret can now learn that the invited email already has an account.
+   Accepted over cross-tenant account takeover. Spec text needs amending.
+2. `invitations` spec, "Enumeration Lockout Is IP+Device Scoped, Not
+   Per-Invitation" and design D-6's `invite:{ip}:{deviceHash}`: the key is now
+   the address alone. The device leg was client-supplied, which made the whole
+   threshold bypassable. Spec and design text need amending.
+3. Test harness: `xffTransport` overwrote every caller-set `X-Forwarded-For`, so
+   no integration test ever exercised two genuinely distinct client addresses.
+   It now only fills the header in when absent. This repaired an assertion the
+   old lockout test could not make.
+4. `TestInvitation_AcceptCreatesOrLinksAnAccount` scenario 2 encoded the
+   vulnerable behaviour (any policy-valid password linked an existing account).
+   Rewritten to assert the fixed behaviour. No test was weakened or deleted.
+
+---
+
+## Correction round 2 — adversarial review lineage `review-e72754dc7521b57a`
+
+Branch `feature/m1-communities-pr5-turnstile`. Four of five findings fixed.
+`R1-mandatory-totp-gate-is-only-an-enrollment-flag` was explicitly excluded from
+this round: it is being handled as separate work with its own design, and its
+KNOWN INCOMPLETE note in `authz/resolve.go` and on task 7.14 is untouched.
+
+Strict TDD: every fix has a behavioural RED observed against the unfixed code
+with the route still registered.
+
+### C2.1 `R4-authz-resolves-from-read-replica-no-read-your-writes`
+
+- Defect: `serve.go` wired the scoped resolvers' `Querier` to `handlesDB.Read`
+  while every membership write commits on the primary and hands the caller a
+  session in the same response, so replication lag rendered a just-granted
+  membership as `ErrNoMembership` → 404, indistinguishable from a foreign
+  resource.
+- Fix: new `authz.ResolverDBTX(db.Handles) db.DBTX` returning `h.Write`, plus
+  `authz.ConfigureFromHandles` as the single `Configure` call site. `serve.go`
+  and the HTTP integration harness both go through it.
+- Test: `internal/authz/wiring_test.go` —
+  `TestResolverDBTX_IsThePrimaryNeverTheReadReplica` and
+  `TestConfigureFromHandles_InstallsTheQuerier`.
+- RED observed (defect preserved verbatim in the extracted function):
+  `authz resolvers are wired to the READ REPLICA: a membership just granted on
+  the primary is invisible to the very next authorization decision`.
+- Honest limitation: this is a wiring assertion, not a simulated replica lag.
+  The integration harness runs a single Postgres whose `Read` and `Write`
+  handles share one DSN, so a genuine lag test needs a second migrated database
+  built in the container; that was judged not worth ~60 of this round's budget
+  for a one-line production defect. `TestConfigureFromHandles_InstallsTheQuerier`
+  guards the companion failure mode (a wiring function that installs nothing).
+
+### C2.2 `R1-accept-invitation-bypasses-login-lockout`
+
+- Defect: the (correct) password check added in round 1 routed its failures
+  through the invitation enumeration counter only. That counter is per-address,
+  has no escalating block and sends no victim alert, so accept-invitation was an
+  unauthenticated password-guessing oracle against any chosen account, replayable
+  because a wrong password rolls the accept back and leaves the invitation
+  pending.
+- Fix (`handlers/invitations.go`): the linking branch now consults
+  `d.Lockout.IsLocked(email, ip)` before verifying and calls
+  `d.Lockout.RecordFailure(email, ip, true)` on a mismatch — the same service,
+  keys, escalation and alert `/v1/auth/login` uses. The invitation counter stays:
+  the two protect different things.
+- Test: `TestInvitation_AcceptWrongPasswordLocksTheAccountLikeLogin`
+  (`internal/http/api/invitation_test.go`). Five wrong passwords replaying one
+  short code, then a login with the CORRECT password from a DIFFERENT client
+  address (so the assertion is on the email leg, not the attacker's own IP
+  budget), then an accept with the correct password.
+- RED observed: `expected login with the CORRECT password to be locked out (429)
+  after 5 wrong passwords through accept-invitation, got 200 body=map[... access_token:eyJ...]`
+  — the victim's session was issued as normal.
+
+### C2.3 `R1-plaintext-short-code-persisted-in-job-row`
+
+- Defect: `EmailArgs.ShortCode` crossed into the River job payload in plaintext,
+  so every pending and retained-completed `river_job` row held a directly usable
+  invitation credential for anyone with SELECT on that table, a backup or a
+  replica — defeating `invitations.short_code_hash`.
+- Fix: the seal is applied at the exact boundary where an in-memory port value
+  becomes a durable row. `internal/platform/queue`'s `invitationEmailJobArgs` is
+  now its own shape carrying `short_code_encrypted []byte`, sealed by
+  `RiverInvitationQueue` with `mfa.EncryptSecret` (AES-256-GCM, `v1:` prefix,
+  `ENCRYPTION_KEY`) and opened by `InvitationEmailWorker` at send time. The
+  domain port keeps the plaintext field because it never reaches a row.
+- Consequence: `queue.NewClient` takes the key, and `ENCRYPTION_KEY` is now a
+  `CommandWorker` config requirement — a worker without it can never dispatch an
+  invitation, so it fails at boot instead of one retry-forever job at a time.
+  `docker-compose.yml` needs no change: `worker` merges the `x-app-image` anchor
+  and therefore the same `env_file`.
+- Tests: `TestInvitation_JobRowNeverPersistsThePlaintextShortCode` (negative:
+  the persisted row; positive: the stored bytes open to exactly the issued code,
+  so simply dropping the field cannot pass) and, in package `queue`,
+  `TestInvitationEmailWorker_OpensTheSealedShortCodeBeforeSending` /
+  `TestInvitationEmailWorker_RefusesAnUnopenablePayload`.
+- RED observed: `the persisted river_job row holds the plaintext short code, a
+  directly usable credential: {"Email":...,"ShortCode":"…"}`. Worker side, with
+  the decrypt gutted: `expected the invitation email to carry the opened short
+  code "K7M2P9QZ", got body: … v1:HuOvuYiuG5g0GGT44+Jgz…`.
+
+### C2.4 `R4-captcha-hard-dependency-no-degradation`
+
+Three separable defects, three deliberate decisions:
+
+1. Boot: `TURNSTILE_SECRET` is now `unlessDevelopment` in `CommandServe`'s
+   requirement set. An empty secret is never valid at Cloudflare, so leaving it
+   optional turned a forgotten variable into 100% of forgot-password answering
+   `AUTH_CAPTCHA_REQUIRED` at run time with no boot signal. Development is exempt
+   for the same reason `PROXY_IP` is. Side effect, accepted: `CommandMigrate` is
+   a superset of `CommandServe` (because `serve --migrate` reuses it), so
+   standalone `migrate` now also requires the variable it does not use —
+   consistent with `JWT_SECRET`/`SMTP_URL`, which it already required.
+2. Timeout: `Turnstile.Verify` now bounds the REQUEST CONTEXT at `verifyTimeout`
+   = 2s (down from a 5s client-only timeout), so an injected `http.Client` with
+   no `Timeout` of its own is bounded too. Deliberately short: during an outage
+   each call holds a request slot on an endpoint that is already a
+   credential-stuffing target.
+3. Degradation — the decision, stated explicitly: **forgot-password fails OPEN
+   on an unreachable verifier; login stays fail-CLOSED.** A verifier error means
+   the service is unreachable, categorically different from it rejecting a token.
+   Denying password recovery to every user for the duration of a third-party
+   outage is a worse outcome than letting recovery through, because the per-IP
+   rate limit wraps the whole group before the handler runs and is entirely
+   independent of Turnstile, and the response is enumeration-safe either way. A
+   caller already past `captchaAfterFailures` login failures is the exact
+   credential-stuffing shape the check exists for and has a remedy the
+   locked-out user does not — waiting out the window — so login does not
+   degrade. Mechanism: a new `Deps.CaptchaOutages` `AttemptCounter` (same seam
+   as every other counter) records transport failures; three within 60s also
+   admits TOKENLESS forgot-password requests, which an outage necessarily
+   produces because the widget itself is down.
+- Tests: `TestLoad_TurnstileSecretRequiredUnlessDevelopment` (+ a
+  `serve missing TURNSTILE_SECRET` and a `worker missing ENCRYPTION_KEY` case in
+  the per-subcommand table), `TestTurnstile_HungSiteverifyIsBoundedEvenWithATimeoutlessClient`,
+  `TestPublicForm_ForgotPasswordDegradesOpenDuringAVerifierOutage`, and
+  `TestPublicForm_LoginStaysFailClosedDuringAVerifierOutage` as the control that
+  the degradation did not leak into login.
+- RED observed: `expected TURNSTILE_SECRET to be required under APP_ENV=staging,
+  got: <nil>`; `expected the verification call to be bounded well below the hang
+  of 6s, it took 6.005884913s`; `expected forgot-password to degrade open while
+  the verifier is unreachable, got 500 body=map[code:INTERNAL_ERROR ...]`.
+
+### Verification
+
+- `cd api && go test -race ./...` → **385 passed, 0 failed** (371 before this
+  round; +14 from the nine new tests and their subtests).
+- `gofumpt -l .` → clean. `golangci-lint run ./...` → `0 issues.`
+- `make gen` run twice → no generated artifact changed.
+- Migrations: **none added.** No schema change was needed; `00009` remains the
+  highest applied version and nothing under `api/migrations/` was touched.
+- Changed lines: 694 added + 40 deleted = **734**, against a 200-line budget.
+  Of the additions, 351 are code, 283 comment (house style in these files) and
+  60 blank. Reported, not compressed: no comment, test or blank line was removed
+  to approach the number.
+- Rollback boundary: the single commit on
+  `feature/m1-communities-pr5-turnstile`. Reverting it restores the
+  pre-correction behaviour and removes no other work.
+
+### Deviations and follow-ups recorded
+
+1. `public-form-protection` spec, "Turnstile Always Required On Forgot-Password":
+   no longer literally always — an unreachable verifier is now a degraded pass.
+   The spec text needs a degradation clause.
+2. `CommandWorker`'s documented "zero new required config" contract now includes
+   `ENCRYPTION_KEY`. `worker.go`'s own comment is updated in place.
+3. Existing `river_job` rows enqueued before this change still hold plaintext
+   short codes and would fail to decode; the queue is empty at this milestone,
+   but a deployment carrying pending invitation jobs must purge them.
+4. C2.1's test is a wiring assertion, not a replication-lag simulation (see
+   above). A genuine lag test remains open work.
+
+## Correction round 3 — closing `R1-mandatory-totp-gate-is-only-an-enrollment-flag`
+
+**Status**: the one finding correction round 2 deliberately left open is CLOSED.
+Its own work unit, its own design, on `feature/m1-communities-pr5-turnstile`.
+
+**Branch**: `feature/m1-communities-pr5-turnstile`. Not merged, not pushed —
+delivery is the user's decision.
+
+### The defect
+
+`requireMFAForAdminRoles` (`api/internal/authz/resolve.go`) read
+`IsUserMFAEnabled`, a DURABLE PER-ACCOUNT flag, so it could not enforce a
+per-session requirement. Its own KNOWN INCOMPLETE comment named both bypasses:
+a password-only session satisfied the gate whenever the victim had ever
+enrolled, and where the victim had not, the ungated `/v1/me/mfa/enroll` +
+`/v1/me/mfa/verify` pair let that same session enroll a fresh factor and pass.
+PRD §10.1 requires 2FA for admins, so this was a milestone gate failure.
+
+### The fix: the gate moved from an account flag to a per-session fact
+
+Both bypasses close at once. An attacker holding only a password can still
+enroll a factor, but the session they already hold keeps `mfa=false`, so it buys
+them nothing — while the legitimate admin keeps the bootstrap path they need in
+order to enroll at all.
+
+| Piece | Where |
+|---|---|
+| Migration `00010_sessions_mfa.sql` — `sessions.mfa_at timestamptz`, nullable, NO default | `api/migrations/schema/` |
+| `Claims.MFA` + `IssueAccess(..., mfaAuthenticated bool)` | `api/internal/domain/auth/token/access.go` |
+| Login TOTP challenge through the existing `mfa.ThrottledVerify`/`mfa.VerifyTOTP` path | `api/internal/http/handlers/auth_login.go` |
+| `issueSession` stamps the fact on the row AND the token | `api/internal/http/handlers/auth_login.go` |
+| Superadmin login passes `true` (it cannot reach that line without a code) | `api/internal/http/handlers/auth_superadmin.go` |
+| Accept-invitation passes `false` (it proves a password, never a factor) | `api/internal/http/handlers/invitations.go` |
+| Rotation carries `mfa_at` forward and reports it | `api/internal/domain/auth/session/rotate.go` |
+| Refresh reissues with the preserved fact | `api/internal/http/handlers/auth_refresh.go` |
+| Bearer middleware publishes the verified claim into the request context | `api/internal/http/api/api.go` |
+| `ContextWithMFAAuthenticated` / `MFAAuthenticatedFromContext` (fail-closed) | `api/internal/authz/context.go` |
+| The gate itself; `ErrMFAEnrollmentRequired` vs `ErrMFAAuthenticationRequired` | `api/internal/authz/resolve.go` |
+| `AUTH_MFA_REQUIRED` (403) rendered distinctly from `AUTH_MFA_ENROLLMENT_REQUIRED` | `api/internal/authz/scoped/register.go`, `api/internal/http/apperr/apperr.go` |
+| `LoginRequest.totp_code` (+ regenerated openapi/TS/Zod) | `api/internal/http/dto/auth.go` |
+
+The account query survives for exactly one purpose: telling the two failure
+modes apart. No factor at all → enroll (403 `AUTH_MFA_ENROLLMENT_REQUIRED`).
+Factor present, session never used it → log in again with a code (403
+`AUTH_MFA_REQUIRED`). Two different client flows; a client that cannot tell them
+apart sends a user with an authenticator app to an enrollment screen that
+refuses them with a 409.
+
+### TDD Cycle Evidence
+
+| # | Test | RED (observed) | GREEN |
+|---|---|---|---|
+| 1 | `TestMFAGate_AdminWithEnrolledFactorRejectedWithoutTOTPCode` | Natural, against the unfixed code: `expected 403: an account with an ACTIVE second factor must not authenticate on a password alone, got 200 body=...access_token:eyJ...` | passes |
+| 2 | `TestMFAGate_AdminLoginWithValidCodeReachesAdminScopedRoute` | Natural: `expected 200: a valid TOTP code must complete the login, got 422 ... location:body.totp_code message:unexpected property` | passes |
+| 3 | `TestMFAGate_PasswordOnlySessionCannotEnrollItsWayPastTheGate` (the bypass-2 regression) | Natural: `expected 403: a session that authenticated on a PASSWORD ALONE must not reach an admin-scoped route by enrolling a second factor after the fact, got 200 body=...name:Bypass Community` — the unfixed code CREATED the community | passes |
+| 4 | `TestMFAGate_RefreshPreservesSecondFactorFact` | Natural at the login leg (422); then break-induced on the refresh leg by setting `MfaAt: pgtype.Timestamptz{}` in `Rotator.Rotate`: `expected a REFRESHED second-factor-authenticated session to still reach an admin-scoped route, got 403 body=map[code:AUTH_MFA_REQUIRED ...]` | passes |
+| 5 | `TestMFAGate_OwnerWithNoFactorIsUnaffected` | Regression guard — green before AND after by design. Gut-checked by breaking the no-factor branch of `challengeTOTP` so every account is challenged: `expected 200: an owner with no second factor must still log in on a password alone, got 403 body=map[code:AUTH_MFA_REQUIRED ...]` | passes |
+| 6 | `TestSchemaSet_SessionsMFAUpgradePathLeavesExistingSessionsUnelevated` | Break-induced by changing the migration to `ADD COLUMN mfa_at timestamptz DEFAULT now()`: `expected the pre-upgrade session to read as NOT second-factor authenticated (mfa_at IS NULL), got 2026-09-17 17:05:29 ... the migration just elevated every session that existed before it` | passes |
+| 7 | `TestCommunity_AdminEnrolledButSessionNotSecondFactorAuthenticatedRejected` (resolver-level twin of #3) | The pre-fix gate returned nil for this exact input (account flag true), so it could not have failed; it fails against a gate that ignores the session fact | passes |
+| 8 | `TestIssueAccess_CarriesMFAClaimBothWays`, `TestVerifyAccess_TokenWithoutMFAClaimDecodesAsNotAuthenticated` | The claim did not exist | passes |
+
+### Existing tests corrected, never loosened
+
+- `TestMFA_AdminWithoutTOTPBlockedFromAdminScopedRoute` asserted bypass 2 as an
+  EXPECTED RESULT ("after enrolling, the identical caller succeeds"). Its tail
+  now asserts that the pre-enrollment session stays blocked with the changed
+  code, and that a real login carrying a real code opens the route.
+- `mintAccessToken` (the shared harness) now DERIVES the minted session's
+  second-factor fact from the account's own factor — exactly what login now
+  produces for that account — instead of taking a parameter a caller could get
+  wrong. Every `seedOfficeWithAdmin` admin keeps working because Phase 7 already
+  seeds them an active factor. The gate's own tests deliberately do not use this
+  helper: they drive the real login endpoint, because a helper that decided the
+  fact under test would prove nothing.
+- Four `internal/authz/scoped` positive-path admin tests now build their context
+  with `adminSessionContext` (user id + second-factor fact), the shape a real
+  admin request arrives with. The gate was not weakened to accommodate them.
+
+### Verification
+
+- `cd api && go test -race ./...` → **394 passed, 0 failed** in 39 packages (385 before; +9).
+- `gofumpt -l .` → clean. `golangci-lint run ./...` → **0 issues**. `make lint-scope` → OK.
+- `make gen` → ran; second run changed no generated artifact (sha256-compared).
+- `pnpm --filter app test` → 40 passed / 10 suites.
+
+### Deployment
+
+**No new required configuration variable.** The code travels in the login body,
+not the environment, so nothing here can stop the stack from booting. What it
+does bring is migration `00010` and a deliberate session cut for admins —
+documented in `docs/pendientes-despliegue.md` ("Migración 00010 y el 2FA
+obligatorio de admin — SIN variable nueva"), including the fact that the app has
+no TOTP input field yet.
+
+### Size
+
+~993 added + 79 deleted ≈ 1072 changed lines, of which ~460 are the two new test
+files and much of the rest is this codebase's dense comment style. The session
+explicitly waived the line budget for this work ("No line budget: correctness and
+honest tests come first"). Nothing was compressed, and no test was dropped, to
+approach a number: a `size:exception` is the honest classification.
+
+---
+
+## Correction round 5 — review lineage `review-f855997b550a986d`
+
+Seven findings, and **five of them were defects in round 4's own corrections**.
+That pattern is the finding underneath the findings: round 4 moved password work
+out of the transaction and it ended up running before any validity check; round 4
+made the captcha degradation reachable and it became globally poisonable; round 4
+wired the real mailer and the job then completed before delivery was attempted.
+
+Four of the seven landed in one function. `AcceptInvitation` had accumulated
+account lockout, invitation enumeration lockout, password policy, a network
+breach check, Argon2id, invitation validity, single-use enforcement, membership
+creation, session minting and now a second-factor concern — and every round
+reordered those pieces and broke an invariant somewhere else.
+
+**So this round did not write a seventh set of patches.** Two mechanisms were
+restructured and one was deleted.
+
+### C5.1 — `AcceptInvitation`: the ordering invariant, written down and enforced
+
+Closes `R1-accept-invitation-runs-argon2id-before-any-validity-check` and
+`R3-accept-invitation-status-checked-only-after-credential-work`, which are one
+root seen from two sides.
+
+The handler now carries a four-step ordering invariant as a doc comment, naming
+what each past inversion cost so the next person reordering it knows what they
+are breaking:
+
+1. **Establish the invitation is usable** — resolve, then `invitationUsable`
+   (pending, unexpired, not revoked, not consumed). Nothing expensive precedes it.
+2. **Throttle** — the IP enumeration counter, then the invited address's account
+   lockout (which needs the email step 1 resolved).
+3. **Only then the credential work** — password policy (HIBP), `password.Verify`
+   / `password.Hash`, the second-factor challenge.
+4. **Then the transaction**, holding the writes and nothing else.
+
+`invitationUsable` existed and was never called from accept. Rather than add the
+one call, preview's and accept's shared first leg became ONE function,
+`resolveUsableInvitation` — because the divergence between the two handlers is
+exactly what two consecutive rounds found, and a shared gate cannot diverge by
+editing one handler. A resolved-but-dead invitation now also advances the
+enumeration counter, since it answers the same generic 404 an unresolvable secret
+does and must therefore cost the same budget.
+
+Findings 2 and 3 are now structurally impossible rather than fixed: there is no
+ordering of the function in which credential work precedes the gate, because the
+gate returns the value every later step consumes.
+
+### C5.2 — accept-invitation challenges the second factor, exactly like login
+
+Closes `R1-accept-invitation-mints-a-session-without-the-totp-challenge`.
+
+Accept's linking branch now runs the SAME `challengeTOTP` that guards
+`POST /v1/auth/login`, and `issueSession` receives what that challenge
+established instead of a hardcoded `false`. It also refuses a superadmin account
+outright with the same enumeration-safe 401 login returns, because
+`auth_refresh.go` re-derives the superadmin claim from the users row, so one
+rotation of a session minted here would have handed back a superadmin token that
+never passed the code-gated superadmin route.
+
+`AcceptInvitationRequest` gained `totp_code`; `make gen` re-ran and is idempotent.
+
+### C5.3 — the captcha degradation is REMOVED, and forgot-password fails closed
+
+Closes `R3-captcha-outage-trigger-is-global-and-caller-influenceable` and
+`R4-captcha-degraded-window-accepts-actively-rejected-tokens`.
+
+**Design decision, and it is a removal.** Three implementations of degrade-open
+were reviewed and all three were wrong, in three different ways: the first could
+not engage in the outage shape it existed for; the second keyed on a
+process-global counter fed by two endpoints, so the caller that observed a
+failure and the caller that benefited were different callers; the third still
+decided on that counter rather than on the request's own verdict, so an open
+window also admitted tokens a reachable siteverify had explicitly REFUSED. None
+of it was observable: the counter error was discarded, the degraded response was
+byte-identical to the protected one, and no operator could tell that public-form
+protection had switched itself off.
+
+A keyed-on-own-outcome version (`if cerr != nil { degrade }`) would have been
+correct today. It was still rejected: a mechanism that turns a security control
+off precisely when an attacker may be arranging the condition is the wrong shape
+regardless of which bug you have just removed from it.
+
+- Deleted: `captchaOutageThreshold/Window/Key`, `recordCaptchaOutage`,
+  `captchaUnavailable`, the `Deps.CaptchaOutages` field and its wiring.
+- `ForgotPassword` refuses on `cerr != nil || !ok`, like login.
+- `verifyCaptcha`'s empty-token short-circuit is RESTORED. Round 4 removed it so
+  tokenless requests would feed the outage counter; with no counter its only
+  remaining effect would be to let any caller make this server issue an outbound
+  HTTPS request per request on two unauthenticated endpoints, to reach a refusal
+  the empty string already decides.
+- **Cost, stated:** during a genuine Cloudflare outage, password recovery is
+  unavailable for the outage's duration. What bounds abuse meanwhile is what
+  always did and never depended on Turnstile — `limiter.LoginReset`'s per-IP
+  budget, which wraps the whole group before the handler runs.
+
+### C5.4 — resend re-issues the code, and actually dispatches
+
+Closes `R3-resend-invitation-dispatches-nothing`.
+
+**Design decision.** Resend could not redeliver: only one-way digests are
+persisted (`short_code_hash` is an HMAC-SHA-256 under `ENCRYPTION_KEY`), so the
+plaintext the email renders does not exist at resend time. Two options:
+
+- *Persist a recoverable copy, sealed.* **Rejected.** `hashInviteShortCode`'s own
+  reasoning names the adversary holding this table and says the defence is that a
+  dump contains no usable credential. A decryptable copy of every pending code,
+  in that same table, for fourteen days, gives that adversary back exactly what
+  the digest denies them — unlike the job row, which is transient and only holds
+  codes in flight.
+- *Re-issue on resend, invalidating the previous code.* **Chosen.** It keeps
+  "only one-way digests are persisted" literally true, costs one `UPDATE`, and
+  matches every other credential redelivery here: a forgotten password does not
+  re-send the old reset token, it mints a new one.
+
+`RotateInvitationShortCode` (new sqlc query) rotates the digest and increments
+`sent_count` in one pending-only, tenant-scoped statement, replacing
+`IncrementInvitationSentCount`, which is deleted — it was the statement that
+recorded sends that never happened. The email job is enqueued on the SAME
+transaction (`river.InsertTx`), so the row can never carry a new code whose email
+was never queued. `ResendInvitationResponse` returns the new plaintext once, so
+design D-6's paper/voice delivery path still works.
+
+*Cost, stated:* a neighbour holding the first code on paper finds it stops
+working the moment an administrator resends. That is the honest reading of a
+resend. The opaque token is NOT rotated — the email carries the short code, so
+the token is a channel this endpoint does not redeliver; revoke, not resend, is
+how a leaked invitation is killed.
+
+### C5.5 — the invitation email job no longer completes before delivery
+
+Closes `R4-invitation-email-job-completed-before-delivery-is-attempted`.
+
+`AsyncMailer.SendRaw` returns nil when the bounded pool accepts the message,
+which is right for a request handler (SMTP latency on a response is an
+account-existence timing oracle, D-N) and wrong for a River worker, whose return
+value is what marks the job row completed.
+
+- `AsyncMailer.SendRawSync` performs the whole SMTP transaction and reports it,
+  bounded on the caller's context capped at `sendTimeout` — River cancels it on
+  shutdown, which fails the job and leaves it to be retried rather than lost.
+- `mail.Sync` is that same mailer with `SendRaw` carrying the synchronous
+  contract; `buildWorkerMailer` returns it.
+- `sendNow` is now the single SMTP implementation both contracts share.
+- `queue.RawSender` states the contract explicitly, including that
+  `*mail.AsyncMailer` satisfies it structurally and violates it semantically.
+- `runWorker`'s drain comment is corrected: no invitation job leaves anything in
+  that pool any more.
+
+### TDD Cycle Evidence
+
+| # | Finding | RED (assertion seen failing) | GREEN |
+|---|---|---|---|
+| C5.1 | argon2id / status-after-credential-work | `TestInvitation_AcceptDoesNoCredentialWorkForADeadInvitation` — `expected a revoked invitation to be refused 404 BEFORE any password work runs, got 422 body=map[code:AUTH_PASSWORD_TOO_SHORT_NO_MFA ...]` | pass |
+| C5.2 | TOTP bypass on accept | `TestInvitation_AcceptChallengesTheSecondFactorExactlyLikeLogin` — `expected accept-invitation to refuse a password-only accept ..., got 200 body=map[... "mfa":false ...]` | pass |
+| C5.3a | global/poisonable outage trigger | `TestPublicForm_ForgotPasswordStaysClosedThroughAVerifierOutage` — `round 2: expected forgot-password to stay fail-closed while the verifier is unreachable, got 200 accepted:true` | pass |
+| C5.3b | degraded window accepts rejected tokens | `TestPublicForm_ForgotPasswordNeverAcceptsAnActivelyRejectedToken` — `expected a token the verifier REACHED and REJECTED to be refused regardless of any earlier transport failure, got 200 accepted:true` | pass |
+| C5.4 | resend dispatches nothing | `TestInvitation_ResendRotatesTheCodeAndActuallyDispatches` — `expected resend to enqueue exactly one invitation_email job ... before=1 after=1` | pass |
+| C5.5 | job completed before delivery | `TestSync_SendRaw_ReportsDeliveryFailureToTheCaller` / `TestSync_SendRaw_DeliversBeforeReturning` — `expected the synchronous sender to report an undeliverable message as an error` / `expected the message to have been delivered before SendRaw returned, got 0 message(s)`; plus `TestWorker_DispatchesThroughARealSMTPSenderNotALogSink` — `got *mail.AsyncMailer` | pass |
+
+Every RED above is behavioural: the route was registered, the production logic
+was the one under test, and the failure landed on the assertion naming the
+scenario. C5.5's RED used a deliberate scaffold (`type Sync struct{ *AsyncMailer }`
+with no override, i.e. the defect itself) so the failure was observed on the
+assertion rather than on a compile error.
+
+### Two tests that asserted a vulnerability as correct behaviour
+
+- `TestPublicForm_ForgotPasswordDegradesOpenDuringAVerifierOutage` and
+  `TestPublicForm_ForgotPasswordDegradesOpenWhenClientsHoldNoTokenAtAll` asserted
+  that a verifier outage opens forgot-password for every caller — the finding,
+  written down as expected behaviour. Both are replaced by their inverses.
+- `TestWorker_DispatchesThroughARealSMTPSenderNotALogSink` required
+  `*mail.AsyncMailer` specifically, i.e. required the hand-off semantics that
+  complete the job before delivery. It now requires `mail.Sync`.
+
+### Verification
+
+- `cd api && go test -race ./...` → **all 39 packages `ok`, 0 failures**.
+- `gofumpt -l .` → clean. `golangci-lint run ./...` → **0 issues**.
+  `make lint-scope` → OK.
+- `make gen` → ran; a second run changed no generated artifact (md5-compared).
+- `pnpm --filter app test` → 40 passed / 10 suites.
+- `pnpm run lint` → **environmental failure, pre-existing**: the turbo lint task
+  dies with "Linter process terminated abnormally (possibly out of memory)".
+  Confirmed identical on the unmodified base (`git stash` + re-run), so it is not
+  caused by this work.
+
+### Migrations and configuration
+
+**No migration** (`00011` remains free) and **no new configuration variable**.
+`ENCRYPTION_KEY`, already required for `serve` and `worker`, keys the rotated
+short code's HMAC exactly as before.
+
+### Where this round most likely opened the next defect
+
+Stated in the same spirit the previous rounds should have been:
+
+1. **`ResendInvitation` now hands an admin a fresh plaintext code on demand.**
+   Before, the plaintext existed only in the creation response. An
+   admin/admin_staff can now refresh the code of an invitation they did not
+   create, repeatedly, within their own community. It adds no privilege they did
+   not have (they can create an invitation for any address), and the accept path
+   now demands the target account's password AND its second factor — but this is
+   the first place to look.
+2. **`resolveUsableInvitation` advances the IP enumeration counter on the
+   dead-invitation path for PREVIEW too**, which it did not before. A legitimate
+   user clicking an expired link repeatedly, or several users behind one NAT,
+   burn a shared 10-per-15-minute budget faster than they used to.
+3. **Rotation races an in-flight accept**: a resend while a neighbour is typing
+   their code turns their accept into a 404. Deliberate, documented, still a
+   behaviour change a user can hit.
+4. **The public invitation routes are still registered outside the rate-limited
+   login group** (`RegisterInvitationsPublic` on the bare API). The restructure
+   removed the expensive work these routes could be made to do, which was the
+   finding; it did not add the per-IP budget the other public auth routes have.
+   Left alone deliberately — `limiter.LoginReset`'s 10/min would collide with the
+   enumeration lockout's own threshold of 10/15min — but it remains a real gap.
+5. **`mail.Sync` still starts and holds the async pool** (four idle goroutines in
+   the worker) because it embeds `*AsyncMailer` for `Close`. Harmless, and
+   untidy.
+
+### Size
+
+~1067 authored changed lines (1155 total minus ~88 generated), of which ~456 are
+tests and a large share of the rest is this codebase's dense comment style — the
+ordering invariant and the two design decisions are written out where the next
+reader will hit them. The session's stated budget was 200 lines with
+"correctness wins": a restructure of `AcceptInvitation`, the removal of a whole
+mechanism and a second mailer contract do not fit it. `size:exception` is the
+honest classification. Nothing was compressed and no test was dropped to
+approach a number.

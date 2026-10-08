@@ -105,8 +105,16 @@ func (i *ResendInvitationInput) ScopeInvitationID() uuid.UUID {
 	return id
 }
 
+// ResendInvitationResponse carries the NEWLY ISSUED short code as well as
+// the send counter. Resend re-issues the code (see ResendInvitation for why
+// it cannot redeliver the old one), which means the caller who triggered the
+// resend is also the last holder of the plaintext for the paper/voice
+// delivery path design D-6 documents -- so it is returned here exactly as
+// creation returns it, one time, and no later read of the invitation returns
+// it again.
 type ResendInvitationResponse struct {
-	SentCount int32 `json:"sent_count"`
+	SentCount int32  `json:"sent_count"`
+	ShortCode string `json:"short_code"`
 }
 
 type ResendInvitationOutput struct {
@@ -178,6 +186,15 @@ type AcceptInvitationRequest struct {
 	Password  string `json:"password" minLength:"12"`
 	Phone     string `json:"phone,omitempty" maxLength:"32"`
 	Consent   bool   `json:"consent"`
+
+	// TOTPCode is REQUIRED when, and only when, the invited address
+	// already belongs to an account with an ACTIVE second factor. Accept
+	// mints a full session, so it runs the same challenge
+	// POST /v1/auth/login does and returns the same 403 AUTH_MFA_REQUIRED
+	// when the code is missing -- otherwise the two session-minting routes
+	// disagree and the one that does not ask becomes the way in
+	// (review lineage review-f855997b550a986d).
+	TOTPCode string `json:"totp_code,omitempty" doc:"Required only when the invited address already has an account with an active TOTP factor; a 403 AUTH_MFA_REQUIRED response means the account needs one."`
 
 	DeviceName string `json:"device_name,omitempty" maxLength:"255"`
 	Platform   string `json:"platform" enum:"ios,android,web"`

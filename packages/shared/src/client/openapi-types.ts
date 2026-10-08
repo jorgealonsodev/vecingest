@@ -368,6 +368,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/me/mfa/enroll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start TOTP enrollment for the caller's own account */
+        post: operations["enrollMFA"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/mfa/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Verify a TOTP code -- completes enrollment on the first call, an ordinary check afterward */
+        post: operations["verifyMFA"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/me/sessions": {
         parameters: {
             query?: never;
@@ -492,6 +526,8 @@ export interface components {
             platform: "ios" | "android" | "web";
             short_code?: string;
             token?: string;
+            /** @description Required only when the invited address already has an account with an active TOTP factor; a 403 AUTH_MFA_REQUIRED response means the account needs one. */
+            totp_code?: string;
         };
         AddOfficeMemberRequest: {
             /**
@@ -741,6 +777,7 @@ export interface components {
             readonly $schema?: string;
             /** Format: email */
             email: string;
+            turnstile_token?: string;
         };
         ForgotPasswordResponse: {
             /**
@@ -852,6 +889,9 @@ export interface components {
              * @enum {string}
              */
             platform: "ios" | "android" | "web";
+            /** @description Required only for accounts with an active TOTP factor; a 403 AUTH_MFA_REQUIRED response means the account needs one. */
+            totp_code?: string;
+            turnstile_token?: string;
         };
         LoginResponse: {
             /**
@@ -870,6 +910,39 @@ export interface components {
             expires_in: number;
             /** @description Present only on the body (native) transport. */
             refresh_token?: string;
+        };
+        MFAEnrollResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/MFAEnrollResponse.json
+             */
+            readonly $schema?: string;
+            /** @description otpauth:// URI an authenticator app can scan as a QR code. */
+            provisioning_uri: string;
+            /** @description Base32-encoded TOTP secret, for manual entry into an authenticator app. */
+            secret: string;
+        };
+        MFAVerifyRequest: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/MFAVerifyRequest.json
+             */
+            readonly $schema?: string;
+            /** @description 6-digit TOTP code. */
+            code: string;
+        };
+        MFAVerifyResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/MFAVerifyResponse.json
+             */
+            readonly $schema?: string;
+            active: boolean;
+            /** @description Present only on the call that activates TOTP for the first time. Shown exactly once; store them safely. */
+            recovery_codes?: string[] | null;
         };
         MeResponse: {
             /**
@@ -964,6 +1037,7 @@ export interface components {
             readonly $schema?: string;
             /** Format: int32 */
             sent_count: number;
+            short_code: string;
         };
         ResetPasswordRequest: {
             /**
@@ -1923,6 +1997,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MeResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    enrollMFA: {
+        parameters: {
+            query?: never;
+            header?: {
+                Authorization?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MFAEnrollResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    verifyMFA: {
+        parameters: {
+            query?: never;
+            header?: {
+                Authorization?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MFAVerifyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MFAVerifyResponse"];
                 };
             };
             /** @description Error */

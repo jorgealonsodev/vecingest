@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -36,6 +37,18 @@ type fakeQuerier struct {
 	// GetInvitationCommunityID (design D-4: the {invitationId} route
 	// shape resolves via invitations.community_id).
 	invitationCommunities map[uuid.UUID]uuid.UUID
+	// mfaDisabledUsers marks which user ids IsUserMFAEnabled must report
+	// as NOT enabled (auth-mfa-totp delta: Mandatory TOTP For Admin And
+	// Admin_staff Scope Access). Every user id absent from this set
+	// defaults to enabled=true, so every test written before this gate
+	// existed keeps resolving exactly as it did.
+	mfaDisabledUsers map[uuid.UUID]bool
+}
+
+// IsUserMFAEnabled defaults to true (enabled) for any user id not
+// explicitly listed in mfaDisabledUsers -- see that field's doc comment.
+func (f *fakeQuerier) IsUserMFAEnabled(_ context.Context, userID uuid.UUID) (bool, error) {
+	return !f.mfaDisabledUsers[userID], nil
 }
 
 func (f *fakeQuerier) GetUnitCommunityID(_ context.Context, unitID uuid.UUID) (uuid.UUID, error) {
@@ -98,6 +111,22 @@ func (f *fakeQuerier) ListUnitMembershipsByUserID(_ context.Context, userID uuid
 		}
 	}
 	return rows, nil
+}
+
+// adminSessionContext is the context an ADMIN request actually arrives
+// with in production: the caller's user id plus the second-factor fact
+// the Bearer middleware reads off the access token's mfa claim
+// (api.bearerAuthAndRateLimit). Since the mandatory-TOTP gate became
+// per-session rather than per-account (review lineage
+// review-0e1833930adf141a), a test that gives an admin only a user id is
+// describing a password-only session, which the gate correctly refuses.
+//
+// Fixing the tests here rather than loosening the gate is the point: the
+// callers below are exercising resolution and role checks, not the MFA
+// gate, so they need a session shaped like the one those routes are
+// reached with.
+func adminSessionContext(userID uuid.UUID) context.Context {
+	return authz.ContextWithMFAAuthenticated(authz.ContextWithUserID(context.Background(), userID), true)
 }
 
 func splitKey(k string) [2]string {
@@ -286,7 +315,7 @@ func TestCommunity_AdminScopeDerivedFromOfficeMembers(t *testing.T) {
 	})
 
 	_, r := newCommunityTestAPI(t, []authz.Role{authz.RoleAdmin})
-	ctx := authz.ContextWithUserID(context.Background(), adminUserID)
+	ctx := adminSessionContext(adminUserID)
 	w := doGet(r, ctx, "/v1/communities/"+communityID.String()+"/fixture", nil)
 
 	if w.Code != http.StatusOK {
@@ -294,5 +323,197 @@ func TestCommunity_AdminScopeDerivedFromOfficeMembers(t *testing.T) {
 	}
 	if !containsRole(w.Body.String(), "admin") {
 		t.Fatalf("expected the resolved role to be admin, got body: %s", w.Body.String())
+	}
+}
+
+// officeInput/officeOutput/newOfficeTestAPI mirror the community fixture
+// above, for scoped.Office's own resolver path.
+type officeInput struct {
+	OfficeID string `path:"officeId"`
+}
+
+func (i *officeInput) ScopeOfficeID() uuid.UUID { return uuid.MustParse(i.OfficeID) }
+
+type officeOutput struct {
+	Body struct {
+		Role string `json:"role"`
+	}
+}
+
+func newOfficeTestAPI(t *testing.T, roles []authz.Role) (huma.API, *chi.Mux) {
+	t.Helper()
+	r := chi.NewRouter()
+	api := humachi.New(r, huma.DefaultConfig("test", "0.0.1"))
+
+	scoped.Office[officeInput, officeOutput](api, huma.Operation{
+		OperationID: "getOfficeFixture",
+		Method:      http.MethodGet,
+		Path:        "/v1/offices/{officeId}/fixture",
+	}, roles, func(_ context.Context, _ *officeInput, m authz.Membership) (*officeOutput, error) {
+		out := &officeOutput{}
+		out.Body.Role = safeRole(m)
+		return out, nil
+	})
+
+	return api, r
+}
+
+// auth-mfa-totp delta: Mandatory TOTP For Admin And Admin_staff Scope
+// Access, scenario "Admin without TOTP blocked from admin-scoped
+// route" -- an admin resolved via office_members (the community-scoped
+// office leg) with no active TOTP is rejected with the distinguishable
+// MFA code, never the generic 404 a foreign resource or a plain 403
+// wrong-role rejection would render.
+func TestCommunity_AdminWithoutMFARejected(t *testing.T) {
+	communityID := uuid.New()
+	adminUserID := uuid.New()
+	authz.Configure(&fakeQuerier{
+		communityViaOfficeRoles: map[string]string{key(communityID, adminUserID): string(authz.RoleAdmin)},
+		mfaDisabledUsers:        map[uuid.UUID]bool{adminUserID: true},
+	})
+
+	_, r := newCommunityTestAPI(t, []authz.Role{authz.RoleAdmin})
+	ctx := authz.ContextWithUserID(context.Background(), adminUserID)
+	w := doGet(r, ctx, "/v1/communities/"+communityID.String()+"/fixture", nil)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for an admin without TOTP, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "AUTH_MFA_ENROLLMENT_REQUIRED") {
+		t.Fatalf("expected the distinguishable MFA code, got body: %s", w.Body.String())
+	}
+}
+
+// admin_staff shares the identical gate.
+func TestCommunity_AdminStaffWithoutMFARejected(t *testing.T) {
+	communityID := uuid.New()
+	staffUserID := uuid.New()
+	authz.Configure(&fakeQuerier{
+		communityViaOfficeRoles: map[string]string{key(communityID, staffUserID): string(authz.RoleAdminStaff)},
+		mfaDisabledUsers:        map[uuid.UUID]bool{staffUserID: true},
+	})
+
+	_, r := newCommunityTestAPI(t, []authz.Role{authz.RoleAdmin, authz.RoleAdminStaff})
+	ctx := authz.ContextWithUserID(context.Background(), staffUserID)
+	w := doGet(r, ctx, "/v1/communities/"+communityID.String()+"/fixture", nil)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for admin_staff without TOTP, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "AUTH_MFA_ENROLLMENT_REQUIRED") {
+		t.Fatalf("expected the distinguishable MFA code, got body: %s", w.Body.String())
+	}
+}
+
+// auth-mfa-totp delta scenario "Admin with active TOTP accesses
+// admin-scoped routes normally" -- the sibling positive case for the
+// SAME admin identity as TestCommunity_AdminWithoutMFARejected, proving
+// the gate is TOTP-state-driven, not a blanket admin rejection.
+func TestCommunity_AdminWithMFAAllowed(t *testing.T) {
+	communityID := uuid.New()
+	adminUserID := uuid.New()
+	authz.Configure(&fakeQuerier{
+		communityViaOfficeRoles: map[string]string{key(communityID, adminUserID): string(authz.RoleAdmin)},
+		// mfaDisabledUsers deliberately empty: this admin has active TOTP.
+	})
+
+	_, r := newCommunityTestAPI(t, []authz.Role{authz.RoleAdmin})
+	ctx := adminSessionContext(adminUserID)
+	w := doGet(r, ctx, "/v1/communities/"+communityID.String()+"/fixture", nil)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for an admin with active TOTP, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// The bypass this gate was rewritten to close (review lineage
+// review-0e1833930adf141a, R1-mandatory-totp-gate-is-only-an-enrollment-
+// flag), at the resolver layer: the account HAS an active factor
+// (mfaDisabledUsers is empty, so IsUserMFAEnabled reports true) and the
+// SESSION still never used it. The old gate read only the account flag
+// and let this through, which is exactly how a password-only session
+// could enroll a factor and walk in.
+//
+// The code must be AUTH_MFA_REQUIRED, not AUTH_MFA_ENROLLMENT_REQUIRED:
+// there is nothing left to enroll, the caller has to log in again with
+// a code.
+func TestCommunity_AdminEnrolledButSessionNotSecondFactorAuthenticatedRejected(t *testing.T) {
+	communityID := uuid.New()
+	adminUserID := uuid.New()
+	authz.Configure(&fakeQuerier{
+		communityViaOfficeRoles: map[string]string{key(communityID, adminUserID): string(authz.RoleAdmin)},
+	})
+
+	_, r := newCommunityTestAPI(t, []authz.Role{authz.RoleAdmin})
+	// User id only: a session that authenticated on a password alone.
+	ctx := authz.ContextWithUserID(context.Background(), adminUserID)
+	w := doGet(r, ctx, "/v1/communities/"+communityID.String()+"/fixture", nil)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for an admin whose SESSION never passed a second factor, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "AUTH_MFA_REQUIRED") {
+		t.Fatalf("expected AUTH_MFA_REQUIRED (log in again with a code), got body: %s", w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "AUTH_MFA_ENROLLMENT_REQUIRED") {
+		t.Fatalf("expected NOT the enrollment code: the factor already exists, so an enrollment screen would refuse this caller with a 409; got body: %s", w.Body.String())
+	}
+}
+
+// auth-mfa-totp delta scenario "Owner without TOTP is unaffected" --
+// owner/tenant (resolved via the unit leg) keep TOTP fully optional.
+func TestCommunity_OwnerWithoutMFAUnaffected(t *testing.T) {
+	communityID := uuid.New()
+	ownerUserID := uuid.New()
+	authz.Configure(&fakeQuerier{
+		communityViaUnitRoles: map[string]string{key(communityID, ownerUserID): string(authz.RoleOwner)},
+		mfaDisabledUsers:      map[uuid.UUID]bool{ownerUserID: true},
+	})
+
+	_, r := newCommunityTestAPI(t, []authz.Role{authz.RoleOwner, authz.RoleTenant, authz.RoleAdmin, authz.RoleAdminStaff})
+	ctx := authz.ContextWithUserID(context.Background(), ownerUserID)
+	w := doGet(r, ctx, "/v1/communities/"+communityID.String()+"/fixture", nil)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for an owner with no TOTP (optional for that role), got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// The identical gate applies to scoped.Office's own direct resolution
+// path (GetOfficeMemberByOfficeAndUser), not only the community-via-
+// office leg above.
+func TestOffice_AdminWithoutMFARejected(t *testing.T) {
+	officeID := uuid.New()
+	adminUserID := uuid.New()
+	authz.Configure(&fakeQuerier{
+		officeRoles:      map[string]string{key(officeID, adminUserID): string(authz.RoleAdmin)},
+		mfaDisabledUsers: map[uuid.UUID]bool{adminUserID: true},
+	})
+
+	_, r := newOfficeTestAPI(t, []authz.Role{authz.RoleAdmin})
+	ctx := authz.ContextWithUserID(context.Background(), adminUserID)
+	w := doGet(r, ctx, "/v1/offices/"+officeID.String()+"/fixture", nil)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for an office admin without TOTP, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "AUTH_MFA_ENROLLMENT_REQUIRED") {
+		t.Fatalf("expected the distinguishable MFA code, got body: %s", w.Body.String())
+	}
+}
+
+func TestOffice_AdminWithMFAAllowed(t *testing.T) {
+	officeID := uuid.New()
+	adminUserID := uuid.New()
+	authz.Configure(&fakeQuerier{
+		officeRoles: map[string]string{key(officeID, adminUserID): string(authz.RoleAdmin)},
+	})
+
+	_, r := newOfficeTestAPI(t, []authz.Role{authz.RoleAdmin})
+	ctx := adminSessionContext(adminUserID)
+	w := doGet(r, ctx, "/v1/offices/"+officeID.String()+"/fixture", nil)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for an office admin with active TOTP, got %d: %s", w.Code, w.Body.String())
 	}
 }

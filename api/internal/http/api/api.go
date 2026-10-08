@@ -77,6 +77,7 @@ func Register(hapi huma.API, d *handlers.Deps, registry *health.Registry) {
 	authGroup.UseMiddleware(bearerAuthAndRateLimit(d))
 	handlers.RegisterLogout(authGroup, d)
 	handlers.RegisterMe(authGroup, d)
+	handlers.RegisterMFA(authGroup, d)
 	handlers.RegisterOffices(authGroup, d)
 	handlers.RegisterCommunities(authGroup, d)
 	handlers.RegisterUnits(authGroup, d)
@@ -132,6 +133,12 @@ func bearerAuthAndRateLimit(d *handlers.Deps) func(huma.Context, func(huma.Conte
 		if userID, perr := uuid.Parse(claims.Subject); perr == nil {
 			reqCtx = authz.ContextWithUserID(reqCtx, userID)
 		}
+		// The session's own second-factor fact, published beside the
+		// user id and read by the mandatory-TOTP gate
+		// (authz.requireMFAForAdminRoles). It travels as a verified JWT
+		// claim, so it is exactly as forgeable as the caller's identity
+		// itself -- which is to say, not.
+		reqCtx = authz.ContextWithMFAAuthenticated(reqCtx, claims.MFA)
 		req = req.WithContext(reqCtx)
 		handler := limitMW(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 			next(huma.WithContext(ctx, r.Context()))

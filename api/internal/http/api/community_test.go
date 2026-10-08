@@ -69,6 +69,10 @@ func TestCommunity_CreationRestrictedToAdminScopedToOffice(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("insert office member: %v", err)
 	}
+	// This test's assertion is the ROLE check (admin_staff -> 403 on
+	// create), not the mandatory-TOTP gate -- seed active TOTP so the
+	// 403 observed below is unambiguously the role rejection.
+	seedActiveMFA(t, handlesDB, staffID)
 	staffToken := mintAccessToken(t, deps, handlesDB, staffID, false)
 
 	resp, body := doJSON(t, client, http.MethodPost, srv.URL+"/v1/communities", map[string]any{

@@ -29,6 +29,19 @@ const (
 	CodeValidation              = "VALIDATION_ERROR"
 	CodeInternal                = "INTERNAL_ERROR"
 	CodeConflict                = "CONFLICT"
+	CodeCaptchaRequired         = "AUTH_CAPTCHA_REQUIRED"
+
+	// CodeMFARequired means the second factor EXISTS and was simply not
+	// used: the caller must log in again carrying a TOTP code. Kept
+	// distinct from CodeMFAEnrollmentRequired, which means no factor
+	// exists yet and the caller must enroll one -- two different client
+	// flows, and a client that cannot tell them apart will send a user
+	// with an authenticator app to an enrollment screen that refuses
+	// them with a 409 (review lineage review-0e1833930adf141a). Returned
+	// both by POST /v1/auth/login, when an enrolled account omits its
+	// code, and by the mandatory-TOTP gate, when an admin's session
+	// authenticated on a password alone.
+	CodeMFARequired = "AUTH_MFA_REQUIRED"
 )
 
 // Error is the stable envelope. It implements huma.StatusError

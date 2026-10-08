@@ -180,21 +180,72 @@ through PR1/PR2.
 
 ## Phase 7: Public-Form Protection + Non-Superadmin TOTP (WU-5, PR5 — TDD, D-7)
 
-- [ ] 7.1 RED: an invalid Turnstile token is rejected before any protected-form logic runs (CaptchaVerifier Interface Abstraction)
-- [ ] 7.2 GREEN: implement `CaptchaVerifier` interface in `internal/domain/...`, Turnstile client in `api/internal/platform/captcha/turnstile.go`, `AlwaysPass` test double
-- [ ] 7.3 RED: a third failed login without Turnstile is rejected; a third failed login with a valid token proceeds (Turnstile Required After The Third Login Failure, both scenarios)
-- [ ] 7.4 GREEN: wire `CaptchaVerifier` into the login handler's failure-count branch
-- [ ] 7.5 RED: `POST /v1/auth/forgot-password` without Turnstile is always rejected (Turnstile Always Required On Forgot-Password)
-- [ ] 7.6 GREEN: wire `CaptchaVerifier` unconditionally into forgot-password
-- [ ] 7.7 RED: an IP over its rate limit is still rejected on forgot-password despite a valid Turnstile token (Per-IP Limits Independent Of Turnstile)
-- [ ] 7.8 GREEN: confirm `Limiter` enforcement runs independently of the `CaptchaVerifier` check
-- [ ] 7.9 RED: the M1 registered API surface contains no `register-company` or public contact-form operation (Company Registration And Contact Forms Out Of M1 Scope)
-- [ ] 7.10 GREEN: verify by inspection that no such handler exists; record the scoped exception in `docs/security/gates/M1.md` (Phase 10)
-- [ ] 7.11 RED: an `admin` with no TOTP enrolled verifies a valid code via the non-superadmin endpoint and becomes active; an `admin_staff` with TOTP enrolled verifies via that endpoint (Non-Superadmin TOTP HTTP Endpoints, both scenarios)
-- [ ] 7.12 GREEN: implement `api/internal/http/handlers/mfa.go` wiring the existing `internal/domain/auth/mfa` enroll/verify/recovery flow for non-superadmin callers
-- [ ] 7.13 RED: an `admin` with no active TOTP is rejected on any admin-scoped route and required to enroll; an `admin` with active TOTP is processed normally; an `owner` with no TOTP is unaffected (Mandatory TOTP For Admin And Admin_staff Scope Access, all three scenarios)
-- [ ] 7.14 GREEN: implement the TOTP-gate check in the office/community resolver path — 403 with a distinguishable code when `user_mfa.enabled_at IS NULL` for `admin`/`admin_staff` scope only
-- [ ] 7.15 Run `make gen`; commit regenerated artifacts for the MFA DTOs
+- [x] 7.1 RED: an invalid Turnstile token is rejected before any protected-form logic runs (CaptchaVerifier Interface Abstraction)
+- [x] 7.2 GREEN: implement `CaptchaVerifier` interface in `internal/domain/...`, Turnstile client in `api/internal/platform/captcha/turnstile.go`, `AlwaysPass` test double
+- [x] 7.3 RED: a third failed login without Turnstile is rejected; a third failed login with a valid token proceeds (Turnstile Required After The Third Login Failure, both scenarios)
+- [x] 7.4 GREEN: wire `CaptchaVerifier` into the login handler's failure-count branch
+- [x] 7.5 RED: `POST /v1/auth/forgot-password` without Turnstile is always rejected (Turnstile Always Required On Forgot-Password)
+- [x] 7.6 GREEN: wire `CaptchaVerifier` unconditionally into forgot-password
+- [x] 7.7 RED: an IP over its rate limit is still rejected on forgot-password despite a valid Turnstile token (Per-IP Limits Independent Of Turnstile)
+- [x] 7.8 GREEN: confirm `Limiter` enforcement runs independently of the `CaptchaVerifier` check
+- [x] 7.9 RED: the M1 registered API surface contains no `register-company` or public contact-form operation (Company Registration And Contact Forms Out Of M1 Scope)
+- [x] 7.10 GREEN: verify by inspection that no such handler exists; record the scoped exception in `docs/security/gates/M1.md` (Phase 10) — verification done this run (see apply-progress Deviations: the file itself is intentionally NOT created here, since task 10.4 owns its creation)
+- [x] 7.11 RED: an `admin` with no TOTP enrolled verifies a valid code via the non-superadmin endpoint and becomes active; an `admin_staff` with TOTP enrolled verifies via that endpoint (Non-Superadmin TOTP HTTP Endpoints, both scenarios)
+- [x] 7.12 GREEN: implement `api/internal/http/handlers/mfa.go` wiring the existing `internal/domain/auth/mfa` enroll/verify/recovery flow for non-superadmin callers
+- [x] 7.13 RED: an `admin` with no active TOTP is rejected on any admin-scoped route and required to enroll; an `admin` with active TOTP is processed normally; an `owner` with no TOTP is unaffected (Mandatory TOTP For Admin And Admin_staff Scope Access, all three scenarios)
+- [x] 7.14 GREEN: implement the TOTP-gate check in the office/community resolver path — 403 with a distinguishable code when `user_mfa.enabled_at IS NULL` for `admin`/`admin_staff` scope only — NOTE (review lineage review-0e1833930adf141a, R1-mandatory-totp-gate-ineffective): the task is done AS WRITTEN, but the check it specifies is an enrollment precondition, not second-factor authentication. `IsUserMFAEnabled` is a durable per-account flag and `/v1/auth/login` issues a non-superadmin session with no TOTP challenge, so a stolen admin password still reaches every admin-scoped route. Closing it needs the second-factor fact carried on the session; deferred over the correction's 200-line budget and documented as KNOWN INCOMPLETE in `authz/resolve.go` — SUPERSEDED by correction round 3: the gate reads the session's own second-factor fact, the KNOWN INCOMPLETE note is gone, and `TestMFA_AdminWithoutTOTPBlockedFromAdminScopedRoute` no longer asserts that enrolling from a password-only session opens the route
+- [x] 7.15 Run `make gen`; commit regenerated artifacts for the MFA DTOs
+
+### Correction round 2 — review lineage review-e72754dc7521b57a
+
+Four of five findings fixed on top of the delivered Phase 6/7 code. No new
+task was added: each fix corrects code a task above already marked `[x]`.
+
+- [x] C2.1 `R4-authz-resolves-from-read-replica-no-read-your-writes` — the scoped resolvers' Querier now reads the PRIMARY (`authz.ResolverDBTX`/`ConfigureFromHandles`), so a membership granted on the write path is visible to the caller's very next authorization decision instead of lagging into a 404
+- [x] C2.2 `R1-accept-invitation-bypasses-login-lockout` — a failed password on accept-invitation's linking branch now advances (and honours) the SAME `d.Lockout` account lockout `/v1/auth/login` uses, keyed on email+IP, alongside the invitation enumeration counter
+- [x] C2.3 `R1-plaintext-short-code-persisted-in-job-row` — the short code crosses into `river_job` sealed with AES-256-GCM under `ENCRYPTION_KEY` (`mfa.EncryptSecret`) and is opened only by the worker at send time; `ENCRYPTION_KEY` is now a `CommandWorker` requirement
+- [x] C2.4 `R4-captcha-hard-dependency-no-degradation` — `TURNSTILE_SECRET` is required outside development (fails at boot, not at first use), `Turnstile.Verify` is bounded on the request context at 2s regardless of the injected client, and forgot-password degrades OPEN on an unreachable verifier while login deliberately stays fail-closed
+- [x] C2.5 `R1-mandatory-totp-gate-is-only-an-enrollment-flag` — CLOSED as separate work (see "Correction round 3" below). The gate now enforces second-factor authentication of the SESSION (`sessions.mfa_at`, migration 00010, and the access token's `mfa` claim) instead of the durable per-account enrollment flag; both named bypasses are gone and the KNOWN INCOMPLETE block in `authz/resolve.go` is replaced by what the gate actually enforces
+
+### Correction round 3 — closing R1-mandatory-totp-gate-is-only-an-enrollment-flag
+
+The one finding round 2 left open, done as its own work unit with its own
+design. No new task was added above: this corrects code tasks 7.13/7.14 already
+marked `[x]`.
+
+- [x] C3.1 RED/GREEN: migration `00010_sessions_mfa.sql` adds the nullable `sessions.mfa_at`, so every session that already exists correctly reads as NOT second-factor authenticated; proven over a real upgrade path (migrate to 00009, create a pre-00010 session, apply 00010), not only on a fresh database
+- [x] C3.2 RED/GREEN: `token.Claims` gains `mfa`, and `IssueAccess` takes the fact as an explicit parameter so no call site can acquire the elevated reading by omission; a token minted before the claim existed decodes as false
+- [x] C3.3 RED/GREEN: `POST /v1/auth/login` challenges TOTP whenever the account has an ACTIVE factor, through the SAME `mfa.ThrottledVerify`/`mfa.VerifyTOTP` path superadmin login uses; enrolled-but-no-code is 403 `AUTH_MFA_REQUIRED`, distinct from invalid credentials; accounts with no factor are untouched
+- [x] C3.4 RED/GREEN: `session.Rotator` carries `mfa_at` onto the rotated row and reports it, so refresh preserves the fact instead of letting an elevated session decay every 15 minutes
+- [x] C3.5 RED/GREEN: the gate reads the session fact from context (published by the Bearer middleware from the verified claim) and keeps the enrollment-precondition error (`AUTH_MFA_ENROLLMENT_REQUIRED`) distinct from the not-authenticated error (`AUTH_MFA_REQUIRED`); the KNOWN INCOMPLETE block is replaced by what the gate now enforces
+- [x] C3.6 The shared test harness was fixed, never the gate: `mintAccessToken` derives the minted session's second-factor fact from the account's own factor, exactly as login now does, and the gate's own tests drive the real login endpoint instead of the helper
+- [x] C3.7 Run `make gen` (`LoginRequest` gained `totp_code`); confirmed idempotent, and the hand-maintained `packages/shared/src/errors.ts` code list plus the app's Spanish copy were kept in sync with `apperr.go`
+
+### Correction round 4 — review lineage `review-c4efc3f92d076299`
+
+Five findings on top of the delivered Phase 6/7 code. No new task was added:
+each fix corrects code a task above already marked `[x]`. **Two of the five
+were defects in the previous two rounds' own corrections** (C4.3 and C4.4),
+which is the pattern this change has now shown three rounds running.
+
+- [x] C4.1 `R4-invitation-email-is-never-dispatched-by-any-process` — the `worker` subcommand (the ONLY consumer of `invitation_email`) built its River client with `platmail.LogMailer`, so every job decrypted the short code, rendered the message, wrote it to a log sink and returned `nil`: recorded completed, never retried, never dead-lettered, while `CreateInvitation` answered 201 and `ResendInvitation` incremented `sent_count`. M1's central feature did not work end to end and failed silently. `runWorker` now builds the real `internal/mail.AsyncMailer` through `buildWorkerMailer`, and `SMTP_URL`/`MAIL_FROM` are declared requirements of `CommandWorker` so a mail-less worker cannot boot
+- [x] C4.2 `R1-self-scope-skips-mandatory-totp-gate` — `ResolveSelf` never called `requireMFAForAdminRoles`, so the gate rounds 2/3 built did not run on ANY `scoped.Self` route; `addOfficeMember` is registered that way and inserts `office_members.role = admin_staff`. The gate now runs in `ResolveSelf` over the admin memberships it hands out — the whole route class, not a per-route judgement — and `scoped.Self` renders resolver errors through the same `resolveErrorResponse` the other constructors use
+- [x] C4.3 `R4-captcha-degradation-cannot-engage-without-a-token` (defect in round 2's own fix) — `verifyCaptcha` short-circuited an empty token WITHOUT calling the verifier, so the tokenless requests a widget outage produces could never record the transport error the outage counter consumes. The empty token now reaches the verifier, and forgot-password degrades open only on the recorded threshold, which makes `captchaOutageThreshold`/`Window` load-bearing instead of decorative
+- [x] C4.4 `R3-accept-invitation-holds-write-tx-across-password-work` (defect in round 1's own fix) — the unauthenticated accept endpoint opened a primary-pool transaction and took the invitation row lock BEFORE password-policy validation, `password.Verify` and `password.Hash`. Secret resolution, policy validation and all password work now run before `Begin`; the transaction covers only the writes. Single use still comes from the conditional `AcceptInvitation` UPDATE, and rollback-on-mismatch became return-before-any-write
+- [x] C4.5 `R1-invitation-short-code-hash-offline-recoverable` — `short_code_hash` was a single-round unsalted SHA-256 of ~40 bits under a UNIQUE index, enumerable offline by exactly the adversary the same candidate defends against when it seals that code before queuing it. It is now HMAC-SHA-256 under `ENCRYPTION_KEY`: deterministic (UNIQUE index and single indexed lookup untouched), constant-cost (no KDF on two unauthenticated endpoints), no new config, no migration. The opaque token keeps plain SHA-256 — 256 bits has no candidate list
+
+### Correction round 5 — review lineage `review-f855997b550a986d`
+
+Seven findings, **five of them defects in round 4's own corrections**. No new
+task was added: each fix corrects code a task above already marked `[x]`. This
+round restructured instead of patching — the pattern of one-line reorderings
+breaking a different invariant each round is what it set out to end.
+
+- [x] C5.1 `R1-accept-invitation-runs-argon2id-before-any-validity-check` + `R3-accept-invitation-status-checked-only-after-credential-work` (one root) — `AcceptInvitation` now carries a written, enforced four-step ordering invariant: establish the invitation is usable → throttle → credential work → transaction. `invitationUsable` existed and was never called from accept; rather than add the call, preview's and accept's shared first leg became ONE function (`resolveUsableInvitation`), because the divergence between those two handlers is precisely what two consecutive rounds found. A dead invitation now costs a lookup, not an HIBP round trip plus Argon2id, and can no longer drive the invited account's lockout
+- [x] C5.2 `R1-accept-invitation-mints-a-session-without-the-totp-challenge` — accept's linking branch runs the SAME `challengeTOTP` that guards `POST /v1/auth/login`, `issueSession` receives what it established instead of a hardcoded `false`, and a superadmin account is refused outright with login's enumeration-safe 401 (refresh re-derives the superadmin claim from the users row, so one rotation of such a session would have returned a superadmin token that never passed the code-gated route). `totp_code` added to `AcceptInvitationRequest`; `make gen` idempotent
+- [x] C5.3 `R3-captcha-outage-trigger-is-global-and-caller-influenceable` + `R4-captcha-degraded-window-accepts-actively-rejected-tokens` — the degrade-open mechanism is REMOVED and forgot-password fails closed like login. Three implementations were reviewed and all three were wrong in different ways; a keyed-on-own-outcome version would have been correct today and was still rejected, because a control that switches itself off exactly when an attacker may be arranging the condition is the wrong shape. `verifyCaptcha`'s empty-token short-circuit is restored. Protection meanwhile is `limiter.LoginReset`'s per-IP budget, independent of Turnstile
+- [x] C5.4 `R3-resend-invitation-dispatches-nothing` — resend RE-ISSUES the short code and enqueues the email job in the same transaction. Persisting a recoverable plaintext was rejected: the named adversary holds this table, and a decryptable copy of every pending code sitting there for fourteen days gives back exactly what the HMAC denies. `RotateInvitationShortCode` replaces `IncrementInvitationSentCount`, the statement that recorded sends which never happened; the new plaintext is returned once so D-6's paper/voice path survives
+- [x] C5.5 `R4-invitation-email-job-completed-before-delivery-is-attempted` — `mail.Sync`/`AsyncMailer.SendRawSync` complete the SMTP transaction before returning, and `buildWorkerMailer` wires that instead of the bare `*AsyncMailer`. A worker's return value marks its job row completed, so the async hand-off recorded `invitation_email` COMPLETED before a byte was dialled. `queue.RawSender` now states the contract, including that `*AsyncMailer` satisfies it structurally and violates it semantically
 
 ## Phase 8: GET /v1/me Memberships, lint-scope, Permission Matrix (WU-6, PR6 — TDD)
 

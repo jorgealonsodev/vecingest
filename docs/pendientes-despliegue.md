@@ -404,11 +404,174 @@ pero **ninguna línea de Go las lee** a fecha de hoy. Verificado con `grep`:
 | `R2_*` | El almacenamiento de ficheros no está implementado en M0 |
 | `TSA_URL` | El sellado de tiempo tampoco; además tiene valor por defecto en el compose |
 | `SENTRY_DSN` | El SDK no está ni en `api/go.mod` ni en `app/package.json` |
-| `TURNSTILE_SECRET` | La API lo lee al `Holder` pero nadie lo usa; la Site Key ni siquiera tiene variable donde aterrizar |
+| ~~`TURNSTILE_SECRET`~~ | **Ya NO aplica: M1 lo implementó y ahora es OBLIGATORIO fuera de desarrollo. Ver el bloqueo al final de esta sección.** |
 | `EXPO_ACCESS_TOKEN` | Cero apariciones en todo el repositorio; es para compilar con EAS, nunca una variable del stack |
 
 Antes de implementar Turnstile hará falta decidir dónde aterriza la Site Key,
 que es pública y tiene que llegar al cliente.
+
+### BLOQUEO DE DESPLIEGUE — `TURNSTILE_SECRET` (nuevo en M1, Fase 7)
+
+**El próximo despliegue no arranca sin esto.** La Fase 7 implementó Turnstile y
+la ronda 2 de revisión exigió que un secreto ausente falle en el arranque en vez
+de silenciosamente en el primer uso. `TURNSTILE_SECRET` es ahora obligatorio
+salvo con `APP_ENV=development`, y este stack corre con `APP_ENV: production`.
+
+`docker-compose.yml` no lo declara porque los secretos llegan por `env_file:
+stack.env`, así que **hay que añadirlo a `stack.env` en el servidor antes de
+redesplegar**. Sin él, `api` y `worker` mueren con `config validation failed:
+TURNSTILE_SECRET: missing`, exactamente igual que murieron en su día por
+`CORS_ORIGINS: missing`.
+
+Se obtiene en el panel de Cloudflare Turnstile, junto a la Site Key (que sigue
+sin variable donde aterrizar: es pública, va al cliente, y decidir su sitio
+sigue pendiente).
+
+`ENCRYPTION_KEY` pasó a ser también requisito del `worker`, no solo de `serve`,
+porque el código corto de invitación viaja cifrado en la fila del job. Ya estaba
+en `stack.env` para `serve`, y el `worker` hereda el mismo `env_file`, así que
+ahí no hay nada que añadir — pero conviene saberlo si alguna vez se separan.
+
+**Purga pendiente**: las filas `river_job` encoladas antes de ese cambio guardan
+el código en claro y ahora no se pueden descifrar. En este hito la cola está
+vacía, así que no afecta; un despliegue con trabajos de invitación pendientes
+tendría que purgarlos antes de actualizar.
+
+### Migración 00010 y el 2FA obligatorio de admin — SIN variable nueva
+
+**No hace falta ninguna variable de configuración nueva.** El código TOTP viaja
+en el cuerpo de `POST /v1/auth/login` (`totp_code`), no en el entorno, así que
+este cambio no puede impedir el arranque como hizo `TURNSTILE_SECRET`.
+
+Lo que sí trae es una migración y un corte de sesión deliberado:
+
+1. **Migración `00010_sessions_mfa.sql`** añade `sessions.mfa_at timestamptz`
+   (anulable, sin valor por defecto). Es aditiva y se aplica sobre la base de
+   datos ya desplegada; `internal/platform/migrate`
+   (`TestSchemaSet_SessionsMFAUpgradePathLeavesExistingSessionsUnelevated`)
+   migra hasta la 00009, crea una sesión como la creaba el código anterior,
+   aplica la 00010 encima y comprueba que esa fila queda con `mfa_at` NULL. No
+   es una corrección que solo funcione sobre una base de datos limpia.
+
+2. **Toda sesión existente pasa a contar como NO autenticada con segundo
+   factor**, que es exactamente lo que es: ninguna superó nunca un reto TOTP.
+   Para `owner` y `tenant` no cambia nada. Para `admin` y `admin_staff`:
+
+   - Si la cuenta **tiene** TOTP activo, sus rutas con ámbito responden 403
+     `AUTH_MFA_REQUIRED` hasta que vuelva a iniciar sesión **con el código**.
+   - Si la cuenta **no tiene** TOTP, sigue respondiendo 403
+     `AUTH_MFA_ENROLLMENT_REQUIRED` como hasta ahora, y el camino de alta
+     (`/v1/me/mfa/enroll` + `/verify`) sigue abierto desde una sesión con solo
+     contraseña. Lo que ya no ocurre es que darse de alta desde esa sesión
+     abra la puerta: hay que volver a iniciar sesión con un código.
+
+   El superadmin no se ve afectado: `/v1/auth/superadmin/login` ya exigía TOTP,
+   así que sus sesiones nuevas nacen autenticadas con segundo factor.
+
+3. **La app todavía no tiene campo para el código.** `LoginScreen` envía
+   `email`/`password`/`platform` y ya traduce el nuevo código de error
+   ("introduce el código de tu aplicación de autenticación"), pero **no hay
+   todavía un input de TOTP**: un administrador con segundo factor activo no
+   puede completar el login desde la app hasta que se añada. Hoy no bloquea
+   nada porque el único 2FA activo en producción es el del superadmin, que
+   entra por su propia ruta; hay que añadirlo antes de dar de alta al primer
+   administrador de oficina con TOTP.
+
+### BLOQUEO DE DESPLIEGUE — el `worker` ahora exige `SMTP_URL` y `MAIL_FROM`
+
+**No hay ninguna variable nueva que crear**, pero sí un requisito nuevo que
+puede impedir el arranque, así que conviene leerlo entero.
+
+La tercera ronda de revisión encontró que **ninguna invitación se enviaba
+nunca, y el fallo era silencioso**. El subcomando `worker` es el único proceso
+que consume trabajos `invitation_email` (`serve` construye un cliente de River
+solo-productor que nunca arranca), y lo construía con `platmail.LogMailer`: cada
+trabajo descifraba el código corto, componía el mensaje, **lo escribía en un log
+y devolvía `nil`**. La fila del trabajo quedaba marcada como completada, sin
+reintento ni cola de fallidos, mientras `POST /v1/communities/{id}/invitations`
+respondía 201 y `POST /v1/invitations/{id}/resend` incrementaba `sent_count`
+como prueba de un envío que no ocurrió.
+
+`worker` usa ahora el mismo `internal/mail.AsyncMailer` que `serve`, y
+`SMTP_URL` y `MAIL_FROM` son requisitos declarados de `CommandWorker`.
+
+- **Qué hay que hacer en el servidor: nada.** Ambas variables ya son
+  obligatorias para `serve` y ya están en `stack.env`; `worker` hereda el mismo
+  `env_file: stack.env` a través del ancla `x-app-image`, así que las lee sin
+  tocar `docker-compose.yml`.
+- **Qué pasa si alguna vez faltan:** `worker` muere en el arranque con
+  `config validation failed: MAIL_FROM: missing; SMTP_URL: missing`, igual que
+  murió en su día por `CORS_ORIGINS`. Eso es deliberado: un worker sin
+  credenciales de correo no "funciona sin email", completa todas las
+  invitaciones contra un sumidero y las da por buenas.
+- **SMTP_URL tiene que ser real.** El apartado 2 de este documento sigue
+  vigente y ahora afecta también a las invitaciones, no solo a los avisos de
+  bloqueo: mientras apunte a un servidor inexistente, el envío falla por
+  trabajo (con error y reintento, ya no en silencio), pero el vecino sigue sin
+  recibir nada. El código corto en papel continúa funcionando como vía
+  alternativa.
+
+### El código corto de invitación cambia de huella — invitaciones pendientes
+
+Sin migración, sin columna nueva y sin variable nueva: `invitations.short_code_hash`
+pasa de SHA-256 sin sal a **HMAC-SHA-256 bajo `ENCRYPTION_KEY`**. El motivo es
+que ocho símbolos de un alfabeto de 32 son unos 40 bits: la tabla entera se
+podía enumerar sin conexión en minutos de GPU, de modo que la garantía "solo se
+persisten huellas" era nominal frente a quien pudiera leer la tabla, una copia
+de seguridad o una réplica de lectura. La clave vive en el entorno del proceso y
+nunca en la base de datos, que es exactamente la frontera de confianza en la que
+ya se apoya el sellado del mismo código en la fila del trabajo.
+
+El tipo y el tamaño de la columna no cambian (`bytea`, 32 bytes), el índice
+UNIQUE sigue en pie y la búsqueda sigue siendo un único acceso indexado.
+
+**Consecuencia, y no tiene arreglo posible:** una huella no es reversible, así
+que **las invitaciones pendientes creadas antes de este cambio dejan de
+resolverse por código corto** y hay que volver a emitirlas. El *token* opaco no
+se ve afectado (256 bits de entropía, sigue con SHA-256). En este hito no hay
+invitaciones en producción, así que hoy no afecta a nadie; si alguna vez se
+rota `ENCRYPTION_KEY`, el efecto será el mismo y por la misma razón.
+
+### El 2FA obligatorio de admin llega también a las rutas `scoped.Self`
+
+La misma ronda encontró que `ResolveSelf` —el resolutor detrás de **todas** las
+operaciones `scoped.Self`— nunca ejecutaba la comprobación de segundo factor, de
+modo que la puerta que cerraron las dos rondas anteriores no corría en esa clase
+de rutas. `POST /v1/offices/me/members` está registrada así e inserta una fila
+`office_members` con rol `admin_staff`, que da alcance a toda la oficina.
+
+Ahora la comprobación corre en el resolutor, sobre el conjunto de pertenencias
+que va a entregar. Para `owner` y `tenant` no cambia nada. Para un `admin` o
+`admin_staff` **cuya sesión no haya superado un reto TOTP**:
+
+- `GET /v1/communities`, `GET /v1/offices/me` y `GET|POST /v1/offices/me/members`
+  responden 403 (`AUTH_MFA_ENROLLMENT_REQUIRED` si no tiene factor,
+  `AUTH_MFA_REQUIRED` si lo tiene y esta sesión no lo usó).
+- El camino de alta sigue abierto: `GET /v1/me`, `POST /v1/me/mfa/enroll` y
+  `POST /v1/me/mfa/verify` **no** son rutas `scoped.Self`, así que un
+  administrador sin factor todavía puede darse de alta y volver a iniciar
+  sesión con el código.
+
+Sigue en pie lo dicho en el apartado anterior sobre la app: `LoginScreen`
+todavía no tiene campo para el código TOTP, así que esto hay que resolverlo
+antes de dar de alta al primer administrador de oficina con segundo factor.
+
+### `forgot-password` ya no se abre con un solo fallo de Turnstile
+
+La degradación que añadió la ronda 2 no podía activarse en la avería para la que
+existía: `verifyCaptcha` cortocircuitaba con el token vacío y **no llamaba al
+verificador**, así que una petición sin token nunca producía el error de
+transporte que alimenta el contador. En la avería típica de Turnstile el propio
+widget no carga y el navegador no tiene token que enviar, justo el caso que no
+podía activarla.
+
+Ahora el token vacío se envía al verificador (una llamada saliente acotada a 2s,
+detrás del limitador por IP, que responde `success:false` cuando el servicio
+está sano), de forma que esas peticiones sí registran la avería. A cambio, la
+apertura exige el umbral que los nombres de las constantes siempre prometieron:
+**3 fallos de transporte en 60 segundos**, no uno. Durante una avería real, los
+dos primeros intentos de recuperación de cada ventana siguen rechazándose; son
+los que la dan a conocer. `POST /v1/auth/login` sigue cerrándose siempre.
 
 ## Lo que queda de la Fase 14 (Checkpoint B) y quién tiene que hacerlo
 

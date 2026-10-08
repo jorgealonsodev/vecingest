@@ -28,6 +28,7 @@ import (
 	"github.com/jorgealonsodev/vecingest/internal/mail"
 	"github.com/jorgealonsodev/vecingest/internal/platform/attempts"
 	"github.com/jorgealonsodev/vecingest/internal/platform/cache"
+	"github.com/jorgealonsodev/vecingest/internal/platform/captcha"
 	"github.com/jorgealonsodev/vecingest/internal/platform/hibp"
 	"github.com/jorgealonsodev/vecingest/internal/platform/queue"
 )
@@ -89,9 +90,10 @@ func runServe(ctx context.Context, args []string, stdout io.Writer, lookup confi
 	defer handlesDB.Close()
 
 	// D-4: every scoped.* resolver goes through this Querier (Configure
-	// MUST run before the first scoped request is served); reads use
-	// the read replica, same as every other read-only handler query.
-	authz.Configure(db.New(handlesDB.Read))
+	// MUST run before the first scoped request is served). The handle
+	// choice lives in authz.ResolverDBTX: the PRIMARY, because an
+	// authorization decision has to be read-your-writes.
+	authz.ConfigureFromHandles(handlesDB)
 
 	deps, realMailer, err := buildServeDeps(cfg, holder, handlesDB)
 	if err != nil {
@@ -200,8 +202,8 @@ func buildServeDeps(cfg config.Config, holder *secrets.Holder, handlesDB db.Hand
 		return nil, nil, fmt.Errorf("derive CSRF key: %w", err)
 	}
 
-	var mfaKey [32]byte
-	copy(mfaKey[:], holder.EncryptionKey())
+	var encryptionKey [32]byte
+	copy(encryptionKey[:], holder.EncryptionKey())
 
 	realMailer, err := mail.New(mail.Config{
 		SMTPURL: holder.SMTPURL(),
@@ -219,7 +221,7 @@ func buildServeDeps(cfg config.Config, holder *secrets.Holder, handlesDB db.Hand
 	// deployment that DOES route jobs through this same client (e.g. a
 	// future single-process mode) dispatches real mail, matching the
 	// worker subcommand's own wiring shape one-for-one.
-	riverClient, err := queue.NewClient(handlesDB.Write.Pool(), nil, realMailer)
+	riverClient, err := queue.NewClient(handlesDB.Write.Pool(), nil, realMailer, encryptionKey)
 	if err != nil {
 		return nil, nil, fmt.Errorf("build river client: %w", err)
 	}
@@ -234,7 +236,7 @@ func buildServeDeps(cfg config.Config, holder *secrets.Holder, handlesDB db.Hand
 			Mailer:  handlers.LockoutMailer{Sender: realMailer},
 		},
 		PasswordPolicy:  password.PasswordPolicy{HIBP: hibp.NewClient()},
-		MFAKey:          mfaKey,
+		MFAKey:          encryptionKey,
 		MFACounter:      attempts.NewCounter(nil),
 		RevocationCache: cache.New(cache.SessionsFamilyChecker{DB: handlesDB.Write}, token.AccessTTL, nil),
 		// CookieDomain: api.DOMAIN (design D-E), never DOMAIN itself --
@@ -244,7 +246,17 @@ func buildServeDeps(cfg config.Config, holder *secrets.Holder, handlesDB db.Hand
 		ResetRequester: handlers.DBResetRequester{DB: handlesDB.Write, Sender: realMailer},
 		TokenIssuer:    handlers.OpaqueTokenIssuer{},
 		InviteAttempts: attempts.NewCounter(nil),
-		Queue:          queue.RiverInvitationQueue{Client: riverClient},
+		// The invitation short code is sealed with ENCRYPTION_KEY
+		// here, at the boundary where an in-memory payload becomes a
+		// durable river_job row.
+		Queue: queue.RiverInvitationQueue{Client: riverClient, Key: encryptionKey},
+		// public-form-protection: CaptchaVerifier (new, 6th seam).
+		// TURNSTILE_SECRET is REQUIRED outside development
+		// (internal/config): an empty secret is never valid at
+		// Cloudflare, so leaving it optional turned a forgotten
+		// variable into a 100% failure rate at run time with no boot
+		// signal (review lineage review-e72754dc7521b57a).
+		Captcha: captcha.Turnstile{Secret: holder.TurnstileSecret()},
 	}
 	return deps, realMailer, nil
 }

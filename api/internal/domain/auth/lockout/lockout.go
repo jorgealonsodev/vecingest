@@ -219,6 +219,29 @@ func (s Service) RecordSuccess(ctx context.Context, email string) error {
 	return s.Counter.Reset(ctx, emailKey(email))
 }
 
+// FailureCount reports the HIGHER of the email-scoped and IP-scoped
+// failure counts within Window, without recording a new attempt
+// (public-form-protection: Turnstile Required After The Third Login
+// Failure). The login handler consults this BEFORE calling
+// RecordFailure to decide whether the attempt about to be made is the
+// third for either counter -- reading, never incrementing, so a
+// captcha-rejected request never itself counts as a failed login
+// attempt.
+func (s Service) FailureCount(ctx context.Context, email, ip string) (int, error) {
+	emailCount, err := s.Counter.Count(ctx, emailKey(email), Window)
+	if err != nil {
+		return 0, err
+	}
+	ipCount, err := s.Counter.Count(ctx, ipKey(ip), Window)
+	if err != nil {
+		return 0, err
+	}
+	if ipCount > emailCount {
+		return ipCount, nil
+	}
+	return emailCount, nil
+}
+
 // IsLocked reports whether either the email-scoped or IP-scoped counter
 // is currently at or above Threshold.
 func (s Service) IsLocked(ctx context.Context, email, ip string) (bool, error) {

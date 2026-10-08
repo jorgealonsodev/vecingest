@@ -30,6 +30,11 @@ export const ErrorCode = {
   AuthTOTPInvalid: "AUTH_TOTP_INVALID",
   AuthTooManyAttempts: "AUTH_TOO_MANY_ATTEMPTS",
   AuthMFAEnrollmentRequired: "AUTH_MFA_ENROLLMENT_REQUIRED",
+  // The account HAS a second factor and this request did not use it:
+  // login without a code, or an admin-scoped call from a session that
+  // authenticated on a password alone. Distinct from
+  // AuthMFAEnrollmentRequired, which means there is no factor yet.
+  AuthMFARequired: "AUTH_MFA_REQUIRED",
   AuthResetTokenInvalid: "AUTH_RESET_TOKEN_INVALID",
   AuthUnauthorized: "AUTH_UNAUTHORIZED",
   NotFound: "NOT_FOUND",

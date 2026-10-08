@@ -17,6 +17,40 @@ import (
 // {"accepted": true} whether or not the email is registered; only a
 // real account triggers the (async) reset-token dispatch.
 func (d *Deps) ForgotPassword(ctx context.Context, in *dto.ForgotPasswordInput) (*dto.ForgotPasswordOutput, error) {
+	// public-form-protection: Turnstile Always Required On Forgot-
+	// Password -- unconditional, checked before any user lookup runs, and
+	// FAIL-CLOSED, exactly like login (auth_login.go).
+	//
+	// There used to be a degraded path here that accepted submissions while
+	// the verifier looked unreachable. It is gone (review lineage
+	// review-f855997b550a986d), and the reason is the mechanism rather than
+	// any one of its bugs: three implementations of it were reviewed and all
+	// three were wrong, in three different ways. The first could not engage
+	// in the outage shape it existed for. The second engaged on a
+	// process-global counter, so the caller that observed a failure and the
+	// caller that benefited were different callers, on two different
+	// endpoints. The third still decided on that counter rather than on this
+	// request's own verdict, so an open window also admitted tokens a
+	// reachable siteverify had explicitly REFUSED -- and nothing anywhere
+	// recorded that public-form protection had switched itself off, so no
+	// operator could see it happening or reconstruct afterwards which resets
+	// were issued while it was.
+	//
+	// What is lost: during a genuine Cloudflare outage, password recovery is
+	// unavailable for the outage's duration. That is an availability cost on
+	// a non-urgent flow, and it is bounded by someone else's incident.
+	// What is kept: the endpoint cannot be opened by making the verifier
+	// unreachable, which is a condition an attacker is sometimes in a
+	// position to arrange and always in a position to wait for. What bounds
+	// abuse meanwhile is what always did and never depended on Turnstile --
+	// limiter.LoginReset's per-IP budget, which wraps this whole group
+	// BEFORE the handler runs -- and the response stays enumeration-safe
+	// either way.
+	ok, cerr := d.verifyCaptcha(ctx, in.Body.TurnstileToken, clientIP(ctx))
+	if cerr != nil || !ok {
+		return nil, captchaRequired()
+	}
+
 	q := db.New(d.DB.Write)
 	svc := password.ForgotPasswordService{
 		Users:     userLookup{q: q},

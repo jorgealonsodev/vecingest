@@ -58,6 +58,24 @@ func (q *Queries) GetUserMFA(ctx context.Context, userID uuid.UUID) (UserMfa, er
 	return i, err
 }
 
+const isUserMFAEnabled = `-- name: IsUserMFAEnabled :one
+SELECT EXISTS (
+  SELECT 1 FROM user_mfa WHERE user_id = $1 AND enabled_at IS NOT NULL
+)
+`
+
+// auth-mfa-totp delta: Mandatory TOTP For Admin And Admin_staff Scope
+// Access. Always returns exactly one row (true/false), never
+// pgx.ErrNoRows, so a caller who never enrolled resolves cleanly to
+// false instead of a "no rows" error the resolver would have to special
+// -case.
+func (q *Queries) IsUserMFAEnabled(ctx context.Context, userID uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, isUserMFAEnabled, userID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const setUserMFARecoveryCodes = `-- name: SetUserMFARecoveryCodes :exec
 UPDATE user_mfa SET recovery_codes_hashed = $2, updated_at = now() WHERE user_id = $1
 `

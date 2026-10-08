@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/jorgealonsodev/vecingest/internal/db"
 	"github.com/jorgealonsodev/vecingest/internal/domain/auth/token"
@@ -17,6 +18,22 @@ import (
 // revoked one) and mints a matching access token directly via the
 // Issuer -- bypassing the full (TOTP-gated, for superadmin) login flow,
 // exactly as bearer_test.go already does for its own unit tests.
+//
+// The minted session's SECOND-FACTOR fact is DERIVED from the account,
+// never passed in: a user with an active TOTP factor gets an
+// mfa-authenticated session, a user without one gets a password-only
+// session. That is precisely what POST /v1/auth/login now produces for
+// each of those two accounts (auth-mfa-totp; review lineage
+// review-0e1833930adf141a), so this helper keeps standing in for a real
+// login instead of quietly minting an elevation login would have
+// refused.
+//
+// Deriving it is deliberate, and so is its limit. It means no test can
+// accidentally acquire an elevated session by forgetting a parameter --
+// but it also means this helper must never be used to test the gate
+// itself: mfa_session_gate_test.go drives the real login endpoint,
+// because a helper that decides the fact under test proves nothing
+// about how that fact is established.
 func mintAccessToken(t *testing.T, deps *handlers.Deps, handlesDB db.Handles, userID uuid.UUID, isSuperadmin bool) string {
 	t.Helper()
 	familyID := uuid.New()
@@ -25,6 +42,10 @@ func mintAccessToken(t *testing.T, deps *handlers.Deps, handlesDB db.Handles, us
 		t.Fatalf("generate refresh: %v", err)
 	}
 	q := db.New(handlesDB.Write)
+	mfaAuthenticated, err := q.IsUserMFAEnabled(t.Context(), userID)
+	if err != nil {
+		t.Fatalf("read user_mfa enrollment: %v", err)
+	}
 	if _, err := q.InsertSession(t.Context(), db.InsertSessionParams{
 		ID:               uuid.New(),
 		UserID:           userID,
@@ -32,10 +53,11 @@ func mintAccessToken(t *testing.T, deps *handlers.Deps, handlesDB db.Handles, us
 		FamilyID:         familyID,
 		Platform:         "web",
 		ExpiresAt:        time.Now().Add(time.Hour),
+		MfaAt:            pgtype.Timestamptz{Time: time.Now(), Valid: mfaAuthenticated},
 	}); err != nil {
 		t.Fatalf("insert session: %v", err)
 	}
-	access, err := deps.AccessIssuer.IssueAccess(userID, familyID, isSuperadmin)
+	access, err := deps.AccessIssuer.IssueAccess(userID, familyID, isSuperadmin, mfaAuthenticated)
 	if err != nil {
 		t.Fatalf("issue access: %v", err)
 	}
@@ -45,7 +67,14 @@ func mintAccessToken(t *testing.T, deps *handlers.Deps, handlesDB db.Handles, us
 // seedOfficeWithAdmin inserts an office and one admin office_members row
 // directly (bypassing the HTTP bootstrap flow this file also tests),
 // for tests whose focus is a DIFFERENT endpoint that merely needs an
-// existing office+admin as a precondition.
+// existing office+admin as a precondition. The admin is seeded with
+// ACTIVE TOTP (seedActiveMFA): since auth-mfa-totp delta's Mandatory
+// TOTP For Admin And Admin_staff Scope Access gate now runs at every
+// community/office resolution, an admin test caller with no TOTP would
+// be rejected before ever reaching the endpoint each of these tests
+// actually means to exercise. A test that specifically wants an admin
+// WITHOUT TOTP (to exercise that gate itself) seeds its own caller
+// directly rather than using this helper -- see public_form_test.go.
 func seedOfficeWithAdmin(t *testing.T, handlesDB db.Handles, adminEmail string) (officeID, adminID uuid.UUID) {
 	t.Helper()
 	q := db.New(handlesDB.Write)
@@ -66,7 +95,28 @@ func seedOfficeWithAdmin(t *testing.T, handlesDB db.Handles, adminEmail string) 
 	}); err != nil {
 		t.Fatalf("insert office member: %v", err)
 	}
+	seedActiveMFA(t, handlesDB, adminID)
 	return office.ID, adminID
+}
+
+// seedActiveMFA inserts an ENABLED user_mfa row for userID directly
+// (bypassing the enroll/verify HTTP flow this package's mfa_test.go
+// exercises separately), for any test whose admin/admin_staff caller
+// merely needs to satisfy the mandatory-TOTP gate as a precondition.
+// The secret value itself is never used by these tests -- only
+// enabled_at needs to be non-NULL.
+func seedActiveMFA(t *testing.T, handlesDB db.Handles, userID uuid.UUID) {
+	t.Helper()
+	q := db.New(handlesDB.Write)
+	if _, err := q.UpsertUserMFA(t.Context(), db.UpsertUserMFAParams{
+		UserID:              userID,
+		TotpSecretEncrypted: []byte("seed-placeholder-not-a-real-secret"),
+	}); err != nil {
+		t.Fatalf("seed user_mfa: %v", err)
+	}
+	if err := q.ConfirmUserMFAEnrollment(t.Context(), userID); err != nil {
+		t.Fatalf("confirm user_mfa enrollment: %v", err)
+	}
 }
 
 // office-management: Office Creation Restricted To Superadmin (both

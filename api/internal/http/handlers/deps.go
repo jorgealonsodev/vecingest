@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/jorgealonsodev/vecingest/internal/db"
+	"github.com/jorgealonsodev/vecingest/internal/domain/auth/captcha"
 	"github.com/jorgealonsodev/vecingest/internal/domain/auth/lockout"
 	"github.com/jorgealonsodev/vecingest/internal/domain/auth/mfa"
 	"github.com/jorgealonsodev/vecingest/internal/domain/auth/password"
@@ -41,6 +42,14 @@ type Deps struct {
 
 	MFAKey     [32]byte
 	MFACounter mfa.AttemptCounter
+	// RecoveryCodes is the recovery-code generator TOTP activation
+	// calls, defaulting to mfa.GenerateRecoveryCodes when nil (the
+	// production wiring). It is a seam so a test can inject a failure
+	// between the enabled_at write and recovery-code persistence and
+	// prove those two are ATOMIC (auth-mfa-totp: One-Time Recovery
+	// Codes) -- an active factor with no recovery path is unreachable
+	// through any endpoint and would strand the account permanently.
+	RecoveryCodes func() (raw []string, hashed []string, err error)
 
 	RevocationCache *cache.RevocationCache
 
@@ -69,6 +78,21 @@ type Deps struct {
 	// does not exercise invitation creation; production wiring
 	// (buildServeDeps) always sets it.
 	Queue invitations.Queue
+	// Captcha is the CaptchaVerifier seam (public-form-protection: new,
+	// 6th seam) wired into login-after-third-failure and forgot-
+	// password. nil is treated as "never passes" by verifyCaptcha
+	// (captcha.go): a deployment that forgets to wire it fails CLOSED,
+	// never open.
+	Captcha captcha.Verifier
+}
+
+// recoveryCodes resolves d.RecoveryCodes against its production
+// default, mirroring d.clock()'s nil-means-default pattern.
+func (d *Deps) recoveryCodes() (raw []string, hashed []string, err error) {
+	if d.RecoveryCodes != nil {
+		return d.RecoveryCodes()
+	}
+	return mfa.GenerateRecoveryCodes()
 }
 
 func (d *Deps) clock() Clock {

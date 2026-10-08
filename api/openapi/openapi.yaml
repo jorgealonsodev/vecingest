@@ -35,6 +35,9 @@ components:
           type: string
         token:
           type: string
+        totp_code:
+          description: Required only when the invited address already has an account with an active TOTP factor; a 403 AUTH_MFA_REQUIRED response means the account needs one.
+          type: string
       required:
         - name
         - password
@@ -520,6 +523,8 @@ components:
         email:
           format: email
           type: string
+        turnstile_token:
+          type: string
       required:
         - email
       type: object
@@ -735,6 +740,11 @@ components:
             - android
             - web
           type: string
+        totp_code:
+          description: Required only for accounts with an active TOTP factor; a 403 AUTH_MFA_REQUIRED response means the account needs one.
+          type: string
+        turnstile_token:
+          type: string
       required:
         - email
         - password
@@ -765,6 +775,66 @@ components:
       required:
         - access_token
         - expires_in
+      type: object
+    MFAEnrollResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/MFAEnrollResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        provisioning_uri:
+          description: otpauth:// URI an authenticator app can scan as a QR code.
+          type: string
+        secret:
+          description: Base32-encoded TOTP secret, for manual entry into an authenticator app.
+          type: string
+      required:
+        - secret
+        - provisioning_uri
+      type: object
+    MFAVerifyRequest:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/MFAVerifyRequest.json
+          format: uri
+          readOnly: true
+          type: string
+        code:
+          description: 6-digit TOTP code.
+          maxLength: 6
+          minLength: 6
+          type: string
+      required:
+        - code
+      type: object
+    MFAVerifyResponse:
+      additionalProperties: false
+      properties:
+        $schema:
+          description: A URL to the JSON Schema for this object.
+          examples:
+            - https://example.com/schemas/MFAVerifyResponse.json
+          format: uri
+          readOnly: true
+          type: string
+        active:
+          type: boolean
+        recovery_codes:
+          description: Present only on the call that activates TOTP for the first time. Shown exactly once; store them safely.
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+      required:
+        - active
       type: object
     MeResponse:
       additionalProperties: false
@@ -931,8 +1001,11 @@ components:
         sent_count:
           format: int32
           type: integer
+        short_code:
+          type: string
       required:
         - sent_count
+        - short_code
       type: object
     ResetPasswordRequest:
       additionalProperties: false
@@ -1976,6 +2049,60 @@ paths:
       summary: Get the caller's own profile
       tags:
         - me
+  /v1/me/mfa/enroll:
+    post:
+      operationId: enrollMFA
+      parameters:
+        - in: header
+          name: Authorization
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MFAEnrollResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Start TOTP enrollment for the caller's own account
+      tags:
+        - mfa
+  /v1/me/mfa/verify:
+    post:
+      operationId: verifyMFA
+      parameters:
+        - in: header
+          name: Authorization
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MFAVerifyRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MFAVerifyResponse"
+          description: OK
+        default:
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ErrorModel"
+          description: Error
+      summary: Verify a TOTP code -- completes enrollment on the first call, an ordinary check afterward
+      tags:
+        - mfa
   /v1/me/sessions:
     get:
       operationId: listMySessions

@@ -273,3 +273,59 @@ func TestRecordFailure_EscalatesBlockDurationAcrossCycles(t *testing.T) {
 		t.Errorf("cycle 4 duration = %v, want 60m (capped)", d4)
 	}
 }
+
+// TestFailureCount_ReturnsTheHigherOfEmailAndIPWithoutRecording covers
+// the read-only seam public-form-protection's login-captcha branch
+// depends on (Turnstile Required After The Third Login Failure): it
+// must observe the CURRENT count without itself advancing either
+// counter, and it must return whichever of the two counters is higher.
+func TestFailureCount_ReturnsTheHigherOfEmailAndIPWithoutRecording(t *testing.T) {
+	svc := lockout.Service{Counter: newFakeCounter(), Dispatch: func(fn func()) { fn() }}
+	ctx := context.Background()
+
+	n, err := svc.FailureCount(ctx, "count@example.com", "203.0.113.9")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("expected 0 failures before any RecordFailure, got %d", n)
+	}
+
+	if _, err := svc.RecordFailure(ctx, "count@example.com", "203.0.113.9", true); err != nil {
+		t.Fatalf("record failure 1: %v", err)
+	}
+	if _, err := svc.RecordFailure(ctx, "count@example.com", "203.0.113.9", true); err != nil {
+		t.Fatalf("record failure 2: %v", err)
+	}
+
+	n, err = svc.FailureCount(ctx, "count@example.com", "203.0.113.9")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("expected 2 failures after 2 RecordFailure calls, got %d", n)
+	}
+
+	// Calling FailureCount again must NOT itself have advanced the
+	// counter (it is a Count, never a Fail).
+	n, err = svc.FailureCount(ctx, "count@example.com", "203.0.113.9")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("expected FailureCount to be read-only, still 2, got %d", n)
+	}
+
+	// A failure recorded only against the IP (different email) must
+	// still surface via the IP leg.
+	if _, err := svc.RecordFailure(ctx, "another@example.com", "203.0.113.9", true); err != nil {
+		t.Fatalf("record failure on ip: %v", err)
+	}
+	n, err = svc.FailureCount(ctx, "brand-new@example.com", "203.0.113.9")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != 3 {
+		t.Fatalf("expected the shared IP counter (3) to be reported for an unrelated email, got %d", n)
+	}
+}

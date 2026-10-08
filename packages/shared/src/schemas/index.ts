@@ -36,6 +36,7 @@ const AcceptInvitationRequest = z.object({
   platform: z.enum(["ios", "android", "web"]),
   short_code: z.string().optional(),
   token: z.string().optional(),
+  totp_code: z.string().optional(),
 });
 const LoginResponse = z.object({
   $schema: z.string().url().optional(),
@@ -47,6 +48,7 @@ const LoginResponse = z.object({
 const ForgotPasswordRequest = z.object({
   $schema: z.string().url().optional(),
   email: z.string().email(),
+  turnstile_token: z.string().optional(),
 });
 const ForgotPasswordResponse = z.object({
   $schema: z.string().url().optional(),
@@ -58,6 +60,8 @@ const LoginRequest = z.object({
   email: z.string().email(),
   password: z.string().min(12),
   platform: z.enum(["ios", "android", "web"]),
+  totp_code: z.string().optional(),
+  turnstile_token: z.string().optional(),
 });
 const RefreshRequest = z
   .object({ $schema: z.string().url(), refresh_token: z.string() })
@@ -293,12 +297,27 @@ const RevokeInvitationResponse = z.object({
 const ResendInvitationResponse = z.object({
   $schema: z.string().url().optional(),
   sent_count: z.number().int(),
+  short_code: z.string(),
 });
 const MeResponse = z.object({
   $schema: z.string().url().optional(),
   email: z.string(),
   id: z.string(),
   is_superadmin: z.boolean(),
+});
+const MFAEnrollResponse = z.object({
+  $schema: z.string().url().optional(),
+  provisioning_uri: z.string(),
+  secret: z.string(),
+});
+const MFAVerifyRequest = z.object({
+  $schema: z.string().url().optional(),
+  code: z.string().min(6).max(6),
+});
+const MFAVerifyResponse = z.object({
+  $schema: z.string().url().optional(),
+  active: z.boolean(),
+  recovery_codes: z.union([z.array(z.string()), z.null()]).optional(),
 });
 const SessionSummary = z.object({
   created_at: z.string().datetime({ offset: true }),
@@ -411,6 +430,9 @@ export const schemas = {
   RevokeInvitationResponse,
   ResendInvitationResponse,
   MeResponse,
+  MFAEnrollResponse,
+  MFAVerifyRequest,
+  MFAVerifyResponse,
   SessionSummary,
   ListSessionsResponse,
   ListOfficesResponse,

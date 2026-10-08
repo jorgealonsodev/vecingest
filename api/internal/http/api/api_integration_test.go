@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -26,10 +27,16 @@ import (
 	"github.com/jorgealonsodev/vecingest/internal/http/router"
 	"github.com/jorgealonsodev/vecingest/internal/platform/attempts"
 	"github.com/jorgealonsodev/vecingest/internal/platform/cache"
+	"github.com/jorgealonsodev/vecingest/internal/platform/captcha"
 	"github.com/jorgealonsodev/vecingest/internal/platform/mail"
 	"github.com/jorgealonsodev/vecingest/internal/platform/queue"
 	"github.com/jorgealonsodev/vecingest/internal/testhelpers"
 )
+
+// testEncryptionKey stands in for ENCRYPTION_KEY, under which the
+// invitation-email job payload's short code is sealed by the producer
+// and opened by the worker (never persisted in plaintext).
+var testEncryptionKey = sha256.Sum256([]byte("vecingest-integration-test-encryption-key"))
 
 const (
 	testCookieDomain = "127.0.0.1"
@@ -38,14 +45,21 @@ const (
 )
 
 // xffTransport injects a two-hop X-Forwarded-For header on every
-// request so the dev-only ClientIPFromXFFTrustedProxies(1) fallback
-// resolves a stable, realistic "client" IP (203.0.113.9) instead of ""
-// -- exercising the exact D-H mechanism a real reverse-proxy deployment
-// would, not a bypass of it.
+// request that does not already carry one, so the dev-only
+// ClientIPFromXFFTrustedProxies(1) fallback resolves a stable,
+// realistic "client" IP (203.0.113.9) instead of "" -- exercising the
+// exact D-H mechanism a real reverse-proxy deployment would, not a
+// bypass of it. It must NOT overwrite a header the caller set: it used
+// to, which silently collapsed every doFromIPClient "distinct address"
+// onto one address and left the address leg of the invitation
+// enumeration lockout untested (review lineage
+// review-0e1833930adf141a).
 type xffTransport struct{ base http.RoundTripper }
 
 func (t xffTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	r.Header.Set("X-Forwarded-For", "10.0.0.1, 203.0.113.9")
+	if r.Header.Get("X-Forwarded-For") == "" {
+		r.Header.Set("X-Forwarded-For", "10.0.0.1, 203.0.113.9")
+	}
 	return t.base.RoundTrip(r)
 }
 
@@ -56,7 +70,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *handlers.Deps, db.Handles) 
 	}
 
 	handlesDB, _ := testhelpers.AppRWHandles(t)
-	authz.Configure(db.New(handlesDB.Read))
+	authz.ConfigureFromHandles(handlesDB)
 
 	accessSecret := []byte("test-jwt-secret-32-bytes-long-enough")
 	refreshSecret := []byte("test-jwt-refresh-secret-32-bytes-ok")
@@ -73,7 +87,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *handlers.Deps, db.Handles) 
 	// invitation creation's river.InsertTx call is exercised for real
 	// -- no fake Queue double, and no real SMTP server (task 6.17: "M1
 	// does not depend on production SMTP").
-	riverClient, err := queue.NewClient(handlesDB.Write.Pool(), nil, logMailer)
+	riverClient, err := queue.NewClient(handlesDB.Write.Pool(), nil, logMailer, testEncryptionKey)
 	if err != nil {
 		t.Fatalf("build river client: %v", err)
 	}
@@ -95,7 +109,11 @@ func newTestServer(t *testing.T) (*httptest.Server, *handlers.Deps, db.Handles) 
 		ResetRequester:  handlers.DBResetRequester{DB: handlesDB.Write, Sender: logMailer},
 		TokenIssuer:     handlers.OpaqueTokenIssuer{},
 		InviteAttempts:  attempts.NewCounter(nil),
-		Queue:           queue.RiverInvitationQueue{Client: riverClient},
+		Queue:           queue.RiverInvitationQueue{Client: riverClient, Key: testEncryptionKey},
+		// Every test not specifically exercising Turnstile injects the
+		// AlwaysPass double, so none of them depend on network access
+		// (design D-7; this session's explicit instruction).
+		Captcha: captcha.AlwaysPass{},
 	}
 
 	registry := health.NewRegistry(health.PostgresCheck{DB: handlesDB.Write})
@@ -462,8 +480,11 @@ func TestAuthFlow_ForgotPasswordEnumerationSafe(t *testing.T) {
 	createUser(t, handlesDB, email, false)
 
 	client := newClient(srv, nil)
-	resp1, body1 := doJSON(t, client, http.MethodPost, srv.URL+"/v1/auth/forgot-password", map[string]any{"email": email}, nil)
-	resp2, body2 := doJSON(t, client, http.MethodPost, srv.URL+"/v1/auth/forgot-password", map[string]any{"email": "no-such-user@example.com"}, nil)
+	// A non-empty turnstile_token is enough here: this server's Captcha
+	// is captcha.AlwaysPass{} (public-form-protection is exercised by
+	// its own dedicated tests in public_form_protection_test.go).
+	resp1, body1 := doJSON(t, client, http.MethodPost, srv.URL+"/v1/auth/forgot-password", map[string]any{"email": email, "turnstile_token": "test-token"}, nil)
+	resp2, body2 := doJSON(t, client, http.MethodPost, srv.URL+"/v1/auth/forgot-password", map[string]any{"email": "no-such-user@example.com", "turnstile_token": "test-token"}, nil)
 
 	if resp1.StatusCode != resp2.StatusCode || resp1.StatusCode != http.StatusOK {
 		t.Fatalf("expected identical 200 status for both, got %d and %d", resp1.StatusCode, resp2.StatusCode)

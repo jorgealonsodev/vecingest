@@ -152,7 +152,13 @@ func Self[I any, O any](api huma.API, op huma.Operation, handler func(context.Co
 		}
 		memberships, err := authz.ResolveSelf(ctx, userID)
 		if err != nil {
-			return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
+			// The SAME mapping the other constructors use, not a blanket
+			// 500: ResolveSelf now runs the mandatory-TOTP gate over the
+			// admin memberships it hands out (review lineage
+			// review-c4efc3f92d076299), and that refusal has to reach the
+			// client as the 403 code naming the client's next move --
+			// enroll a factor, or log in again with one.
+			return nil, resolveErrorResponse(err)
 		}
 		return handler(ctx, in, memberships)
 	})
@@ -165,6 +171,22 @@ func Self[I any, O any](api huma.API, op huma.Operation, handler func(context.Co
 func resolveErrorResponse(err error) error {
 	if errors.Is(err, authz.ErrNoMembership) {
 		return apperr.New(404, apperr.CodeNotFound, "not found", nil)
+	}
+	if errors.Is(err, authz.ErrMFAEnrollmentRequired) {
+		// Distinguishable from the generic forbidden() (design D-7;
+		// auth-mfa-totp delta: Mandatory TOTP For Admin And Admin_staff
+		// Scope Access) -- the SAME code superadmin login already uses
+		// for its own mandatory-TOTP branch. The client's move is to
+		// enroll a factor.
+		return apperr.New(403, apperr.CodeMFAEnrollmentRequired, "TOTP enrollment required for this role", nil)
+	}
+	if errors.Is(err, authz.ErrMFAAuthenticationRequired) {
+		// A SEPARATE code from the one above: the factor exists, this
+		// session just never used it, so the client's move is to log in
+		// again with a code -- not to open an enrollment screen that
+		// would refuse them with a 409 (review lineage
+		// review-0e1833930adf141a).
+		return apperr.New(403, apperr.CodeMFARequired, "second-factor authentication required for this role", nil)
 	}
 	return apperr.New(500, apperr.CodeInternal, "internal error", nil)
 }

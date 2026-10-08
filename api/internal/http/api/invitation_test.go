@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/jorgealonsodev/vecingest/internal/db"
+	"github.com/jorgealonsodev/vecingest/internal/domain/auth/lockout"
+	"github.com/jorgealonsodev/vecingest/internal/domain/auth/mfa"
 )
 
 // uuidPgtype/pgtypeText adapt uuid.UUID/string to the pgtype.UUID/
@@ -391,7 +394,12 @@ func TestInvitation_AcceptCreatesOrLinksAnAccount(t *testing.T) {
 	}
 
 	// Scenario 2: accept with an existing account links the membership
-	// without duplicating the user.
+	// without duplicating the user. REWRITTEN as part of the review
+	// lineage review-0e1833930adf141a correction: this scenario used to
+	// assert that the linking branch succeeds on ANY policy-valid
+	// password, which is exactly the account-takeover the review found.
+	// The password field is now load-bearing -- a wrong one is refused
+	// and mints nothing, and only the account's OWN password links it.
 	existingEmail := "invite-accept-existing@example.com"
 	existingUserID := createUser(t, handlesDB, existingEmail, false)
 	unitID2 := seedUnit(t, handlesDB, communityID)
@@ -400,9 +408,18 @@ func TestInvitation_AcceptCreatesOrLinksAnAccount(t *testing.T) {
 	}, auth)
 	code2, _ := createBody2["short_code"].(string)
 
+	resp, wrongBody := doFromIPClient(t, client, srv.URL+"/v1/auth/accept-invitation", http.MethodPost, "203.0.113.72",
+		map[string]any{
+			"short_code": code2, "name": "Existing Account User", "password": "a-different-valid-password-1",
+			"consent": true, "platform": "ios",
+		}, inviteHeaders("android", "2.0.0"))
+	if resp.StatusCode < 400 || wrongBody["access_token"] != nil {
+		t.Fatalf("expected accept for an existing account with the WRONG password to be refused with no session, got %d body=%v", resp.StatusCode, wrongBody)
+	}
+
 	resp, body2 := doFromIPClient(t, client, srv.URL+"/v1/auth/accept-invitation", http.MethodPost, "203.0.113.71",
 		map[string]any{
-			"short_code": code2, "name": "Existing Account User", "password": "correct-horse-battery-staple-1",
+			"short_code": code2, "name": "Existing Account User", "password": testPassword,
 			"consent": true, "platform": "ios",
 		}, inviteHeaders("android", "2.0.0"))
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
@@ -700,5 +717,502 @@ func TestInvitation_DailySweepTransitionsExpiredPendingRows(t *testing.T) {
 	}
 	if futureRow.Status != "pending" {
 		t.Fatalf("expected the still-valid pending invitation to remain untouched by the sweep, got %s", futureRow.Status)
+	}
+}
+
+// invitations (security correction, review lineage
+// review-0e1833930adf141a: R1-accept-invitation-account-takeover /
+// R3-accept-links-existing-account-without-credential-proof). An
+// invitation secret alone MUST NOT mint a session for a pre-existing
+// account: invitation creation takes a fully caller-supplied email and
+// hands the creating admin the plaintext short code back, so linking
+// without credential proof turns any admin/admin_staff into a
+// cross-tenant account-takeover primitive.
+func TestInvitation_AcceptRequiresTheExistingAccountsOwnPassword(t *testing.T) {
+	srv, deps, handlesDB := newTestServer(t)
+	client := newClient(srv, nil)
+
+	officeID, adminID := seedOfficeWithAdmin(t, handlesDB, "invite-takeover-admin@example.com")
+	communityID := seedCommunity(t, handlesDB, officeID, "Invite Takeover Community")
+	unitID := seedUnit(t, handlesDB, communityID)
+	adminToken := mintAccessToken(t, deps, handlesDB, adminID, false)
+	auth := map[string]string{"Authorization": "Bearer " + adminToken}
+
+	victimEmail := "invite-takeover-victim@example.com"
+	victimID := createUser(t, handlesDB, victimEmail, false)
+
+	_, createBody := doJSON(t, client, http.MethodPost, srv.URL+"/v1/communities/"+communityID.String()+"/invitations", map[string]any{
+		"unit_id": unitID.String(), "email": victimEmail, "role": "owner",
+	}, auth)
+	shortCode, _ := createBody["short_code"].(string)
+
+	// The exploit: the invitation's creator accepts it themselves,
+	// supplying a password of their own choosing.
+	resp, body := doFromIPClient(t, client, srv.URL+"/v1/auth/accept-invitation", http.MethodPost, "203.0.113.60",
+		map[string]any{
+			"short_code": shortCode, "name": "Attacker", "password": "attacker-chosen-password-1",
+			"consent": true, "platform": "ios",
+		}, inviteHeaders("ios", "1.0.0"))
+	if resp.StatusCode < 400 {
+		t.Fatalf("expected accept for a pre-existing account WITHOUT that account's password to be rejected, got %d body=%v", resp.StatusCode, body)
+	}
+	if body["access_token"] != nil || body["refresh_token"] != nil {
+		t.Fatalf("expected NO session to be minted for the victim account, got tokens in %v", body)
+	}
+	members, err := db.New(handlesDB.Write).ListUnitMembersByUnitID(t.Context(), db.ListUnitMembersByUnitIDParams{UnitID: unitID, CommunityID: communityID})
+	if err != nil {
+		t.Fatalf("list unit members: %v", err)
+	}
+	for _, m := range members {
+		if m.UserID == victimID {
+			t.Fatalf("expected the rejected accept to leave the victim account unlinked, got membership %v", m)
+		}
+	}
+
+	// The rejected attempt rolled back rather than consuming the
+	// invitation, so the real account owner can still accept it.
+	resp, body = doFromIPClient(t, client, srv.URL+"/v1/auth/accept-invitation", http.MethodPost, "203.0.113.61",
+		map[string]any{
+			"short_code": shortCode, "name": "Victim", "password": testPassword,
+			"consent": true, "platform": "ios",
+		}, inviteHeaders("ios", "1.0.0"))
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected accept with the account's OWN password to succeed, got %d body=%v", resp.StatusCode, body)
+	}
+	if body["access_token"] == nil {
+		t.Fatalf("expected the legitimate owner's accept to still issue a session, got %v", body)
+	}
+}
+
+// invitations (security correction, review lineage
+// review-0e1833930adf141a: R3-enumeration-lockout-keyed-on-client-
+// controlled-headers). The lockout key must be keyed on the address
+// leg alone: the device leg is fully client-supplied, so including it
+// let a single caller reset the counter on every request.
+func TestInvitation_EnumerationLockoutIgnoresClientControlledDeviceHeaders(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	client := newClient(srv, nil)
+
+	ip := "203.0.113.150"
+	for i := 0; i < 10; i++ {
+		resp, body := doFromIPClient(t, client, srv.URL+"/v1/invitations/preview", http.MethodPost, ip,
+			map[string]any{"short_code": fmt.Sprintf("ROTATE%02d", i)},
+			inviteHeaders("ios", fmt.Sprintf("%d.0.0", i)))
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("expected 404 for guess %d against a nonexistent code, got %d body=%v", i, resp.StatusCode, body)
+		}
+	}
+
+	resp, body := doFromIPClient(t, client, srv.URL+"/v1/invitations/preview", http.MethodPost, ip,
+		map[string]any{"short_code": "ROTATE99"}, inviteHeaders("android", "99.0.0"))
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected the 11th attempt from the SAME address to be locked out despite a different X-Platform/X-App-Version pair on every request, got %d body=%v", resp.StatusCode, body)
+	}
+}
+
+// R1-accept-invitation-bypasses-login-lockout (review lineage
+// review-e72754dc7521b57a). POST /v1/auth/accept-invitation runs a full
+// password check against a pre-existing account chosen freely by
+// whoever created the invitation, and a wrong password rolls the whole
+// accept back -- the invitation stays pending and the same short code
+// is replayable indefinitely. Routing those failures through the
+// per-address invitation counter alone leaves an unauthenticated
+// password-guessing oracle that never locks the victim's account and
+// never raises the alert the login path raises. Repeated wrong
+// passwords here MUST lock the account exactly as they would through
+// POST /v1/auth/login.
+func TestInvitation_AcceptWrongPasswordLocksTheAccountLikeLogin(t *testing.T) {
+	srv, deps, handlesDB := newTestServer(t)
+	client := newClient(srv, nil)
+
+	officeID, adminID := seedOfficeWithAdmin(t, handlesDB, "invite-lockout-admin@example.com")
+	communityID := seedCommunity(t, handlesDB, officeID, "Invite Lockout Community")
+	unitID := seedUnit(t, handlesDB, communityID)
+	adminToken := mintAccessToken(t, deps, handlesDB, adminID, false)
+
+	// The victim is an arbitrary pre-existing account: the creation DTO
+	// takes the email verbatim, so the attacker picks the target.
+	victimEmail := "invite-lockout-victim@example.com"
+	createUser(t, handlesDB, victimEmail, false)
+
+	_, createBody := doJSON(t, client, http.MethodPost, srv.URL+"/v1/communities/"+communityID.String()+"/invitations", map[string]any{
+		"unit_id": unitID.String(), "email": victimEmail, "role": "owner",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	shortCode, _ := createBody["short_code"].(string)
+	if shortCode == "" {
+		t.Fatalf("test setup: expected a short_code from invitation creation, got %v", createBody)
+	}
+
+	const attackerIP = "203.0.113.90"
+	accept := func(pw string) (*http.Response, map[string]any) {
+		return doFromIPClient(t, client, srv.URL+"/v1/auth/accept-invitation", http.MethodPost, attackerIP,
+			map[string]any{
+				"short_code": shortCode, "name": "Guesser", "password": pw,
+				"consent": true, "platform": "ios",
+			}, inviteHeaders("ios", "1.0.0"))
+	}
+
+	// Exactly the login path's own budget of wrong guesses, replaying
+	// the one short code (each failure rolls the accept back).
+	for i := range lockout.Threshold {
+		resp, body := accept(fmt.Sprintf("wrong-password-guess-number-%d", i))
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("guess %d: expected 401 invalid credentials, got %d body=%v", i+1, resp.StatusCode, body)
+		}
+	}
+
+	// The victim's ACCOUNT must now be locked, exactly as it would be
+	// after the same number of failed logins -- proven from a DIFFERENT
+	// client address, so this is the email-scoped leg of d.Lockout and
+	// not merely the attacker's own IP budget.
+	resp, body := doFromIPClient(t, client, srv.URL+"/v1/auth/login", http.MethodPost, "203.0.113.91",
+		map[string]any{"email": victimEmail, "password": testPassword, "platform": "web"}, nil)
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected login with the CORRECT password to be locked out (429) after %d wrong passwords through accept-invitation, got %d body=%v", lockout.Threshold, resp.StatusCode, body)
+	}
+
+	// And accept-invitation itself must honour that same lock, or the
+	// oracle simply continues on the endpoint that opened it.
+	resp, body = accept(testPassword)
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected accept-invitation to refuse a locked-out account with 429, got %d body=%v", resp.StatusCode, body)
+	}
+}
+
+// R1-plaintext-short-code-persisted-in-job-row (review lineage
+// review-e72754dc7521b57a). The invitation email job is inserted with
+// river.InsertTx inside the creation transaction, so its payload is a
+// DURABLE row in river_job -- pending, and retained after completion.
+// Carrying the short code there in plaintext hands a directly usable
+// credential to anyone with SELECT on that table, a database backup or
+// a read replica, which is exactly the guarantee
+// invitations.short_code_hash exists to provide. The email genuinely
+// needs the plaintext to send it, so the payload carries it SEALED with
+// ENCRYPTION_KEY (the same AES-256-GCM primitive user_mfa's TOTP
+// secrets use) and the worker opens it at send time.
+func TestInvitation_JobRowNeverPersistsThePlaintextShortCode(t *testing.T) {
+	srv, deps, handlesDB := newTestServer(t)
+	client := newClient(srv, nil)
+
+	officeID, adminID := seedOfficeWithAdmin(t, handlesDB, "invite-jobrow-admin@example.com")
+	communityID := seedCommunity(t, handlesDB, officeID, "Invite Job Row Community")
+	unitID := seedUnit(t, handlesDB, communityID)
+	adminToken := mintAccessToken(t, deps, handlesDB, adminID, false)
+
+	_, createBody := doJSON(t, client, http.MethodPost, srv.URL+"/v1/communities/"+communityID.String()+"/invitations", map[string]any{
+		"unit_id": unitID.String(), "email": "invite-jobrow@example.com", "role": "owner",
+	}, map[string]string{"Authorization": "Bearer " + adminToken})
+	shortCode, _ := createBody["short_code"].(string)
+	if shortCode == "" {
+		t.Fatalf("test setup: expected a short_code from invitation creation, got %v", createBody)
+	}
+
+	var args []byte
+	if err := handlesDB.Write.QueryRow(t.Context(),
+		`SELECT args FROM river_job WHERE kind = 'invitation_email' ORDER BY id DESC LIMIT 1`,
+	).Scan(&args); err != nil {
+		t.Fatalf("read the persisted invitation_email job row: %v", err)
+	}
+
+	if strings.Contains(string(args), shortCode) {
+		t.Fatalf("the persisted river_job row holds the plaintext short code, a directly usable credential: %s", args)
+	}
+
+	// ... and it must still be the REAL code, sealed -- dropping it
+	// would satisfy the assertion above while silently breaking every
+	// invitation email.
+	var payload struct {
+		ShortCodeEncrypted []byte `json:"short_code_encrypted"`
+	}
+	if err := json.Unmarshal(args, &payload); err != nil {
+		t.Fatalf("decode the persisted job payload: %v", err)
+	}
+	opened, err := mfa.DecryptSecret(testEncryptionKey, payload.ShortCodeEncrypted)
+	if err != nil {
+		t.Fatalf("expected the persisted job payload to carry the short code sealed under ENCRYPTION_KEY: %v", err)
+	}
+	if string(opened) != shortCode {
+		t.Fatalf("expected the sealed payload to open to the issued short code %q, got %q", shortCode, opened)
+	}
+}
+
+// R1-invitation-short-code-hash-offline-recoverable (review lineage
+// review-c4efc3f92d076299). The short code is 8 symbols from a 32-symbol
+// alphabet -- about 40 bits -- and it was persisted as a single-round
+// unsalted SHA-256 digest under a UNIQUE index. Full enumeration of that
+// preimage space is minutes of commodity GPU work, so the digest
+// protected nothing against an adversary who can read the invitations
+// table: a backup, a read replica, or anyone with SELECT. That is the
+// SAME adversary this candidate names when it seals the very same short
+// code before letting it reach a durable river_job row, and recovering
+// one pending code is enough on its own -- accept resolves by short code
+// and issues a session plus a membership with no second secret.
+func TestInvitation_ShortCodeDigestIsNotOfflineEnumerable(t *testing.T) {
+	srv, deps, handlesDB := newTestServer(t)
+	client := newClient(srv, nil)
+
+	officeID, adminID := seedOfficeWithAdmin(t, handlesDB, "invite-digest-admin@example.com")
+	communityID := seedCommunity(t, handlesDB, officeID, "Invite Digest Community")
+	unitID := seedUnit(t, handlesDB, communityID)
+	auth := map[string]string{"Authorization": "Bearer " + mintAccessToken(t, deps, handlesDB, adminID, false)}
+
+	_, createBody := doJSON(t, client, http.MethodPost, srv.URL+"/v1/communities/"+communityID.String()+"/invitations", map[string]any{
+		"unit_id": unitID.String(), "email": "invite-digest@example.com", "role": "owner",
+	}, auth)
+	shortCode, _ := createBody["short_code"].(string)
+	if shortCode == "" {
+		t.Fatalf("test setup: expected a short code in the creation response, got %v", createBody)
+	}
+
+	var stored []byte
+	if err := handlesDB.Write.QueryRow(t.Context(),
+		`SELECT short_code_hash FROM invitations WHERE community_id = $1`, communityID,
+	).Scan(&stored); err != nil {
+		t.Fatalf("read short_code_hash: %v", err)
+	}
+
+	// The exact computation an attacker holding nothing but the table
+	// would run over a 32^8 candidate list.
+	bare := sha256.Sum256([]byte(shortCode))
+	if bytes.Equal(stored, bare[:]) {
+		t.Fatalf("invitations.short_code_hash is a bare unsalted SHA-256 of the short code: ~40 bits of entropy is offline-enumerable, so anyone who can read this table recovers every pending invitation's plaintext code")
+	}
+
+	// It is keyed on ENCRYPTION_KEY specifically -- a secret that lives
+	// in the process environment and never in the database, which is the
+	// whole point. Under a different key the same code no longer
+	// resolves, so the digest cannot have been computed from the code
+	// alone.
+	deps.MFAKey = sha256.Sum256([]byte("a different ENCRYPTION_KEY entirely"))
+	resp, body := doJSON(t, client, http.MethodPost, srv.URL+"/v1/invitations/preview", map[string]any{
+		"short_code": shortCode,
+	}, nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected the short-code digest to be keyed on ENCRYPTION_KEY (a different key must not resolve the same code), got %d body=%v", resp.StatusCode, body)
+	}
+}
+
+// ============================================================================
+// Review lineage review-f855997b550a986d. The three findings below all land
+// on AcceptInvitation, and all three are ordering findings, so they are
+// written as ordering assertions: each one names a step that must not have
+// run yet when the response was produced.
+// ============================================================================
+
+// R1-accept-invitation-runs-argon2id-before-any-validity-check and
+// R3-accept-invitation-status-checked-only-after-credential-work are the same
+// defect seen from two sides: AcceptInvitation never called invitationUsable,
+// so a dead invitation still drove the full credential leg -- the password
+// policy (which reaches HIBP over the network in the production wiring) and
+// then Argon2id -- on an unauthenticated endpoint, and status was enforced
+// only by the conditional UPDATE much later.
+//
+// The password below is 13 characters: long enough for the DTO's static
+// minLength:12, short enough to fail password.PasswordPolicy's 15-character
+// no-MFA floor. That makes the policy OBSERVABLE in the response. Against a
+// revoked invitation the endpoint must answer 404 (the invitation is dead), so
+// a 422 AUTH_PASSWORD_TOO_SHORT_NO_MFA is proof the credential leg ran first.
+func TestInvitation_AcceptDoesNoCredentialWorkForADeadInvitation(t *testing.T) {
+	srv, deps, handlesDB := newTestServer(t)
+	client := newClient(srv, nil)
+
+	officeID, adminID := seedOfficeWithAdmin(t, handlesDB, "invite-order-admin@example.com")
+	communityID := seedCommunity(t, handlesDB, officeID, "Invite Ordering Community")
+	adminToken := mintAccessToken(t, deps, handlesDB, adminID, false)
+	auth := map[string]string{"Authorization": "Bearer " + adminToken}
+
+	// policyViolating passes the huma schema (12) and fails the policy (15).
+	const policyViolating = "short-pw-123x"
+
+	// Branch 1: the invited address has NO account, so the dead invitation
+	// used to reach password.Hash -- one Argon2id per replay, unbounded.
+	newCode := revokedInvitationCode(t, client, srv.URL, communityID, seedUnit(t, handlesDB, communityID), "invite-order-new@example.com", auth)
+	resp, body := doFromIPClient(t, client, srv.URL+"/v1/auth/accept-invitation", http.MethodPost, "203.0.113.120",
+		map[string]any{
+			"short_code": newCode, "name": "Ordering New", "password": policyViolating,
+			"consent": true, "platform": "ios",
+		}, inviteHeaders("ios", "1.0.0"))
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected a revoked invitation to be refused 404 BEFORE any password work runs, got %d body=%v", resp.StatusCode, body)
+	}
+
+	// Branch 2: the invited address HAS an account, which is the branch the
+	// existing revoked-accept assertion never exercised. A wrong password
+	// here must not reach password.Verify at all, so it must not record an
+	// account-lockout failure against the invited address either: revocation
+	// has to terminate the guessing path, not merely fail it later.
+	existingEmail := "invite-order-existing@example.com"
+	createUser(t, handlesDB, existingEmail, false)
+	existingCode := revokedInvitationCode(t, client, srv.URL, communityID, seedUnit(t, handlesDB, communityID), existingEmail, auth)
+
+	const guesserIP = "203.0.113.121"
+	for i := range lockout.Threshold {
+		resp, body = doFromIPClient(t, client, srv.URL+"/v1/auth/accept-invitation", http.MethodPost, guesserIP,
+			map[string]any{
+				"short_code": existingCode, "name": "Ordering Existing", "password": fmt.Sprintf("wrong-password-guess-number-%d", i),
+				"consent": true, "platform": "ios",
+			}, inviteHeaders("ios", "1.0.0"))
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("guess %d: expected a revoked invitation to be refused 404 on the LINKING branch too, got %d body=%v", i+1, resp.StatusCode, body)
+		}
+	}
+
+	// The victim's account must be untouched: a revoked invitation can no
+	// longer be used to lock anyone out.
+	resp, body = doFromIPClient(t, client, srv.URL+"/v1/auth/login", http.MethodPost, "203.0.113.122",
+		map[string]any{"email": existingEmail, "password": testPassword, "platform": "web"}, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected the invited account to still log in normally: a REVOKED invitation must not drive its lockout, got %d body=%v", resp.StatusCode, body)
+	}
+}
+
+// revokedInvitationCode creates an invitation for email, revokes it, and
+// returns its (now dead) short code.
+func revokedInvitationCode(t *testing.T, client *http.Client, srvURL string, communityID, unitID uuid.UUID, email string, auth map[string]string) string {
+	t.Helper()
+	_, created := doJSON(t, client, http.MethodPost, srvURL+"/v1/communities/"+communityID.String()+"/invitations", map[string]any{
+		"unit_id": unitID.String(), "email": email, "role": "owner",
+	}, auth)
+	id, _ := created["id"].(string)
+	code, _ := created["short_code"].(string)
+	if id == "" || code == "" {
+		t.Fatalf("test setup: expected an invitation id and short_code, got %v", created)
+	}
+	resp, body := doJSON(t, client, http.MethodDelete, srvURL+"/v1/invitations/"+id, nil, auth)
+	if resp.StatusCode >= 400 {
+		t.Fatalf("test setup: revoke invitation: %d body=%v", resp.StatusCode, body)
+	}
+	return code
+}
+
+// R1-accept-invitation-mints-a-session-without-the-totp-challenge. Accept's
+// linking branch verified a password and issued a full session while
+// POST /v1/auth/login refused exactly that for the same account. Two doors,
+// one bypass: the invitation's creator picks the invited email freely and
+// reads the plaintext short code out of the creation response, so an attacker
+// holding a victim's password but not the victim's authenticator got a working
+// session here instead of the 403 login returns.
+func TestInvitation_AcceptChallengesTheSecondFactorExactlyLikeLogin(t *testing.T) {
+	srv, deps, handlesDB := newTestServer(t)
+	client := newClient(srv, nil)
+
+	officeID, adminID := seedOfficeWithAdmin(t, handlesDB, "invite-totp-admin@example.com")
+	communityID := seedCommunity(t, handlesDB, officeID, "Invite TOTP Community")
+	unitID := seedUnit(t, handlesDB, communityID)
+	adminToken := mintAccessToken(t, deps, handlesDB, adminID, false)
+	auth := map[string]string{"Authorization": "Bearer " + adminToken}
+
+	victimEmail := "invite-totp-victim@example.com"
+	victimID := createUser(t, handlesDB, victimEmail, false)
+	secret := seedActiveMFAWithSecret(t, handlesDB, deps.MFAKey, victimID)
+
+	// Login already refuses this exact request. Accept must agree.
+	resp, body := login(t, client, srv.URL, victimEmail, "", "web")
+	if resp.StatusCode != http.StatusForbidden || body["code"] != "AUTH_MFA_REQUIRED" {
+		t.Fatalf("test premise: login must refuse a password-only login for this account, got %d body=%v", resp.StatusCode, body)
+	}
+
+	_, created := doJSON(t, client, http.MethodPost, srv.URL+"/v1/communities/"+communityID.String()+"/invitations", map[string]any{
+		"unit_id": unitID.String(), "email": victimEmail, "role": "owner",
+	}, auth)
+	code, _ := created["short_code"].(string)
+
+	accept := func(totpCode, ip string) (*http.Response, map[string]any) {
+		body := map[string]any{
+			"short_code": code, "name": "TOTP Victim", "password": testPassword,
+			"consent": true, "platform": "web",
+		}
+		if totpCode != "" {
+			body["totp_code"] = totpCode
+		}
+		return doFromIPClient(t, client, srv.URL+"/v1/auth/accept-invitation", http.MethodPost, ip, body, inviteHeaders("web", "1.0.0"))
+	}
+
+	resp, body = accept("", "203.0.113.130")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected accept-invitation to refuse a password-only accept for an account with an ACTIVE second factor, exactly as login does, got %d body=%v", resp.StatusCode, body)
+	}
+	if body["code"] != "AUTH_MFA_REQUIRED" {
+		t.Fatalf("expected AUTH_MFA_REQUIRED, the same code login returns for the same account, got %v", body)
+	}
+	if body["access_token"] != nil {
+		t.Fatalf("expected NO session minted for a password-only accept, got %v", body)
+	}
+	if n := liveSessionCount(t, handlesDB, victimID); n != 0 {
+		t.Fatalf("expected NO session row for an accept rejected at the TOTP challenge, got %d", n)
+	}
+
+	// And the invitation must survive the refusal, or the genuine owner
+	// could never complete it.
+	resp, body = accept(validTOTPCode(t, secret), "203.0.113.131")
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected accept WITH a valid code to succeed, got %d body=%v", resp.StatusCode, body)
+	}
+	if body["access_token"] == nil {
+		t.Fatalf("expected a session once the second factor was presented, got %v", body)
+	}
+}
+
+// R3-resend-invitation-dispatches-nothing. Resend incremented sent_count,
+// wrote an audit row, returned 200 and dispatched nothing, on the one endpoint
+// whose entire purpose is delivery -- and sent_count is the operator-visible
+// evidence field, so it recorded sends that never happened.
+//
+// The chosen fix ROTATES the short code (see the handler comment for why the
+// alternative -- persisting a recoverable plaintext -- was rejected), so this
+// asserts all three halves of that contract: a job is enqueued, the new code
+// works, and the superseded one does not.
+func TestInvitation_ResendRotatesTheCodeAndActuallyDispatches(t *testing.T) {
+	srv, deps, handlesDB := newTestServer(t)
+	client := newClient(srv, nil)
+
+	officeID, adminID := seedOfficeWithAdmin(t, handlesDB, "invite-redispatch-admin@example.com")
+	communityID := seedCommunity(t, handlesDB, officeID, "Invite Redispatch Community")
+	unitID := seedUnit(t, handlesDB, communityID)
+	adminToken := mintAccessToken(t, deps, handlesDB, adminID, false)
+	auth := map[string]string{"Authorization": "Bearer " + adminToken}
+
+	_, created := doJSON(t, client, http.MethodPost, srv.URL+"/v1/communities/"+communityID.String()+"/invitations", map[string]any{
+		"unit_id": unitID.String(), "email": "invite-redispatch@example.com", "role": "owner",
+	}, auth)
+	invID, _ := created["id"].(string)
+	originalCode, _ := created["short_code"].(string)
+
+	var before int
+	if err := handlesDB.Write.QueryRow(t.Context(), "SELECT count(*) FROM river_job WHERE kind = 'invitation_email'").Scan(&before); err != nil {
+		t.Fatalf("count invitation_email jobs before resend: %v", err)
+	}
+
+	resp, resent := doJSON(t, client, http.MethodPost, srv.URL+"/v1/invitations/"+invID+"/resend", nil, auth)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 on resend, got %d body=%v", resp.StatusCode, resent)
+	}
+
+	var after int
+	if err := handlesDB.Write.QueryRow(t.Context(), "SELECT count(*) FROM river_job WHERE kind = 'invitation_email'").Scan(&after); err != nil {
+		t.Fatalf("count invitation_email jobs after resend: %v", err)
+	}
+	if after != before+1 {
+		t.Fatalf("expected resend to enqueue exactly one invitation_email job: sent_count is operator-visible evidence of a send, before=%d after=%d", before, after)
+	}
+
+	newCode, _ := resent["short_code"].(string)
+	if newCode == "" {
+		t.Fatalf("expected resend to return the newly issued short code so the paper/voice delivery path still works, got %v", resent)
+	}
+	if newCode == originalCode {
+		t.Fatalf("expected resend to issue a NEW short code, got the same one back")
+	}
+
+	resp, body := doFromIPClient(t, client, srv.URL+"/v1/invitations/preview", http.MethodPost, "203.0.113.140",
+		map[string]any{"short_code": originalCode}, inviteHeaders("web", "1.0.0"))
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected the SUPERSEDED short code to stop working after a resend, got %d body=%v", resp.StatusCode, body)
+	}
+
+	resp, body = doFromIPClient(t, client, srv.URL+"/v1/invitations/preview", http.MethodPost, "203.0.113.141",
+		map[string]any{"short_code": newCode}, inviteHeaders("web", "1.0.0"))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected the newly issued short code to resolve the invitation, got %d body=%v", resp.StatusCode, body)
 	}
 }

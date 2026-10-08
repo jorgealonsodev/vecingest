@@ -34,6 +34,7 @@ func fullValidEnv() map[string]string {
 		"BOOTSTRAP_DATABASE_URL": "postgres://postgres:pw@localhost:5432/vecingest",
 		"APP_DB_USER":            "app_rw",
 		"APP_DB_PASSWORD":        "pw",
+		"TURNSTILE_SECRET":       "test-turnstile-secret",
 	}
 }
 
@@ -72,8 +73,18 @@ func TestLoad_PerSubcommandRequiredSet(t *testing.T) {
 		{"migrate full set passes", config.CommandMigrate, ""},
 		{"migrate missing BOOTSTRAP_DATABASE_URL", config.CommandMigrate, "BOOTSTRAP_DATABASE_URL"},
 		{"migrate missing APP_DB_PASSWORD", config.CommandMigrate, "APP_DB_PASSWORD"},
-		{"worker full set passes (no JWT/PROXY_IP/CORS/PORT/SMTP required)", config.CommandWorker, ""},
+		{"worker full set passes (no JWT/PROXY_IP/CORS/PORT required)", config.CommandWorker, ""},
 		{"worker missing DATABASE_URL", config.CommandWorker, "DATABASE_URL"},
+		// The invitation-email job payload carries its short code
+		// sealed under ENCRYPTION_KEY, and the worker is what opens it.
+		{"worker missing ENCRYPTION_KEY", config.CommandWorker, "ENCRYPTION_KEY"},
+		// The worker is the ONLY consumer of invitation_email jobs, so
+		// a worker with no mail credentials silently completes every
+		// invitation against a sink (review lineage
+		// review-c4efc3f92d076299). It must not boot.
+		{"worker missing SMTP_URL", config.CommandWorker, "SMTP_URL"},
+		{"worker missing MAIL_FROM", config.CommandWorker, "MAIL_FROM"},
+		{"serve missing TURNSTILE_SECRET", config.CommandServe, "TURNSTILE_SECRET"},
 		{"seed full set passes (no ENCRYPTION_KEY required)", config.CommandSeed, ""},
 		{"seed missing DATABASE_URL", config.CommandSeed, "DATABASE_URL"},
 		{"bootstrap-superadmin full set passes (no APP_ENV required)", config.CommandBootstrapSuperadmin, ""},
@@ -219,6 +230,13 @@ func TestLoad_ReadAndWorkerDSNsDefaultToDatabaseURL(t *testing.T) {
 		t.Fatalf("expected DatabaseURLRead to default to DatabaseURL, got %q vs %q", holder.DatabaseURLRead(), holder.DatabaseURL())
 	}
 
+	// Load(CommandServe) above deliberately unsets ENCRYPTION_KEY from
+	// the process environment (TestLoad_EncryptionKeyIsolation), and
+	// the worker now requires it too -- it opens the sealed short code
+	// in the invitation-email job payload. Two commands share one
+	// process only in this test; production runs them apart.
+	t.Setenv("ENCRYPTION_KEY", env["ENCRYPTION_KEY"])
+
 	_, workerHolder, err := config.Load(context.Background(), os.LookupEnv, config.CommandWorker)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -242,4 +260,36 @@ func TestLoad_ConfiguredReadAndWorkerDSNsArePreserved(t *testing.T) {
 	if holder.DatabaseURLRead() != env["DATABASE_URL_READ"] {
 		t.Fatalf("expected the configured DATABASE_URL_READ to be preserved, got %q", holder.DatabaseURLRead())
 	}
+}
+
+// R4-captcha-hard-dependency-no-degradation (review lineage
+// review-e72754dc7521b57a). TURNSTILE_SECRET was optional at this
+// layer, so an operator upgrading a deployment that never set it got a
+// verifier posting an EMPTY secret -- which Cloudflare rejects
+// unconditionally. Every POST /v1/auth/forgot-password would then
+// answer AUTH_CAPTCHA_REQUIRED and no account past two failed logins
+// could ever authenticate again, with nothing failing at boot to say
+// so. A missing secret must be a startup failure, not a silent
+// first-use failure. Development is exempt: it has no Turnstile site
+// to talk to, exactly like PROXY_IP.
+func TestLoad_TurnstileSecretRequiredUnlessDevelopment(t *testing.T) {
+	t.Run("staging requires TURNSTILE_SECRET", func(t *testing.T) {
+		env := fullValidEnv()
+		env["APP_ENV"] = "staging"
+		setEnv(t, env, "TURNSTILE_SECRET")
+		_, _, err := config.Load(context.Background(), os.LookupEnv, config.CommandServe)
+		if err == nil || !strings.Contains(err.Error(), "TURNSTILE_SECRET") {
+			t.Fatalf("expected TURNSTILE_SECRET to be required under APP_ENV=staging, got: %v", err)
+		}
+	})
+
+	t.Run("development allows TURNSTILE_SECRET to be unset", func(t *testing.T) {
+		env := fullValidEnv()
+		env["APP_ENV"] = "development"
+		setEnv(t, env, "TURNSTILE_SECRET")
+		_, _, err := config.Load(context.Background(), os.LookupEnv, config.CommandServe)
+		if err != nil {
+			t.Fatalf("expected APP_ENV=development to allow an unset TURNSTILE_SECRET, got: %v", err)
+		}
+	})
 }
