@@ -73,17 +73,47 @@ carry burned review authority, so the slice is delivered as recorded.
 
 ### Verification
 
-No per-slice verification run exists for this slice. No test, linter or CI
-run has been executed against `7ff0eca` in isolation. Any CI failure on this
-pull request is reported on it; the reviewed commits are not amended or
-rebased, because they carry burned native review authority.
+`ci` run 37750372391 passed at `7ff0eca`, this pull request's head commit.
+`security` run 37750372364 at the same commit failed (see CI status note).
+
+A passing `ci` is not evidence for any checklist item below, and it does not
+make this slice merge-ready. `ci` succeeds when every job either succeeded or
+was skipped by its path filter (the `ci-required` job in
+`.github/workflows/ci.yml`), and the job-level results of this run, including
+those of the `e2e` step this slice adds, are not cited in this body. The
+reviewed commits are not amended or rebased, because they carry burned native
+review authority.
 
 ### CI status note
 
-`security.yml` is already failing on `main` at `f6c79eb`, before any slice of
-this chain: runs 35775418922 (`security`) and 35775419322 (`deploy`) failed on
-2026-09-22 while `ci` passed. That failure is pre-existing on `main` and is not
-caused by this slice.
+`security` run 37750372364 at `7ff0eca` failed. The cause is diagnosed and is
+not specific to this slice: four jobs fail while `gosec` and `govulncheck`
+pass.
+
+- `gitleaks`: the blocking whole-history scan reported 7 leaks, all one test
+  fixture value on seven lines of `api/internal/http/api/invitation_test.go`
+  at commit `a6976ab` (slice 4), a well-known public example passphrase used
+  as a test request body, not a credential.
+- `pnpm audit --audit-level=high`: 20 vulnerabilities, 12 high and 1
+  critical, in transitive npm dependencies.
+- `semgrep`: 1 blocking finding. This slice's tree carries, from slice 6
+  (`311c4fd`), the defect `c2da7da` later fixes: a floating-point query
+  parameter generated under `api/internal/db`, where the project's own
+  `no-float-money-go` rule forbids one.
+- `trivy`: 9 HIGH/CRITICAL findings, all from `pnpm-lock.yaml`.
+
+All four were diagnosed and fixed, but the fixes (`d1b71c2`, `9c8b2ee`,
+`c2da7da`, `afe0b2e`) live at the tip of the chain, in pull request #9, so
+this slice keeps failing: its tree predates them. This was not corrected,
+because propagating the fixes to the base of the chain would require rebasing
+all nine branches and destroying the native review receipts those commits
+carry.
+
+No check mechanically gates merging: `main` has no branch protection and the
+repository has no rulesets, so no check is a required status. The gates are
+this template and human review, and merging remains a human decision. The
+`ci` step this slice adds runs the API suite on pull requests; it does not by
+itself block a merge.
 
 ## Definition of Done (PRD_go.md section 9)
 
@@ -91,21 +121,21 @@ caused by this slice.
       `openapi.yaml`, sqlc code and the TS client are regenerated and
       committed (dirty-diff gate in `ci.yml`).
   - Not checked: `openapi.yaml`, the sqlc code and the TS client are
-    committed in this diff, but no `make gen` dirty-diff check was run for
+    committed in this diff, but no `make gen` dirty-diff result is cited for
     this slice.
 - [ ] `goose` migration reviewed (expand/contract if it touches existing
       data); `.sql` queries filter by their tenant scope column.
-  - Not checked: no migration; `make lint-scope` was not run on the new
-    queries at this slice.
+  - Not checked: no migration; no `make lint-scope` result for the new
+    queries at this slice is cited.
 - [ ] Membership middleware present on every new route, with a test
       confirming another role/community gets 403.
   - Not checked: no route is added; the permission matrix that asserts this
-    for every documented operation is added here but was not run at this
-    slice.
+    for every documented operation is added here, but no result for it at
+    this slice is cited.
 - [ ] Unit tests for the service and at least one e2e test of the main
       flow.
-  - Not checked: `me_test.go` and the app screen tests are added, but nothing
-    was run at this slice.
+  - Not checked: `me_test.go` and the app screen tests are added, but no
+    test result at this slice is cited.
 - [ ] Domain events/notifications defined per the design's event table and
       enqueued with `river.InsertTx` inside the same transaction.
   - Not applicable: no event or notification in this slice.
@@ -132,22 +162,24 @@ caused by this slice.
 - [ ] Decoders use `DisallowUnknownFields` and `huma` validation tags.
   - Not checked: not verified for this slice.
 - [ ] Membership/tenant scope is checked on every new or changed endpoint.
-  - Not checked: `GET /v1/me` is identity-scoped; no run at this slice
-    confirms the changed response.
+  - Not checked: `GET /v1/me` is identity-scoped; no run result cited at
+    this slice confirms the changed response.
 - [ ] No sensitive data appears in logs, error responses or push payloads.
   - Not checked: not verified for this slice.
 - [ ] Secrets stay out of the code (verified locally; `gitleaks` in
       `security.yml` is the CI backstop).
   - Not checked: no local secret scan was run for this slice, and the
-    `security.yml` backstop is failing on `main` (see CI status note).
+    `gitleaks` backstop fails on this pull request (see CI status note).
 - [ ] Migration does not remove or weaken any append-only constraint.
   - Not applicable: no migration in this slice.
 - [ ] `security.yml` is green (gitleaks, govulncheck, gosec, Semgrep,
       `pnpm audit --audit-level=high`, Trivy).
-  - Not checked: `security.yml` is already failing on `main` at `f6c79eb`
-    (pre-existing, not caused by this slice).
+  - Not checked: `security` run 37750372364 at `7ff0eca` failed on four
+    jobs (`gitleaks`, `pnpm audit`, `semgrep`, `trivy`); the fixes exist only
+    at the chain tip, in pull request #9 (see CI status note).
 - [ ] Permission-matrix test passes for every new/changed route.
-  - Not checked: the matrix is added here, but it was not run at this slice.
+  - Not checked: the matrix is added here, but no result for it at this
+    slice is cited.
 
 ### Second-person review required?
 

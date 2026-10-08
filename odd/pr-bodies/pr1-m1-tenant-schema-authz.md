@@ -50,22 +50,53 @@ carry burned review authority, so the slice is delivered as recorded.
 
 ### Verification
 
-No per-slice verification run exists for this slice. No test, linter or CI
-run has been executed against `a47eadd` in isolation.
+`ci` run 37750329003 passed at `a47eadd`, this pull request's head commit.
+`security` run 37750328790 at the same commit failed (see CI status note).
 
-The slices are historically accurate, not independently green. Later commits
-fix earlier ones: `4970237` (slice 3) fixes the bootstrap role statement and
-`604f6a5` (slice 4) fixes River sequence grants. Required CI may therefore
-fail on this pull request and only converge further down the chain. Any such
-failure is reported on the pull request; the reviewed commits are not amended
-or rebased, because they carry burned native review authority.
+A passing `ci` is not evidence for any checklist item below, and it does not
+make this slice merge-ready. `ci` succeeds when every job either succeeded or
+was skipped by its path filter (the `ci-required` job in
+`.github/workflows/ci.yml`), and the job-level results of this run are not
+cited in this body.
+
+Risk that did not occur: the slices are historically accurate, not
+independently green. Later commits fix earlier ones: `4970237` (slice 3)
+fixes the bootstrap role statement and `604f6a5` (slice 4) fixes River
+sequence grants. This body predicted that `ci` might therefore fail on this
+pull request and only converge further down the chain. The prediction did NOT
+materialise: `ci` passed on every intermediate slice, this one included. The
+reviewed commits were not amended or rebased, because they carry burned
+native review authority.
 
 ### CI status note
 
-`security.yml` is already failing on `main` at `f6c79eb`, before any slice of
-this chain: runs 35775418922 (`security`) and 35775419322 (`deploy`) failed on
-2026-09-22 while `ci` passed. That failure is pre-existing on `main` and is not
-caused by this slice.
+`security` run 37750328790 at `a47eadd` failed. The cause is diagnosed and is
+not specific to this slice: four jobs fail while `gosec` and `govulncheck`
+pass.
+
+- `gitleaks`: the blocking whole-history scan reported 7 leaks, all one test
+  fixture value on seven lines of `api/internal/http/api/invitation_test.go`
+  at commit `a6976ab`. That commit is not in this slice's history (it arrives
+  in slice 4); the job checks out with `fetch-depth: 0` and scans the whole
+  fetched repository history, not only this slice's commits.
+- `pnpm audit --audit-level=high`: 20 vulnerabilities, 12 high and 1
+  critical, in transitive npm dependencies.
+- `semgrep`: 1 blocking finding. The genuine defect later fixed by `c2da7da`
+  (a floating-point query parameter generated under `api/internal/db`) is
+  introduced by `311c4fd` in slice 6 and is not in this slice's tree; which
+  finding blocks at this slice was not identified separately.
+- `trivy`: 9 HIGH/CRITICAL findings, all from `pnpm-lock.yaml`.
+
+All four were diagnosed and fixed, but the fixes (`d1b71c2`, `9c8b2ee`,
+`c2da7da`, `afe0b2e`) live at the tip of the chain, in pull request #9, so
+this slice keeps failing: its tree predates them. This was not corrected,
+because propagating the fixes to the base of the chain would require rebasing
+all nine branches and destroying the native review receipts those commits
+carry.
+
+No check mechanically gates merging: `main` has no branch protection and the
+repository has no rulesets, so no check is a required status. The gates are
+this template and human review, and merging remains a human decision.
 
 ## Definition of Done (PRD_go.md section 9)
 
@@ -73,20 +104,22 @@ caused by this slice.
       `openapi.yaml`, sqlc code and the TS client are regenerated and
       committed (dirty-diff gate in `ci.yml`).
   - Not checked: sqlc generated files are committed alongside the new
-    queries, but no `make gen` dirty-diff check was run for this slice.
+    queries, but no `make gen` dirty-diff result is cited for this slice.
 - [ ] `goose` migration reviewed (expand/contract if it touches existing
       data); `.sql` queries filter by their tenant scope column.
   - Not checked: both migrations only create new tables, so no
-    expand/contract step applies, but `make lint-scope` was not run on this
+    expand/contract step applies, but no `make lint-scope` result for this
     slice and no review record is cited here.
 - [ ] Membership middleware present on every new route, with a test
       confirming another role/community gets 403.
   - Not applicable: no route is added. The boot assertion that enforces
-    scope registration for later routes is added here, untested at this slice.
+    scope registration for later routes is added here; no test result for it
+    at this slice is cited.
 - [ ] Unit tests for the service and at least one e2e test of the main
       flow.
-  - Not checked: unit tests for `authz` and schema tests are added, but none
-    was run at this slice, and there is no user-facing flow yet.
+  - Not checked: unit tests for `authz` and schema tests are added, but no
+    result for them at this slice is cited, and there is no user-facing flow
+    yet.
 - [ ] Domain events/notifications defined per the design's event table and
       enqueued with `river.InsertTx` inside the same transaction.
   - Not applicable: no event or notification in this slice.
@@ -110,13 +143,14 @@ caused by this slice.
   - Not applicable: no request decoder in this slice.
 - [ ] Membership/tenant scope is checked on every new or changed endpoint.
   - Not checked: no endpoint is added, and whether wiring the boot assertion
-    changes the behavior of existing endpoints was not verified by a run.
+    changes the behavior of existing endpoints is not shown by any cited run
+    result.
 - [ ] No sensitive data appears in logs, error responses or push payloads.
   - Not checked: not verified for this slice.
 - [ ] Secrets stay out of the code (verified locally; `gitleaks` in
       `security.yml` is the CI backstop).
   - Not checked: no local secret scan was run for this slice, and the
-    `security.yml` backstop is failing on `main` (see CI status note).
+    `gitleaks` backstop fails on this pull request (see CI status note).
 - [x] Migration does not remove or weaken any append-only constraint.
   - Evidence: `00007` and `00008` only `CREATE TABLE` / `CREATE INDEX`;
     neither references `audit_log` or the append-only guard (`grep -ci` for
@@ -124,8 +158,9 @@ caused by this slice.
     only the tables they create.
 - [ ] `security.yml` is green (gitleaks, govulncheck, gosec, Semgrep,
       `pnpm audit --audit-level=high`, Trivy).
-  - Not checked: `security.yml` is already failing on `main` at `f6c79eb`
-    (pre-existing, not caused by this slice).
+  - Not checked: `security` run 37750328790 at `a47eadd` failed on four
+    jobs (`gitleaks`, `pnpm audit`, `semgrep`, `trivy`); the fixes exist only
+    at the chain tip, in pull request #9 (see CI status note).
 - [ ] Permission-matrix test passes for every new/changed route.
   - Not checked: no route is added, and the permission-matrix test does not
     exist yet at this slice (it arrives in slice 7).

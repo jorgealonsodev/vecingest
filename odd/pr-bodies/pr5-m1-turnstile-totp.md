@@ -72,17 +72,45 @@ carry burned review authority, so the slice is delivered as recorded.
 
 ### Verification
 
-No per-slice verification run exists for this slice. No test, linter or CI
-run has been executed against `9ba4715` in isolation. Any CI failure on this
-pull request is reported on it; the reviewed commits are not amended or
-rebased, because they carry burned native review authority.
+`ci` run 37750363025 passed at `9ba4715`, this pull request's head commit.
+`security` run 37750363138 at the same commit failed (see CI status note).
+
+A passing `ci` is not evidence for any checklist item below, and it does not
+make this slice merge-ready. `ci` succeeds when every job either succeeded or
+was skipped by its path filter (the `ci-required` job in
+`.github/workflows/ci.yml`), and the job-level results of this run are not
+cited in this body. The reviewed commits are not amended or rebased, because
+they carry burned native review authority.
 
 ### CI status note
 
-`security.yml` is already failing on `main` at `f6c79eb`, before any slice of
-this chain: runs 35775418922 (`security`) and 35775419322 (`deploy`) failed on
-2026-09-22 while `ci` passed. That failure is pre-existing on `main` and is not
-caused by this slice.
+`security` run 37750363138 at `9ba4715` failed. The cause is diagnosed and is
+not specific to this slice: four jobs fail while `gosec` and `govulncheck`
+pass.
+
+- `gitleaks`: the blocking whole-history scan reported 7 leaks, all one test
+  fixture value on seven lines of `api/internal/http/api/invitation_test.go`
+  at commit `a6976ab` (slice 4), a well-known public example passphrase used
+  as a test request body, not a credential.
+- `pnpm audit --audit-level=high`: 20 vulnerabilities, 12 high and 1
+  critical, in transitive npm dependencies.
+- `semgrep`: 1 blocking finding. The genuine defect later fixed by `c2da7da`
+  (a floating-point query parameter generated under `api/internal/db`) is
+  introduced by `311c4fd` in slice 6 and is not in this slice's tree; which
+  finding blocks at this slice was not identified separately.
+- `trivy`: 9 HIGH/CRITICAL findings, all from `pnpm-lock.yaml`.
+
+All four were diagnosed and fixed, but the fixes (`d1b71c2`, `9c8b2ee`,
+`c2da7da`, `afe0b2e`) live at the tip of the chain, in pull request #9, so
+this slice keeps failing: its tree predates them. This was not corrected,
+because propagating the fixes to the base of the chain would require rebasing
+all nine branches and destroying the native review receipts those commits
+carry. The `security.yml` hunk this slice carries from `main`'s `f6c79eb`
+only drops the weekly schedule; it changes none of the six jobs.
+
+No check mechanically gates merging: `main` has no branch protection and the
+repository has no rulesets, so no check is a required status. The gates are
+this template and human review, and merging remains a human decision.
 
 ## Definition of Done (PRD_go.md section 9)
 
@@ -90,23 +118,23 @@ caused by this slice.
       `openapi.yaml`, sqlc code and the TS client are regenerated and
       committed (dirty-diff gate in `ci.yml`).
   - Not checked: `openapi.yaml`, the sqlc code and the TS client are
-    committed in this diff, but no `make gen` dirty-diff check was run for
+    committed in this diff, but no `make gen` dirty-diff result is cited for
     this slice.
 - [ ] `goose` migration reviewed (expand/contract if it touches existing
       data); `.sql` queries filter by their tenant scope column.
   - Not checked: `00010` is additive and deliberately nullable so existing
     sessions stay un-elevated, and `sessions_mfa_upgrade_test.go` targets the
-    upgrade path, but `make lint-scope` was not run at this slice and no
+    upgrade path, but no `make lint-scope` result at this slice and no
     review record is cited here.
 - [ ] Membership middleware present on every new route, with a test
       confirming another role/community gets 403.
   - Not checked: the slice adds 25 forbidden and 13 not-found assertions
     (scope registration, session gate, MFA, invitation and community tests),
-    but none was run at this slice.
+    but no result for them at this slice is cited.
 - [ ] Unit tests for the service and at least one e2e test of the main
       flow.
   - Not checked: unit tests (Turnstile, lockout, token, mail, queue) and
-    DB-backed API tests exist, but nothing was run at this slice.
+    DB-backed API tests exist, but no test result at this slice is cited.
 - [ ] Domain events/notifications defined per the design's event table and
       enqueued with `river.InsertTx` inside the same transaction.
   - Not checked: the invitation email is enqueued with `InsertTx` on the
@@ -136,7 +164,7 @@ caused by this slice.
 - [ ] Decoders use `DisallowUnknownFields` and `huma` validation tags.
   - Not checked: not verified for this slice.
 - [ ] Membership/tenant scope is checked on every new or changed endpoint.
-  - Not checked: no run at this slice confirms it.
+  - Not checked: no run result cited at this slice confirms it.
 - [ ] No sensitive data appears in logs, error responses or push payloads.
   - Not checked: `4e45d03` removes the slice 4 log-only mailer that logged
     invitation short codes, but the slice as a whole was not verified for
@@ -144,7 +172,7 @@ caused by this slice.
 - [ ] Secrets stay out of the code (verified locally; `gitleaks` in
       `security.yml` is the CI backstop).
   - Not checked: no local secret scan was run for this slice, and the
-    `security.yml` backstop is failing on `main` (see CI status note).
+    `gitleaks` backstop fails on this pull request (see CI status note).
 - [x] Migration does not remove or weaken any append-only constraint.
   - Evidence: `00010_sessions_mfa.sql` only adds the nullable column
     `sessions.mfa_at` (and drops it on `Down`); it does not reference
@@ -152,8 +180,9 @@ caused by this slice.
     returns 0).
 - [ ] `security.yml` is green (gitleaks, govulncheck, gosec, Semgrep,
       `pnpm audit --audit-level=high`, Trivy).
-  - Not checked: `security.yml` is already failing on `main` at `f6c79eb`
-    (pre-existing, not caused by this slice).
+  - Not checked: `security` run 37750363138 at `9ba4715` failed on four
+    jobs (`gitleaks`, `pnpm audit`, `semgrep`, `trivy`); the fixes exist only
+    at the chain tip, in pull request #9 (see CI status note).
 - [ ] Permission-matrix test passes for every new/changed route.
   - Not checked: the permission-matrix test does not exist yet at this slice
     (it arrives in slice 7).

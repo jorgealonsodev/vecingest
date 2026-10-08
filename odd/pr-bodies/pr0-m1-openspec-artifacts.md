@@ -37,16 +37,45 @@ recorded.
 
 ### Verification
 
-No per-slice verification run exists for this slice. No test, linter or CI
-run has been executed against `1755844` in isolation; CI results will come
-only from this pull request's own checks.
+`ci` run 37750325244 passed at `1755844`, this pull request's head commit.
+`security` run 37750325254 at the same commit failed (see CI status note).
+
+A passing `ci` is not evidence for any checklist item below, and it does not
+make this slice merge-ready. `ci` succeeds when every job either succeeded or
+was skipped by its path filter (the `ci-required` job in
+`.github/workflows/ci.yml`), and the job-level results of this run are not
+cited in this body.
 
 ### CI status note
 
-`security.yml` is already failing on `main` at `f6c79eb`, before any slice of
-this chain: runs 35775418922 (`security`) and 35775419322 (`deploy`) failed on
-2026-09-22 while `ci` passed. That failure is pre-existing on `main` and is not
-caused by this slice.
+`security` run 37750325254 at `1755844` failed. The cause is diagnosed and is
+not specific to this slice: four jobs fail while `gosec` and `govulncheck`
+pass.
+
+- `gitleaks`: the blocking whole-history scan reported 7 leaks, all one test
+  fixture value on seven lines of `api/internal/http/api/invitation_test.go`
+  at commit `a6976ab`. That commit is not in this slice's history (it arrives
+  in slice 4); the job checks out with `fetch-depth: 0` and scans the whole
+  fetched repository history, not only this slice's commits.
+- `pnpm audit --audit-level=high`: 20 vulnerabilities, 12 high and 1
+  critical, in transitive npm dependencies.
+- `semgrep`: 1 blocking finding. The genuine defect later fixed by `c2da7da`
+  (a floating-point query parameter generated under `api/internal/db`) is
+  introduced by `311c4fd` in slice 6 and is not in this slice's tree; which
+  finding blocks at this slice was not identified separately.
+- `trivy`: 9 HIGH/CRITICAL findings, all from `pnpm-lock.yaml`.
+
+All four were diagnosed and fixed, but the fixes (`d1b71c2`, `9c8b2ee`,
+`c2da7da`, `afe0b2e`) live at the tip of the chain, in pull request #9, so
+this slice keeps failing: its tree predates them. This was not corrected,
+because propagating the fixes to the base of the chain would require rebasing
+all nine branches and destroying the native review receipts those commits
+carry. `security` had also failed on `main` at `f6c79eb` (run 35775418922,
+2026-09-22), before this chain was opened.
+
+No check mechanically gates merging: `main` has no branch protection and the
+repository has no rulesets, so no check is a required status. The gates are
+this template and human review, and merging remains a human decision.
 
 ## Definition of Done (PRD_go.md section 9)
 
@@ -92,13 +121,14 @@ caused by this slice.
 - [ ] Secrets stay out of the code (verified locally; `gitleaks` in
       `security.yml` is the CI backstop).
   - Not checked: no local secret scan was run for this slice, and the
-    `security.yml` backstop is failing on `main` (see CI status note).
+    `gitleaks` backstop fails on this pull request (see CI status note).
 - [ ] Migration does not remove or weaken any append-only constraint.
   - Not applicable: no migration in this slice.
 - [ ] `security.yml` is green (gitleaks, govulncheck, gosec, Semgrep,
       `pnpm audit --audit-level=high`, Trivy).
-  - Not checked: `security.yml` is already failing on `main` at `f6c79eb`
-    (pre-existing, not caused by this slice).
+  - Not checked: `security` run 37750325254 at `1755844` failed on four
+    jobs (`gitleaks`, `pnpm audit`, `semgrep`, `trivy`); the fixes exist only
+    at the chain tip, in pull request #9 (see CI status note).
 - [ ] Permission-matrix test passes for every new/changed route.
   - Not applicable: no route in this slice.
 
