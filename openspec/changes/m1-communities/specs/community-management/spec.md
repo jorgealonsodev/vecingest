@@ -59,6 +59,13 @@ for `owner` and `tenant`.
 - WHEN they call `PATCH /v1/communities/C`
 - THEN the system returns 403
 
+#### Scenario: Admin of the owning office updates community fields
+
+- GIVEN an `admin` whose `office_id` owns community C
+- WHEN they call `PATCH /v1/communities/C` changing a descriptive field
+- THEN the system returns 200 and the new value is persisted, readable on a
+  subsequent `GET /v1/communities/C`
+
 ### Requirement: Legal And Descriptive Fields Persisted Per §7.3
 
 A community MUST record `name`, `cif`, `address`, `city`, `province`,

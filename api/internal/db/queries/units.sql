@@ -15,3 +15,10 @@ SELECT community_id FROM units WHERE id = $1 AND deleted_at IS NULL;
 
 -- name: ListUnitsByCommunityID :many
 SELECT * FROM units WHERE community_id = $1 AND deleted_at IS NULL ORDER BY block, floor, door;
+
+-- CountUnitsByCommunityID backs community-management: Community Detail
+-- Excludes Cross-Milestone Aggregates -- the community detail response's
+-- unit count is a plain count of this tenant's own rows, never a
+-- reserve-fund/quorum/balance aggregate from a later milestone.
+-- name: CountUnitsByCommunityID :one
+SELECT count(*) FROM units WHERE community_id = $1 AND deleted_at IS NULL;

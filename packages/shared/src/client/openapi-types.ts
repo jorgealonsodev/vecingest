@@ -8,6 +8,23 @@
  */
 
 export interface paths {
+    "/v1/admin/offices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create an office and its first admin user (superadmin only) */
+        post: operations["createOffice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/auth/forgot-password": {
         parameters: {
             query?: never;
@@ -127,6 +144,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/communities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List communities reachable through the caller's own membership */
+        get: operations["listMyCommunities"];
+        put?: never;
+        /** Create a community in the caller's own office */
+        post: operations["createCommunity"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/communities/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a community the caller has a membership tied to */
+        get: operations["getCommunity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update a community (admin/admin_staff only) */
+        patch: operations["updateCommunity"];
+        trace?: never;
+    };
     "/v1/health/live": {
         parameters: {
             query?: never;
@@ -212,10 +265,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/offices/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the caller's own office(s) */
+        get: operations["getMyOffices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/offices/me/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List members of the caller's own office(s) */
+        get: operations["listMyOfficeMembers"];
+        put?: never;
+        /** Add an existing user as admin_staff to the caller's office */
+        post: operations["addOfficeMember"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AddOfficeMemberRequest: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/AddOfficeMemberRequest.json
+             */
+            readonly $schema?: string;
+            /** Format: email */
+            email: string;
+        };
         CSRFTokenResponse: {
             /**
              * Format: uri
@@ -224,6 +322,66 @@ export interface components {
              */
             readonly $schema?: string;
             csrf_token: string;
+        };
+        CommunityDetailResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/CommunityDetailResponse.json
+             */
+            readonly $schema?: string;
+            address?: string;
+            annual_budget?: string;
+            cif?: string;
+            city?: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            dpa_signed_at?: string;
+            id: string;
+            /** Format: date-time */
+            last_ordinary_meeting_at?: string;
+            name: string;
+            office_id: string;
+            /** Format: int64 */
+            office_member_count: number;
+            parent_community_id?: string;
+            postal_code?: string;
+            province?: string;
+            reserve_fund?: string;
+            secretary_is_office: boolean;
+            /** Format: int64 */
+            unit_count: number;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        CommunityResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/CommunityResponse.json
+             */
+            readonly $schema?: string;
+            address?: string;
+            annual_budget?: string;
+            cif?: string;
+            city?: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            dpa_signed_at?: string;
+            id: string;
+            /** Format: date-time */
+            last_ordinary_meeting_at?: string;
+            name: string;
+            office_id: string;
+            parent_community_id?: string;
+            postal_code?: string;
+            province?: string;
+            reserve_fund?: string;
+            secretary_is_office: boolean;
+            /** Format: date-time */
+            updated_at: string;
         };
         Cookie: {
             Domain: string;
@@ -243,6 +401,44 @@ export interface components {
             Secure: boolean;
             Unparsed: string[] | null;
             Value: string;
+        };
+        CreateCommunityRequest: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/CreateCommunityRequest.json
+             */
+            readonly $schema?: string;
+            address?: string;
+            annual_budget?: string;
+            cif?: string;
+            city?: string;
+            name: string;
+            office_id: string;
+            /** Format: uuid */
+            parent_community_id?: string;
+            postal_code?: string;
+            province?: string;
+            reserve_fund?: string;
+            secretary_is_office?: boolean;
+        };
+        CreateOfficeRequest: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/CreateOfficeRequest.json
+             */
+            readonly $schema?: string;
+            address?: string;
+            /** Format: email */
+            admin_email: string;
+            admin_name: string;
+            cif: string;
+            collegiate_number?: string;
+            /** Format: email */
+            email?: string;
+            name: string;
+            phone?: string;
         };
         ErrorDetail: {
             /** @description Where the error occurred, e.g. 'body.items[3].tags' or 'path.thing-id' */
@@ -309,6 +505,33 @@ export interface components {
              */
             readonly $schema?: string;
             accepted: boolean;
+        };
+        ListCommunitiesResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/ListCommunitiesResponse.json
+             */
+            readonly $schema?: string;
+            communities: components["schemas"]["CommunityResponse"][] | null;
+        };
+        ListOfficeMembersResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/ListOfficeMembersResponse.json
+             */
+            readonly $schema?: string;
+            members: components["schemas"]["OfficeMemberResponse"][] | null;
+        };
+        ListOfficesResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/ListOfficesResponse.json
+             */
+            readonly $schema?: string;
+            offices: components["schemas"]["OfficeResponse"][] | null;
         };
         ListSessionsResponse: {
             /**
@@ -378,6 +601,37 @@ export interface components {
             id: string;
             is_superadmin: boolean;
         };
+        OfficeMemberResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/OfficeMemberResponse.json
+             */
+            readonly $schema?: string;
+            /** Format: date-time */
+            created_at: string;
+            id: string;
+            office_id: string;
+            role: string;
+            user_id: string;
+        };
+        OfficeResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/OfficeResponse.json
+             */
+            readonly $schema?: string;
+            address?: string;
+            cif: string;
+            collegiate_number?: string;
+            /** Format: date-time */
+            created_at: string;
+            email?: string;
+            id: string;
+            name: string;
+            phone?: string;
+        };
         ReadyResponse: {
             /**
              * Format: uri
@@ -441,6 +695,25 @@ export interface components {
             /** @description Required unless the response is 403 MFA enrollment-required. */
             totp_code?: string;
         };
+        UpdateCommunityRequest: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/UpdateCommunityRequest.json
+             */
+            readonly $schema?: string;
+            address?: string;
+            annual_budget?: string;
+            cif?: string;
+            city?: string;
+            name?: string;
+            /** Format: uuid */
+            parent_community_id?: string;
+            postal_code?: string;
+            province?: string;
+            reserve_fund?: string;
+            secretary_is_office?: boolean;
+        };
     };
     responses: never;
     parameters: never;
@@ -450,6 +723,41 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    createOffice: {
+        parameters: {
+            query?: never;
+            header?: {
+                Authorization?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateOfficeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OfficeResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     forgotPassword: {
         parameters: {
             query?: never;
@@ -687,6 +995,134 @@ export interface operations {
             };
         };
     };
+    listMyCommunities: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListCommunitiesResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createCommunity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCommunityRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommunityResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getCommunity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommunityDetailResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    updateCommunity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCommunityRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommunityResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     healthLive: {
         parameters: {
             query?: never;
@@ -826,6 +1262,97 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getMyOffices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListOfficesResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    listMyOfficeMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListOfficeMembersResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    addOfficeMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddOfficeMemberRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OfficeMemberResponse"];
+                };
             };
             /** @description Error */
             default: {

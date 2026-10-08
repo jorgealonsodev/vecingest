@@ -87,6 +87,11 @@ func runServe(ctx context.Context, args []string, stdout io.Writer, lookup confi
 	}
 	defer handlesDB.Close()
 
+	// D-4: every scoped.* resolver goes through this Querier (Configure
+	// MUST run before the first scoped request is served); reads use
+	// the read replica, same as every other read-only handler query.
+	authz.Configure(db.New(handlesDB.Read))
+
 	deps, realMailer, err := buildServeDeps(cfg, holder, handlesDB)
 	if err != nil {
 		return fmt.Errorf("serve: build handler dependencies: %w", err)

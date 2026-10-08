@@ -11,6 +11,21 @@ import (
 	"github.com/google/uuid"
 )
 
+const countOfficeMembersByOfficeID = `-- name: CountOfficeMembersByOfficeID :one
+SELECT count(*) FROM office_members WHERE office_id = $1 AND deleted_at IS NULL
+`
+
+// CountOfficeMembersByOfficeID backs community-management: Community
+// Detail Excludes Cross-Milestone Aggregates -- the community detail
+// response's office-member count is a plain count of the owning
+// office's own rows, never a reserve-fund/quorum/balance aggregate.
+func (q *Queries) CountOfficeMembersByOfficeID(ctx context.Context, officeID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countOfficeMembersByOfficeID, officeID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const getOfficeMemberByOfficeAndUser = `-- name: GetOfficeMemberByOfficeAndUser :one
 SELECT id, office_id, user_id, role, deleted_at, created_at, updated_at FROM office_members WHERE office_id = $1 AND user_id = $2 AND deleted_at IS NULL
 `

@@ -16,6 +16,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humachi"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/jorgealonsodev/vecingest/internal/authz"
 	"github.com/jorgealonsodev/vecingest/internal/health"
@@ -76,6 +77,8 @@ func Register(hapi huma.API, d *handlers.Deps, registry *health.Registry) {
 	authGroup.UseMiddleware(bearerAuthAndRateLimit(d))
 	handlers.RegisterLogout(authGroup, d)
 	handlers.RegisterMe(authGroup, d)
+	handlers.RegisterOffices(authGroup, d)
+	handlers.RegisterCommunities(authGroup, d)
 
 	handlers.RegisterRefresh(hapi, d)
 	handlers.RegisterRefreshCSRF(hapi, d)
@@ -117,7 +120,14 @@ func bearerAuthAndRateLimit(d *handlers.Deps) func(huma.Context, func(huma.Conte
 		}
 
 		req, w := humachi.Unwrap(ctx)
-		req = req.WithContext(context.WithValue(req.Context(), limiter.UserIDContextKey, claims.Subject))
+		reqCtx := context.WithValue(req.Context(), limiter.UserIDContextKey, claims.Subject)
+		// D-1: scoped.Community/Office/Self read the authenticated
+		// caller's id back via authz.UserIDFromContext, never from a
+		// header or body they resolve themselves.
+		if userID, perr := uuid.Parse(claims.Subject); perr == nil {
+			reqCtx = authz.ContextWithUserID(reqCtx, userID)
+		}
+		req = req.WithContext(reqCtx)
 		handler := limitMW(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 			next(huma.WithContext(ctx, r.Context()))
 		}))

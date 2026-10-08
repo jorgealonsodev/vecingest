@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/jorgealonsodev/vecingest/internal/authz"
 	"github.com/jorgealonsodev/vecingest/internal/config"
 	"github.com/jorgealonsodev/vecingest/internal/db"
 	"github.com/jorgealonsodev/vecingest/internal/domain/auth/lockout"
@@ -54,6 +55,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *handlers.Deps, db.Handles) 
 	}
 
 	handlesDB, _ := testhelpers.AppRWHandles(t)
+	authz.Configure(db.New(handlesDB.Read))
 
 	accessSecret := []byte("test-jwt-secret-32-bytes-long-enough")
 	refreshSecret := []byte("test-jwt-refresh-secret-32-bytes-ok")

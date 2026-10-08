@@ -12,6 +12,21 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countUnitsByCommunityID = `-- name: CountUnitsByCommunityID :one
+SELECT count(*) FROM units WHERE community_id = $1 AND deleted_at IS NULL
+`
+
+// CountUnitsByCommunityID backs community-management: Community Detail
+// Excludes Cross-Milestone Aggregates -- the community detail response's
+// unit count is a plain count of this tenant's own rows, never a
+// reserve-fund/quorum/balance aggregate from a later milestone.
+func (q *Queries) CountUnitsByCommunityID(ctx context.Context, communityID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countUnitsByCommunityID, communityID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const getUnitByID = `-- name: GetUnitByID :one
 SELECT id, community_id, block, floor, door, type, participation_coefficient, cadastral_ref, deleted_at, created_at, updated_at FROM units WHERE id = $1 AND deleted_at IS NULL
 `

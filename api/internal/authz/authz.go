@@ -128,6 +128,18 @@ func (m Membership) OfficeID() uuid.UUID {
 	return m.scope.id
 }
 
+// Kind returns the resolved scope kind, letting a scoped.Self handler
+// discriminate a caller's mixed office/community Memberships (e.g.
+// office-management's GET /v1/offices/me) without guessing which
+// per-kind accessor is safe to call. Panics on an invalid Membership,
+// same as every other accessor.
+func (m Membership) Kind() Kind {
+	if !m.valid {
+		panic("authz: Membership is invalid (zero value or not resolved)")
+	}
+	return m.scope.kind
+}
+
 // MetadataKey is the huma Operation.Metadata key scoped.* stamps and
 // AssertScopedRegistration reads back (design D-2/V5: Operation.Metadata
 // is yaml:"-" and therefore never reaches the published openapi.yaml).

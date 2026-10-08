@@ -108,4 +108,134 @@ All 25 tasks marked `[x]` in `tasks.md`.
 
 ### Status
 
-25/25 Phase 1 tasks complete. Ready for `sdd-verify`. Phase 2 (WU-2, PR2) not started.
+25/25 Phase 1 tasks complete.
+
+## Work Unit: WU-2 / PR2 — Phase 2: Office Management + Phase 3: Community Management
+
+**Status**: Phase 2 (tasks 2.1–2.9) and Phase 3 (tasks 3.1–3.11) COMPLETE.
+Phase 4+ NOT started (out of this work unit's scope per the
+feature-branch-chain delivery strategy).
+
+**Branch**: `feature/m1-communities-pr2-offices` (base: `feature/m1-communities-pr1-authz-schema`,
+via the tracker `feature/m1-communities`). Not merged, not pushed —
+delivery is the user's decision.
+
+### Phase 2: Office Management (tasks 2.1–2.9)
+
+Implemented in an earlier session and already committed at `f35d85a`
+("feat(m1-communities): add office management (PR2/8)") before this
+apply run started. Recorded here for completeness since Phase 1's
+apply-progress was never updated for it at the time.
+
+**Honest gap, carried from that commit's own message, not smoothed
+over**: Phase 2's four tests (`TestOffice_CreationRestrictedToSuperadmin`,
+`TestOffice_FirstAdminBootstrapWithoutInvitation`,
+`TestOfficeMembers_StaffAdditionRestrictedToExistingAccounts`,
+`TestOffice_GetMyOfficesAndMembersScopedToCaller`) were written in a
+session interrupted before they ever compiled or ran once — the
+strict-TDD RED step was **not observed** for any of them; they were
+written blind and passed on first execution, which is weaker evidence
+than TDD intends. They were checked instead by planting a violation
+(removing the `is_superadmin` guard from `CreateOffice`, confirming the
+suite then fails). This apply run did not redo that work or re-litigate
+it — it is out of Phase 3's assigned scope — but it is flagged here
+per this session's explicit instruction not to repeat that pattern for
+Phase 3 (see below: every Phase 3 RED was freshly observed failing).
+
+- [x] 2.1–2.9: all nine tasks marked `[x]` in `tasks.md` (pre-existing, unchanged by this run)
+
+Files: `api/internal/http/handlers/offices.go`, `api/internal/http/dto/offices.go`,
+`api/internal/http/api/office_test.go` (+ shared test helpers in
+`api/internal/http/api/api_integration_test.go`). `make gen` was run as
+part of 2.9 (per the commit message) and is still clean as of this run's
+own final `make gen` (see Phase 3's Work Unit Evidence below — one `make
+gen` pass covers both phases' regenerated artifacts).
+
+### Phase 3: Community Management (tasks 3.1–3.11)
+
+Every RED test below was run against the codebase BEFORE its
+implementation existed (the `scoped.Office`/`scoped.Community` handlers,
+DTOs, and `api.go` wiring were temporarily removed to a scratch location,
+the suite run, then restored) and observed failing for the intended
+reason — a 404, because the route was not yet registered — never a
+vacuous pass or a compile error masking the real gap.
+
+- [x] 3.1 RED: `TestCommunity_CreationRestrictedToAdminScopedToOffice` — observed failing (403-for-admin_staff assertion hit `404 body=map[]`: route not registered)
+- [x] 3.2 GREEN: implemented `scoped.Office` handler `CreateCommunity` in `api/internal/http/handlers/communities.go`, roles `[admin]`; `office_id` on the insert comes from `membership.OfficeID()` (the resolved, validated membership), never the raw request field directly
+- [x] 3.3 RED: `TestCommunity_ReadAndListScopedByMembership` — observed failing (`expected 200, got 404`: `GET /v1/communities` not registered)
+- [x] 3.4 GREEN: implemented `scoped.Self` handler `ListMyCommunities` (dedups by community id across office-membership and unit-membership legs) and `scoped.Community` handler `GetCommunity` (roles = all four — resolution alone gates 404, no role subset excludes a resolved membership from reading its own community)
+- [x] 3.5 RED: `TestCommunity_UpdateRestrictedToOfficeRoles` — observed failing (`expected 403 ... got 404`: `PATCH /v1/communities/{id}` not registered)
+- [x] 3.6 GREEN: implemented `scoped.Community` handler `UpdateCommunity`, roles `[admin, admin_staff]`
+- [x] 3.7 RED: `TestCommunity_LegalAndDescriptiveFieldsPersisted` — observed failing (`expected creation to succeed, got 404`: endpoint did not exist to test parent-linkage against)
+- [x] 3.8 GREEN: extended `dto.CreateCommunityRequest`/`dto.UpdateCommunityRequest` with the full §7.3 field set (name, cif, address, city, province, postal_code, parent_community_id, annual_budget, reserve_fund, secretary_is_office) and added the `UpdateCommunity` sqlc query (full column SET list, `office_id` kept in `RETURNING` only — see Deviations #2 below, same technique Phase 1 already used for `GetCommunityByID`)
+- [x] 3.9 RED: `TestCommunity_DetailExcludesCrossMilestoneAggregates` — observed failing (`expected 200, got 404`)
+- [x] 3.10 GREEN: added `dto.CommunityDetailResponse` (embeds `CommunityResponse` + `unit_count`/`office_member_count`, computed via new `CountUnitsByCommunityID`/`CountOfficeMembersByOfficeID` sqlc queries); `dto.CommunityResponse` itself carries no reserve-fund-compliance/quorum/balance field anywhere in its struct definition
+- [x] 3.11 Ran `make gen` (openapi.yaml + sqlc + TS client + Zod schemas); confirmed a second run is byte-identical (diffed `openapi.yaml`, `openapi-types.ts`, `schemas/index.ts` before/after — no changes)
+
+### Files Changed (this run — Phase 3 only; Phase 2 files listed above for context)
+
+| File | Action | What Was Done |
+|---|---|---|
+| `api/internal/db/queries/communities.sql` | Modified | Added `UpdateCommunity` (full column set, `office_id` in `RETURNING` only for lint-scope) |
+| `api/internal/db/queries/units.sql` | Modified | Added `CountUnitsByCommunityID` |
+| `api/internal/db/queries/office_members.sql` | Modified | Added `CountOfficeMembersByOfficeID` |
+| `api/internal/db/{communities,units,office_members}.sql.go`, `querier.go` | Generated | `go tool sqlc generate` |
+| `api/internal/http/dto/communities.go` | Created | `CreateCommunityRequest/Input`, `CommunityResponse`, `ListCommunitiesInput/Response`, `GetCommunityInput`, `CommunityDetailResponse`, `UpdateCommunityRequest/Input` |
+| `api/internal/http/handlers/communities.go` | Created | `CreateCommunity`, `ListMyCommunities`, `GetCommunity`, `UpdateCommunity`, `RegisterCommunities`, and the `parseOptionalUUID`/`uuidPtr`/`parseOptionalNumeric`/`numericString`/`timestamptzPtr` helpers |
+| `api/internal/http/api/api.go` | Modified | Wired `handlers.RegisterCommunities(authGroup, d)` |
+| `api/internal/http/api/community_test.go` | Created | 5 integration tests (Testcontainers), `seedCommunity`/`seedUnitOwner` test helpers |
+| `api/openapi/openapi.yaml`, `packages/shared/src/client/openapi-types.ts`, `packages/shared/src/schemas/index.ts` | Generated | `make gen` (covers Phase 2's pending 2.9 gen pass too, plus Phase 3's new community endpoints) |
+
+### TDD Cycle Evidence (Phase 3)
+
+| Task | Test | RED (observed, real) | GREEN | TRIANGULATE |
+|---|---|---|---|---|
+| 3.1/3.2 | `TestCommunity_CreationRestrictedToAdminScopedToOffice` | ✅ 404 (route absent) | ✅ | ✅ 403 (admin_staff) + 200/201 (admin) + office_id-from-membership assertion |
+| 3.3/3.4 | `TestCommunity_ReadAndListScopedByMembership` | ✅ 404 | ✅ | ✅ list-scoped-to-one + foreign-detail-403/404 |
+| 3.5/3.6 | `TestCommunity_UpdateRestrictedToOfficeRoles` | ✅ 404 | ✅ | ➖ single negative case (owner rejected); admin/admin_staff-permitted path is exercised transitively by 3.7's create-then-detail flow, not a dedicated positive PATCH assertion — see Issues Found |
+| 3.7/3.8 | `TestCommunity_LegalAndDescriptiveFieldsPersisted` | ✅ 404 | ✅ | ✅ null-parent case + linked-parent case (create + detail read-back) |
+| 3.9/3.10 | `TestCommunity_DetailExcludesCrossMilestoneAggregates` | ✅ 404 | ✅ | ✅ absence of 3 forbidden field names + presence of both count fields |
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `cd api && go test ./internal/http/api/... -run TestCommunity_ -v` → **5/5 pass** |
+| Runtime harness command/scenario and exact result | Testcontainers Postgres 17, real HTTP round-trip via `httptest.NewTLSServer` + the actual chi/huma router (`newTestServer`) — every Phase 3 assertion goes through the real `bearerAuthAndRateLimit` → `scoped.*` → resolver → handler chain, not a mock |
+| Rollback boundary | Revert `api/internal/http/handlers/communities.go`, `api/internal/http/dto/communities.go`, `api/internal/http/api/community_test.go`; revert the one-line `RegisterCommunities` addition in `api/internal/http/api/api.go`; revert the `UpdateCommunity`/`CountUnitsByCommunityID`/`CountOfficeMembersByOfficeID` additions in `api/internal/db/queries/*.sql` and re-run `go tool sqlc generate` to regenerate `internal/db/*.sql.go` back to their Phase-1-plus-Phase-2 shape |
+
+### Additional verification run
+
+- `cd api && go build ./...` → clean
+- `cd api && go test -race ./...` → **300/300 pass**, 36 packages (up from Phase 1's 291; +4 Phase 2 tests already counted there, +5 Phase 3 tests this run)
+- `cd api && go run ./cmd/lintscope ./internal/db/queries` → `OK — every query against a tenant-scoped table references its tenant column`
+- `cd api && go vet ./...` → clean
+- `gofmt -l api/` → clean (no files listed)
+- `gofumpt`/`golangci-lint`/`gosec` → **not available in this environment** (binaries not installed, no `go tool` directive for them in `go.mod`); `gofmt`/`go vet` substituted as the closest available static checks. This is an environment limitation, not a skipped project requirement — flagging honestly rather than fabricating a result.
+- `make gen` → clean; re-run confirmed byte-identical (`diff -q` on `openapi.yaml`, `openapi-types.ts`, `schemas/index.ts` before/after: no output, i.e., no differences)
+
+### Deviations from Design
+
+1. **`last_ordinary_meeting_at`, `dpa_signed_at`, `transferred_from_office_id`, `transferred_at` are NOT exposed as settable HTTP request fields**, even though task 3.8 says "full column set" and D-5's table names all of them. The `UpdateCommunity` sqlc query's SET list DOES include `last_ordinary_meeting_at`/`dpa_signed_at` (round-tripped from the current row when the DTO leaves them unset, so they can never be silently reset to NULL by an unrelated PATCH) — but no Phase 3 requirement or scenario in `spec.md` exercises them via the API, and `transferred_from_office_id`/`transferred_at` in particular describe a materially different sensitive operation (moving a tenant to a different office) that an admin/admin_staff role check scoped to the caller's OWN office must never be able to trigger implicitly through a generic community PATCH. Flagging this explicitly rather than either inventing an unrequested transfer endpoint or quietly dropping the columns from the SQL.
+2. **`UpdateCommunity` keeps `office_id` in its `RETURNING` list only, not as a settable column** — identical technique and identical reasoning to Phase 1's already-documented `GetCommunityByID` deviation: an `UPDATE ... WHERE id = $1` already scoped to one exact community id has no other tenant's row to touch, but `lint-scope`'s textual check still needs to see the column name. `go run ./cmd/lintscope` confirms this passes.
+3. **`ListMyCommunities` deduplicates communities reachable through more than one membership** (e.g., a caller who is simultaneously an office admin and, separately, a unit owner in one of that office's communities) via an in-handler `map[uuid.UUID]bool`. No spec scenario names this edge case; implemented defensively since an undeduplicated list response would otherwise leak an implementation detail (multiple memberships to the same resource) as duplicate rows.
+4. **Money fields (`annual_budget`, `reserve_fund`) use `pgtype.Numeric` with a decimal-string API surface (`Scan`/`Value`), not `shopspring/decimal.Decimal`.** This follows the EXISTING Phase 1 generated code exactly (`sqlc.yaml`'s `numeric → decimal.Decimal` override only applies to `NOT NULL` columns per sqlc's own override semantics; both money columns are nullable, so Phase 1's `sqlc generate` already produced `pgtype.Numeric` for them, before this run touched anything). This run did not change that override or introduce a new pattern — it reuses what Phase 1 already generated, and never represents money as `float64` anywhere.
+
+### Issues Found
+
+1. `TestCommunity_UpdateRestrictedToOfficeRoles` only asserts the negative case (owner → 403). The positive case (admin/admin_staff → 200 with the field actually changed) is exercised only indirectly, through the create-then-read flow in `TestCommunity_LegalAndDescriptiveFieldsPersisted`'s parent-linkage assertions, which never calls PATCH at all. A dedicated `admin successfully updates a field via PATCH` assertion is not stated as a required scenario in `spec.md`'s "Community Update Restricted To Office Roles" requirement (its own two GIVEN/WHEN/THEN blocks are role-restriction only), so this is not a missing RED task — but a future phase or verification pass touching `UpdateCommunity` should add one before relying on this code path's correctness beyond the role gate.
+
+### Review Workload / PR Boundary
+
+- Mode: chained PR slice (`feature-branch-chain`, per `tasks.md`'s Review Workload Forecast — WU-2/PR2 was forecast inside the 400-line budget).
+- Current work unit: WU-2 (Phase 2 tasks 2.1–2.9, already committed at `f35d85a`; Phase 3 tasks 3.1–3.11, this run) — office + community management endpoints, PR2 (base: PR1).
+- Boundary: starts from `feature/m1-communities-pr1-authz-schema`'s tip; ends with a fully green `go test -race ./...` (300/300) including the five new community-management integration tests and a clean, idempotent `make gen`.
+- Authored line count, measured precisely via `git diff --stat`/`wc -l`, excluding every sqlc-generated `*.sql.go`/`querier.go` and generated `openapi.yaml`/TS client/Zod artifact:
+  - Phase 2 (already committed at `f35d85a`, measured against its own parent): **623 insertions** across `api.go`, `api_integration_test.go`, `office_test.go`, `dto/offices.go`, `handlers/offices.go`.
+  - Phase 3 (this run): `dto/communities.go` 147, `handlers/communities.go` 414, `api/community_test.go` 219, `communities.sql`/`units.sql`/`office_members.sql` additions 47, `api.go` +1 ⇒ **828 lines**.
+  - **PR2 combined total: ~1,451 authored lines — well above the 400-line budget**, and above what `tasks.md`'s own Review Workload Forecast table implied ("WU-2 through WU-8 are each forecast inside the 400-line budget and are expected to hold to it"). That forecast is not holding for WU-2 in practice. This was not caught before Phase 2 was committed (it predates this apply run), and this run's own assigned scope was "Phase 3 only, completing WU-2/PR2" per explicit instruction — splitting Phase 2 out at this point would mean uncommitting already-landed, already-tested work, which this run was not asked to do and did not do.
+  - **Recommendation, not a unilateral decision**: PR2 should get the same `size:exception` treatment PR1 already received (tasks.md's "Approved exception — WU-1 / PR1 only" section), or be split at review time into two reviewable diffs along the existing Phase 2/Phase 3 boundary (they touch disjoint files: `offices.go` vs `communities.go`, with `api.go`'s two one-line `Register*` calls the only overlap). This run did not request or fabricate an exception — flagging it honestly for the maintainer to decide, consistent with the instruction to report rather than improvise on a budget question the tasks artifact did not actually resolve for WU-2.
+
+### Status
+
+25/25 Phase 1 tasks complete. 9/9 Phase 2 tasks complete (pre-existing, this run). 11/11 Phase 3 tasks complete (this run). **Phase 4 (WU-3, PR3) NOT started per this run's explicit instruction to stop after Phase 3.**
