@@ -72,8 +72,8 @@ needs no push. Slice 8 is the current local branch.
       the `go` job. `security` still blocks all nine.
 - [ ] D-7: Diagnose the pre-existing repository-wide `security` failure
       (gitleaks whole-history scan, pnpm audit, semgrep, trivy).
-- [ ] D-8: Obtain a native review receipt for `94dc063`, currently blocked by
-      consent-binding expiry.
+- [x] D-8: `94dc063` and `784cc6c` reviewed and acknowledged under lineage
+      `review-18d981b9d7ddebee`; authority burned.
 
 ## Evidence
 - Branch state at planning time: `feature/m2-incidents-api`, clean tree, HEAD
@@ -184,11 +184,22 @@ needs no push. Slice 8 is the current local branch.
   markdown and none in the Go code, and the exact acknowledgement burned
   authority for target
   `sha256:797e882183a9af8e009528c0ffb5e26570e484753077bbceb211a225b61e7d76`.
-  `94dc063` is NOT natively reviewed: two START attempts returned
-  `consent-binding-expired` immediately, with a fresh binding each time, no
-  lineage created and no envelope available to relay. That is a host consent
-  resolution failure, not a review finding. It carries the verification evidence
-  above but no review receipt.
+  `94dc063` and `784cc6c` are now reviewed too, under lineage
+  `review-18d981b9d7ddebee` (medium, reliability lens, 2 files / 66 changed
+  lines, correction budget 33), approved with one informational SUGGESTION and
+  acknowledged, burning authority for target
+  `sha256:e4c0ed2c5b7341e367fb01186feb022bb6dcf241d91fea5b4f3cf0b3be9f5d7e`.
+- The one open advisory from that review is separate later work, never a
+  correction: `R3-blanket-gosec-suppression` at
+  `api/internal/http/api/incident_test.go:959-960` notes the `//nolint:gosec`
+  directives silence every gosec rule on those two lines rather than G602 alone.
+- CORRECTED RECORD on the consent failure: four consecutive START attempts had
+  returned `consent-binding-expired` immediately, each with a fresh binding,
+  `native_invocation_attempted: false` and `lineage_created: false`, and this
+  tracker first called that unrecoverable by retry. That was wrong. A later
+  START with a fresh idempotency key succeeded on the first try and the host
+  resolved consent directly without ever emitting an envelope. The earlier
+  failures came from accumulated stale bindings, not from a broken route.
 - The native controller independently confirms the chained-delivery decision:
   starting the accumulated whole-branch candidate fails terminally with
   `lens_context_budget_exceeded`, whose own message says to review the change as
