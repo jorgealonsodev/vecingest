@@ -7,10 +7,26 @@ packages:
 # dependency of metro via expo): no fixed version is published upstream.
 # Accepted residual risk, recorded in docs/security/threat-model.md.
 # Written by `pnpm audit --ignore-unfixable`; do not add a fixable CVE here.
+#
+# CVE-2026-93687 (braces, stack-exhaustion DoS): no published fix. Reaches
+# the tree only via the @react-native/jest-preset devDependency chain,
+# expanding this repository's own Jest globs. Entry 4 in
+# docs/security/threat-model.md.
+#
+# CVE-2026-85393 (node-forge, RSA PKCS#1 v1.5 signature forgery): no
+# published fix. A verification bypass, not a DoS, arriving through the
+# production `expo` dependency, so the acceptance rests on verified
+# unreachability: no first-party import, and @expo/cli touches it only from
+# two code-signing utilities, whose Expo Updates manifest-signing path is
+# not configured here. Entry 5 in docs/security/threat-model.md carries a
+# MANDATORY re-evaluation trigger: adopting expo-updates code signing or an
+# EAS Update pipeline invalidates this acceptance.
 auditConfig:
   ignoreCves:
     - CVE-2025-71330
     - CVE-2025-71329
+    - CVE-2026-93687
+    - CVE-2026-85393
 
 # GHSA-2883-xcg3-v3hh (js-yaml < 4.3.2, CPU exhaustion on empty merge
 # sources). It arrives transitively as
@@ -19,8 +35,34 @@ auditConfig:
 # fixable upstream, and the ignoreCves list above is reserved for CVEs with
 # no published fix. Pinned inside 4.x on purpose: js-yaml 5.x is a major
 # release that @redocly/openapi-core does not declare support for.
+#
+# The entries below are the same case: fixable upstream, so they belong here
+# and not in ignoreCves. Every one of them is a transitive dev/build-time
+# dependency, and every replacement version cleared the minimumReleaseAge
+# window below before being pinned (oldest published 2026-09-11, newest
+# 2026-09-30).
+#
+# CVE-2026-102422 (critical): shell-quote `quote()` command injection, via
+# app > react-native > react-devtools-core > shell-quote.
+#
+# CVE-2026-102276 / CVE-2026-102278: brace-expansion denial of service by
+# uncontrolled recursion. It arrives on three separate major lines, so it
+# needs three range-scoped pins: via babel-jest > babel-plugin-* (1.x),
+# openapi-typescript > @redocly/openapi-core (2.x) and expo > @expo/cli >
+# glob > minimatch (5.x). The higher patched version of the two CVEs is
+# pinned in each range, which covers both.
+#
+# CVE-2026-87776: compression denial of service, via expo > @expo/cli.
+#
+# CVE-2026-93749: source-map-js denial of service, via the postcss chain.
 overrides:
   js-yaml@>=4.0.0 <4.3.2: "^4.3.2"
+  shell-quote@>=1.8.4 <1.11.0: "^1.11.0"
+  brace-expansion@>=1.0.0 <1.1.20: "^1.1.20"
+  brace-expansion@>=2.0.0 <2.1.6: "^2.1.6"
+  brace-expansion@>=4.0.0 <5.0.11: "^5.0.11"
+  compression@>=1.0.0 <1.8.2: "^1.8.2"
+  source-map-js@>=1.0.0 <1.2.2: "^1.2.2"
 
 # Supply-chain hardening (PRD_go.md 6.1, "Cadena de suministro"; semgrep
 # package_managers.pnpm rules, wired blocking in security.yml).

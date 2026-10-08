@@ -52,6 +52,24 @@ type Community struct {
 	UpdatedAt               time.Time          `json:"updated_at"`
 }
 
+type Incident struct {
+	ID            uuid.UUID          `json:"id"`
+	CommunityID   uuid.UUID          `json:"community_id"`
+	UnitID        pgtype.UUID        `json:"unit_id"`
+	CreatedBy     uuid.UUID          `json:"created_by"`
+	Title         string             `json:"title"`
+	Description   string             `json:"description"`
+	Category      string             `json:"category"`
+	Priority      string             `json:"priority"`
+	Status        string             `json:"status"`
+	Scope         string             `json:"scope"`
+	LocationText  pgtype.Text        `json:"location_text"`
+	AffectedCount int32              `json:"affected_count"`
+	DeletedAt     pgtype.Timestamptz `json:"deleted_at"`
+	CreatedAt     time.Time          `json:"created_at"`
+	UpdatedAt     time.Time          `json:"updated_at"`
+}
+
 type Invitation struct {
 	ID             uuid.UUID          `json:"id"`
 	CommunityID    uuid.UUID          `json:"community_id"`

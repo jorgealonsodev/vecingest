@@ -42,7 +42,14 @@ type fakeQuerier struct {
 	// Admin_staff Scope Access). Every user id absent from this set
 	// defaults to enabled=true, so every test written before this gate
 	// existed keeps resolving exactly as it did.
-	mfaDisabledUsers map[uuid.UUID]bool
+	mfaDisabledUsers     map[uuid.UUID]bool
+	incidentCommunities  map[uuid.UUID]uuid.UUID
+	incidentLookupErr    error
+	visibleIncidentErr   error
+	visibleIncidentKeys  map[string]bool
+	incidentLookupCalls  []uuid.UUID
+	visibleIncidentCalls []db.GetVisibleIncidentByIDParams
+	incidentCallOrder    []string
 }
 
 // IsUserMFAEnabled defaults to true (enabled) for any user id not
@@ -65,6 +72,31 @@ func (f *fakeQuerier) GetInvitationCommunityID(_ context.Context, invitationID u
 		return uuid.UUID{}, pgx.ErrNoRows
 	}
 	return communityID, nil
+}
+
+func (f *fakeQuerier) GetIncidentCommunityID(_ context.Context, incidentID uuid.UUID) (uuid.UUID, error) {
+	f.incidentCallOrder = append(f.incidentCallOrder, "lookup")
+	f.incidentLookupCalls = append(f.incidentLookupCalls, incidentID)
+	if f.incidentLookupErr != nil {
+		return uuid.UUID{}, f.incidentLookupErr
+	}
+	communityID, ok := f.incidentCommunities[incidentID]
+	if !ok {
+		return uuid.UUID{}, pgx.ErrNoRows
+	}
+	return communityID, nil
+}
+
+func (f *fakeQuerier) GetVisibleIncidentByID(_ context.Context, arg db.GetVisibleIncidentByIDParams) (db.Incident, error) {
+	f.incidentCallOrder = append(f.incidentCallOrder, "visible")
+	f.visibleIncidentCalls = append(f.visibleIncidentCalls, arg)
+	if f.visibleIncidentErr != nil {
+		return db.Incident{}, f.visibleIncidentErr
+	}
+	if !f.visibleIncidentKeys[incidentKey(arg.ID, arg.CommunityID, arg.UserID)] {
+		return db.Incident{}, pgx.ErrNoRows
+	}
+	return db.Incident{ID: arg.ID, CommunityID: arg.CommunityID, CreatedBy: arg.UserID}, nil
 }
 
 func key(a, b uuid.UUID) string { return a.String() + "|" + b.String() }
@@ -515,5 +547,194 @@ func TestOffice_AdminWithMFAAllowed(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200 for an office admin with active TOTP, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+type incidentInput struct {
+	IncidentID     string `path:"incidentId"`
+	HeaderCallerID string `header:"X-User-ID"`
+	Body           struct {
+		CallerID string `json:"caller_id,omitempty"`
+	}
+}
+
+func (i *incidentInput) ScopeIncidentID() uuid.UUID { return uuid.MustParse(i.IncidentID) }
+
+type incidentOutput struct {
+	Body struct {
+		IncidentID     string `json:"incident_id"`
+		CommunityID    string `json:"community_id"`
+		CallerID       string `json:"caller_id"`
+		BodyCallerID   string `json:"body_caller_id"`
+		HeaderCallerID string `json:"header_caller_id"`
+	}
+}
+
+func newIncidentTestAPI(t *testing.T, calls *int) (huma.API, *chi.Mux) {
+	t.Helper()
+	r := chi.NewRouter()
+	api := humachi.New(r, huma.DefaultConfig("test", "0.0.1"))
+	scoped.Incident[incidentInput, incidentOutput](api, huma.Operation{
+		OperationID: "incidentAuthorizationFixture",
+		Method:      http.MethodPost,
+		Path:        "/v1/incidents/{incidentId}/authorization-fixture",
+	}, func(_ context.Context, in *incidentInput, access authz.IncidentAccess) (*incidentOutput, error) {
+		*calls++
+		out := &incidentOutput{}
+		out.Body.IncidentID = access.IncidentID().String()
+		out.Body.CommunityID = access.CommunityID().String()
+		out.Body.CallerID = access.CallerID().String()
+		out.Body.BodyCallerID = in.Body.CallerID
+		out.Body.HeaderCallerID = in.HeaderCallerID
+		return out, nil
+	})
+	return api, r
+}
+
+func incidentKey(incidentID, communityID, callerID uuid.UUID) string {
+	return key(incidentID, communityID) + "|" + callerID.String()
+}
+
+func postIncidentFixture(r *chi.Mux, ctx context.Context, incidentID uuid.UUID, callerBody, callerHeader string) *httptest.ResponseRecorder {
+	body := strings.NewReader(`{"caller_id":"` + callerBody + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/incidents/"+incidentID.String()+"/authorization-fixture", body).WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-User-ID", callerHeader)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
+func TestIncident_CreatorAccessRequiresVisibleQueryAndUsesExactResource(t *testing.T) {
+	incidentID, communityID, creatorID := uuid.New(), uuid.New(), uuid.New()
+	q := &fakeQuerier{
+		incidentCommunities: map[uuid.UUID]uuid.UUID{incidentID: communityID},
+		visibleIncidentKeys: map[string]bool{incidentKey(incidentID, communityID, creatorID): true},
+	}
+	authz.Configure(q)
+	calls := 0
+	_, r := newIncidentTestAPI(t, &calls)
+	w := postIncidentFixture(r, authz.ContextWithUserID(context.Background(), creatorID), incidentID, uuid.NewString(), uuid.NewString())
+
+	if w.Code != http.StatusOK || calls != 1 {
+		t.Fatalf("creator should reach handler only after visibility proof: status=%d calls=%d body=%s", w.Code, calls, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), incidentID.String()) || !strings.Contains(w.Body.String(), communityID.String()) || !strings.Contains(w.Body.String(), creatorID.String()) {
+		t.Fatalf("access did not carry the exact incident, resolved community and authenticated caller: %s", w.Body.String())
+	}
+	if len(q.incidentCallOrder) != 2 || q.incidentCallOrder[0] != "lookup" || q.incidentCallOrder[1] != "visible" {
+		t.Fatalf("visibility must be checked after route-resource lookup and before handler: %v", q.incidentCallOrder)
+	}
+	if len(q.visibleIncidentCalls) != 1 || q.visibleIncidentCalls[0] != (db.GetVisibleIncidentByIDParams{ID: incidentID, CommunityID: communityID, UserID: creatorID}) {
+		t.Fatalf("visible lookup did not bind exact resource/community/authenticated user: %+v", q.visibleIncidentCalls)
+	}
+}
+
+func TestIncident_InvisibleMissingAndDeletedResourcesDoNotReachHandler(t *testing.T) {
+	incidentID, communityID, callerID := uuid.New(), uuid.New(), uuid.New()
+	for _, tc := range []struct {
+		name             string
+		query            *fakeQuerier
+		wantVisibleCalls int
+	}{
+		{name: "missing or deleted", query: &fakeQuerier{}, wantVisibleCalls: 0},
+		{name: "invisible", query: &fakeQuerier{incidentCommunities: map[uuid.UUID]uuid.UUID{incidentID: communityID}}, wantVisibleCalls: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			authz.Configure(tc.query)
+			calls := 0
+			_, r := newIncidentTestAPI(t, &calls)
+			w := postIncidentFixture(r, authz.ContextWithUserID(context.Background(), callerID), incidentID, "", "")
+			if w.Code != http.StatusNotFound || calls != 0 {
+				t.Fatalf("denied incident should be an opaque 404 before handler: status=%d calls=%d body=%s", w.Code, calls, w.Body.String())
+			}
+			if strings.Contains(w.Body.String(), incidentID.String()) || strings.Contains(w.Body.String(), communityID.String()) {
+				t.Fatalf("404 response leaked resource existence details: %s", w.Body.String())
+			}
+			if len(tc.query.visibleIncidentCalls) != tc.wantVisibleCalls {
+				t.Fatalf("visible query calls=%d, want %d", len(tc.query.visibleIncidentCalls), tc.wantVisibleCalls)
+			}
+		})
+	}
+}
+
+func TestIncident_AuthenticationCannotBeSuppliedByBodyOrHeader(t *testing.T) {
+	incidentID, communityID, authenticatedID, forgedID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	q := &fakeQuerier{
+		incidentCommunities: map[uuid.UUID]uuid.UUID{incidentID: communityID},
+		visibleIncidentKeys: map[string]bool{incidentKey(incidentID, communityID, authenticatedID): true},
+	}
+	authz.Configure(q)
+	calls := 0
+	_, r := newIncidentTestAPI(t, &calls)
+	w := postIncidentFixture(r, authz.ContextWithUserID(context.Background(), authenticatedID), incidentID, forgedID.String(), forgedID.String())
+	if w.Code != http.StatusOK || calls != 1 ||
+		!strings.Contains(w.Body.String(), `"caller_id":"`+authenticatedID.String()+`"`) ||
+		!strings.Contains(w.Body.String(), `"body_caller_id":"`+forgedID.String()+`"`) ||
+		!strings.Contains(w.Body.String(), `"header_caller_id":"`+forgedID.String()+`"`) {
+		t.Fatalf("body/header spoof was not separated from authenticated caller identity: status=%d calls=%d body=%s", w.Code, calls, w.Body.String())
+	}
+
+	calls = 0
+	for _, ctx := range []context.Context{
+		context.Background(),
+		authz.ContextWithUserID(context.Background(), uuid.Nil),
+	} {
+		q.incidentCallOrder = nil
+		q.incidentLookupCalls = nil
+		q.visibleIncidentCalls = nil
+		w = postIncidentFixture(r, ctx, incidentID, authenticatedID.String(), authenticatedID.String())
+		if w.Code != http.StatusUnauthorized || calls != 0 || len(q.incidentCallOrder) != 0 {
+			t.Fatalf("missing or zero authenticated identity reached resolver/handler: status=%d calls=%d queries=%v", w.Code, calls, q.incidentCallOrder)
+		}
+	}
+}
+
+func TestIncident_DatabaseFailuresRemainInternalErrors(t *testing.T) {
+	incidentID, communityID, callerID := uuid.New(), uuid.New(), uuid.New()
+	for _, tc := range []struct {
+		name  string
+		query *fakeQuerier
+	}{
+		{name: "resource lookup", query: &fakeQuerier{incidentLookupErr: context.DeadlineExceeded}},
+		{name: "visibility lookup", query: &fakeQuerier{incidentCommunities: map[uuid.UUID]uuid.UUID{incidentID: communityID}, visibleIncidentErr: context.DeadlineExceeded}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			authz.Configure(tc.query)
+			calls := 0
+			_, r := newIncidentTestAPI(t, &calls)
+			w := postIncidentFixture(r, authz.ContextWithUserID(context.Background(), callerID), incidentID, "", "")
+			if w.Code != http.StatusInternalServerError || calls != 0 {
+				t.Fatalf("database failure misclassified or reached handler: status=%d calls=%d body=%s", w.Code, calls, w.Body.String())
+			}
+			if strings.Contains(w.Body.String(), context.DeadlineExceeded.Error()) {
+				t.Fatalf("database failure details leaked externally: %s", w.Body.String())
+			}
+		})
+	}
+}
+
+func TestIncident_ZeroValueAccessIsRejected(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("zero-value IncidentAccess must not expose authorization identifiers")
+		}
+	}()
+	var access authz.IncidentAccess
+	_ = access.IncidentID()
+}
+
+func TestIncident_ConstructorPassesBootAssertion(t *testing.T) {
+	api, r := newIncidentTestAPI(t, new(int))
+	item := api.OpenAPI().Paths["/v1/incidents/{incidentId}/authorization-fixture"]
+	if item == nil || item.Post == nil {
+		t.Fatal("expected the incident authorization fixture in the OpenAPI model")
+	}
+	marker, ok := item.Post.Metadata[authz.MetadataKey].(authz.Marker)
+	if !ok || marker.Kind != authz.KindIncident || len(marker.Roles) != 0 {
+		t.Fatalf("typed incident constructor must stamp the dedicated role-free marker, got %#v", item.Post.Metadata[authz.MetadataKey])
+	}
+	if err := authz.AssertScopedRegistration(api.OpenAPI(), r, nil); err != nil {
+		t.Fatalf("typed incident registration should satisfy boot authorization assertion: %v", err)
 	}
 }

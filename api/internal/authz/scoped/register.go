@@ -1,5 +1,5 @@
 // Package scoped provides the D-1 typed registration constructors
-// (Community, Office, Self) every tenant-scoped huma operation MUST
+// (Community, Office, Self, Incident) every tenant-scoped huma operation MUST
 // register through. Each constructor stamps the D-2 registration
 // marker onto the operation so the boot assertion (authz.
 // AssertScopedRegistration) can find it. Membership resolution (D-4)
@@ -12,6 +12,7 @@ import (
 	"errors"
 
 	"github.com/danielgtaylor/huma/v2"
+	"github.com/google/uuid"
 
 	"github.com/jorgealonsodev/vecingest/internal/authz"
 	"github.com/jorgealonsodev/vecingest/internal/http/apperr"
@@ -140,6 +141,30 @@ func Invitation[I any, O any, PI interface {
 	})
 }
 
+// Incident registers an operation for one incident resource. Unlike
+// community/office scopes, it grants no role: authz first resolves the
+// incident's own community, then requires GetVisibleIncidentByID to
+// authorize this exact route id and authenticated caller.
+func Incident[I any, O any, PI interface {
+	*I
+	authz.IncidentScoped
+}](api huma.API, op huma.Operation, handler func(context.Context, PI, authz.IncidentAccess) (*O, error)) {
+	stampMarker(&op, authz.KindIncident, nil)
+
+	huma.Register(api, op, func(ctx context.Context, in *I) (*O, error) {
+		pi := PI(in)
+		callerID, ok := authz.UserIDFromContext(ctx)
+		if !ok || callerID == uuid.Nil {
+			return nil, apperr.New(401, apperr.CodeUnauthorized, "missing authenticated caller", nil)
+		}
+		access, err := authz.ResolveIncidentAccess(ctx, pi.ScopeIncidentID())
+		if err != nil {
+			return nil, resolveErrorResponse(err)
+		}
+		return handler(ctx, pi, access)
+	})
+}
+
 // Self registers an operation scoped to the caller's own membership set
 // and no path resource (design D-1): GET /v1/communities, GET /v1/me.
 func Self[I any, O any](api huma.API, op huma.Operation, handler func(context.Context, *I, authz.Memberships) (*O, error)) {
@@ -164,13 +189,16 @@ func Self[I any, O any](api huma.API, op huma.Operation, handler func(context.Co
 	})
 }
 
-// resolveErrorResponse maps a resolver error to the D-4 policy: a
-// foreign resource (no membership row) is 404 -- never confirming a
-// resource's existence to a caller with no tie to it -- anything else
-// is an internal error.
+// resolveErrorResponse maps absent memberships and invisible incidents
+// to opaque 404s, without confirming a resource's existence. Other
+// unexpected resolver errors retain the established internal-error
+// classification.
 func resolveErrorResponse(err error) error {
-	if errors.Is(err, authz.ErrNoMembership) {
+	if errors.Is(err, authz.ErrNoMembership) || errors.Is(err, authz.ErrNoIncidentAccess) {
 		return apperr.New(404, apperr.CodeNotFound, "not found", nil)
+	}
+	if errors.Is(err, authz.ErrNoAuthenticatedCaller) {
+		return apperr.New(401, apperr.CodeUnauthorized, "missing authenticated caller", nil)
 	}
 	if errors.Is(err, authz.ErrMFAEnrollmentRequired) {
 		// Distinguishable from the generic forbidden() (design D-7;

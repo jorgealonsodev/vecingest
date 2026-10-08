@@ -84,6 +84,7 @@ func Register(hapi huma.API, d *handlers.Deps, registry *health.Registry) {
 	handlers.RegisterUnitMembers(authGroup, d)
 	handlers.RegisterUnitCSVImport(authGroup, d)
 	handlers.RegisterInvitations(authGroup, d)
+	handlers.RegisterIncidents(authGroup, d)
 
 	handlers.RegisterRefresh(hapi, d)
 	handlers.RegisterRefreshCSRF(hapi, d)

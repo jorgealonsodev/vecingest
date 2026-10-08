@@ -197,6 +197,30 @@ export interface paths {
         patch: operations["updateCommunity"];
         trace?: never;
     };
+    "/v1/communities/{id}/incidents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List visible community incidents
+         * @description Filters: status (open, assigned, in_progress, resolved, closed, rejected), category (documented public categories; noise maps to noise_and_coexistence), unit_id (a non-deleted unit in this community), limit (default 20, range 1–100), and cursor. Results use stable descending (created_at, id) keyset pagination. Each page rechecks visibility; stale cursors require restarting pagination.
+         */
+        get: operations["listIncidents"];
+        put?: never;
+        /**
+         * Create an incident
+         * @description Owners and tenants need active membership in the exact target unit for unit incidents. Tenants also require tenants_can_create_incidents (default true). Admin and admin_staff may target any active unit in their community. Common incidents omit unit_id. New incidents start open with normal priority; creator is the authenticated caller.
+         */
+        post: operations["createIncident"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/communities/{id}/invitations": {
         parameters: {
             query?: never;
@@ -292,6 +316,26 @@ export interface paths {
         };
         /** Readiness probe */
         get: operations["healthReady"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/incidents/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a visible incident
+         * @description Returns a safe incident projection only when the authenticated caller can currently view it; absent, deleted, foreign, and invisible incidents all return 404.
+         */
+        get: operations["getIncident"];
         put?: never;
         post?: never;
         delete?: never;
@@ -647,6 +691,26 @@ export interface components {
             reserve_fund?: string;
             secretary_is_office?: boolean;
         };
+        CreateIncidentRequest: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/CreateIncidentRequest.json
+             */
+            readonly $schema?: string;
+            /** @enum {string} */
+            category: "elevator" | "plumbing" | "electricity" | "cleaning" | "locksmith" | "gardening" | "works" | "mandatory_works" | "noise" | "other";
+            description: string;
+            location_text?: string;
+            /** @enum {string} */
+            scope: "common" | "unit";
+            title: string;
+            /**
+             * Format: uuid
+             * @description Required for unit scope and forbidden for common scope.
+             */
+            unit_id?: string;
+        };
         CreateInvitationRequest: {
             /**
              * Format: uri
@@ -788,6 +852,35 @@ export interface components {
             readonly $schema?: string;
             accepted: boolean;
         };
+        IncidentResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/IncidentResponse.json
+             */
+            readonly $schema?: string;
+            /** Format: int32 */
+            affected_count: number;
+            /** @enum {string} */
+            category: "elevator" | "plumbing" | "electricity" | "cleaning" | "locksmith" | "gardening" | "works" | "mandatory_works" | "noise" | "other";
+            community_id: string;
+            /** Format: date-time */
+            created_at: string;
+            created_by: string;
+            description: string;
+            id: string;
+            location_text?: string;
+            /** @enum {string} */
+            priority: "low" | "normal" | "high" | "urgent";
+            /** @enum {string} */
+            scope: "common" | "unit";
+            /** @enum {string} */
+            status: "open" | "assigned" | "in_progress" | "resolved" | "closed" | "rejected";
+            title: string;
+            unit_id?: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
         InvitationResponse: {
             /** Format: date-time */
             accepted_at?: string;
@@ -814,6 +907,16 @@ export interface components {
              */
             readonly $schema?: string;
             communities: components["schemas"]["CommunityResponse"][] | null;
+        };
+        ListIncidentsResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/ListIncidentsResponse.json
+             */
+            readonly $schema?: string;
+            items: components["schemas"]["IncidentResponse"][] | null;
+            next_cursor: string;
         };
         ListInvitationsResponse: {
             /**
@@ -1669,6 +1772,83 @@ export interface operations {
             };
         };
     };
+    listIncidents: {
+        parameters: {
+            query?: {
+                /** @description Filter by incident status. */
+                status?: "open" | "assigned" | "in_progress" | "resolved" | "closed" | "rejected";
+                /** @description Filter by public incident category; noise maps to the stored noise_and_coexistence category. */
+                category?: "elevator" | "plumbing" | "electricity" | "cleaning" | "locksmith" | "gardening" | "works" | "mandatory_works" | "noise" | "other";
+                /** @description Filter to incidents for this non-deleted unit in the community. */
+                unit_id?: string;
+                /** @description Page size (default 20, maximum 100). */
+                limit?: number;
+                /** @description Opaque keyset cursor from the previous page; restart pagination if it is stale. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListIncidentsResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createIncident: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateIncidentRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IncidentResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     listInvitations: {
         parameters: {
             query?: never;
@@ -1884,6 +2064,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReadyResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    getIncident: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IncidentResponse"];
                 };
             };
             /** @description Error */

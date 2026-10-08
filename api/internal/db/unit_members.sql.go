@@ -31,6 +31,44 @@ func (q *Queries) DeleteUnitMember(ctx context.Context, arg DeleteUnitMemberPara
 	return result.RowsAffected(), nil
 }
 
+const getActiveIncidentCommunityRoles = `-- name: GetActiveIncidentCommunityRoles :one
+WITH active_memberships AS (
+    SELECT um.role
+    FROM unit_members um
+    JOIN units u ON u.id = um.unit_id
+        AND u.community_id = um.community_id
+        AND u.deleted_at IS NULL
+    WHERE um.community_id = $1
+        AND um.user_id = $2
+        AND um.role IN ('owner', 'tenant')
+        AND um.deleted_at IS NULL
+        AND (um.valid_from IS NULL OR um.valid_from <= now())
+        AND (um.valid_to IS NULL OR um.valid_to > now())
+)
+SELECT EXISTS (SELECT 1 FROM active_memberships WHERE role = 'owner') AS has_active_owner,
+    EXISTS (SELECT 1 FROM active_memberships WHERE role = 'tenant') AS has_active_tenant
+`
+
+type GetActiveIncidentCommunityRolesParams struct {
+	CommunityID uuid.UUID `json:"community_id"`
+	UserID      uuid.UUID `json:"user_id"`
+}
+
+type GetActiveIncidentCommunityRolesRow struct {
+	HasActiveOwner  bool `json:"has_active_owner"`
+	HasActiveTenant bool `json:"has_active_tenant"`
+}
+
+// Incident creation requires current resident membership before either
+// common or unit scope is allowed. Return each active role separately so a
+// stale owner row cannot mask an active tenant when tenant creation is off.
+func (q *Queries) GetActiveIncidentCommunityRoles(ctx context.Context, arg GetActiveIncidentCommunityRolesParams) (GetActiveIncidentCommunityRolesRow, error) {
+	row := q.db.QueryRow(ctx, getActiveIncidentCommunityRoles, arg.CommunityID, arg.UserID)
+	var i GetActiveIncidentCommunityRolesRow
+	err := row.Scan(&i.HasActiveOwner, &i.HasActiveTenant)
+	return i, err
+}
+
 const getUnitMemberByID = `-- name: GetUnitMemberByID :one
 SELECT id, unit_id, community_id, user_id, role, tenure, board_role, board_from, board_to, notification_address, electronic_notifications_consent_at, consent_text_version, valid_from, valid_to, deleted_at, created_at, updated_at FROM unit_members WHERE id = $1 AND unit_id = $2 AND community_id = $3 AND deleted_at IS NULL
 `
@@ -69,6 +107,37 @@ func (q *Queries) GetUnitMemberByID(ctx context.Context, arg GetUnitMemberByIDPa
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const hasActiveUnitMembership = `-- name: HasActiveUnitMembership :one
+SELECT EXISTS (
+    SELECT 1
+    FROM unit_members um
+    JOIN units u ON u.id = um.unit_id
+        AND u.community_id = um.community_id
+        AND u.deleted_at IS NULL
+    WHERE um.community_id = $1
+        AND um.unit_id = $2
+        AND um.user_id = $3
+        AND um.deleted_at IS NULL
+        AND (um.valid_from IS NULL OR um.valid_from <= now())
+        AND (um.valid_to IS NULL OR um.valid_to > now())
+)
+`
+
+type HasActiveUnitMembershipParams struct {
+	CommunityID uuid.UUID `json:"community_id"`
+	UnitID      uuid.UUID `json:"unit_id"`
+	UserID      uuid.UUID `json:"user_id"`
+}
+
+// Incident creation must also prove membership in the exact requested unit;
+// community-level membership alone is not enough for unit scope.
+func (q *Queries) HasActiveUnitMembership(ctx context.Context, arg HasActiveUnitMembershipParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasActiveUnitMembership, arg.CommunityID, arg.UnitID, arg.UserID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const insertUnitMember = `-- name: InsertUnitMember :one

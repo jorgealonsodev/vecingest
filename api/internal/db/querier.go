@@ -31,6 +31,14 @@ type Querier interface {
 	// window_seconds. created_at is the database's own clock, so the window
 	// is measured against now() rather than the caller's clock. It caps
 	// issuance, not use: superseded and expired challenges count too.
+	//
+	// window_seconds is a whole number of seconds, multiplied into an
+	// interval rather than passed to make_interval(secs => ...), whose secs
+	// argument only accepts double precision. That cast made sqlc emit a
+	// binary floating-point parameter under internal/db, which api/.semgrep's
+	// no-float-money-go guard forbids there. Every caller's window is a whole
+	// number of seconds, so integer arithmetic is exact and the guard stays
+	// strict instead of being suppressed.
 	CountOTPChallengesIssuedSince(ctx context.Context, arg CountOTPChallengesIssuedSinceParams) (int64, error)
 	// CountOfficeMembersByOfficeID backs community-management: Community
 	// Detail Excludes Cross-Milestone Aggregates -- the community detail
@@ -48,6 +56,10 @@ type Querier interface {
 	// (e.g. one first created by seed) promotes it, but NEVER touches its
 	// password_hash.
 	EnsureSuperadmin(ctx context.Context, id uuid.UUID) error
+	// Incident creation requires current resident membership before either
+	// common or unit scope is allowed. Return each active role separately so a
+	// stale owner row cannot mask an active tenant when tenant creation is off.
+	GetActiveIncidentCommunityRoles(ctx context.Context, arg GetActiveIncidentCommunityRolesParams) (GetActiveIncidentCommunityRolesRow, error)
 	GetAuditLogHead(ctx context.Context) (GetAuditLogHeadRow, error)
 	// GetCommunityByID reads by the community's own id, which is itself the
 	// tenant root (design D-5) -- the explicit column list (rather than
@@ -55,6 +67,11 @@ type Querier interface {
 	// lookup already scoped to one exact id has no other tenant's row to
 	// leak.
 	GetCommunityByID(ctx context.Context, id uuid.UUID) (Community, error)
+	// Route-resource lookup for typed incident authorization. Resolve the
+	// tenant key without granting access; the visibility-aware detail query
+	// must separately authorize the authenticated caller before scope is built.
+	// Deleted incidents and deleted communities both resolve as no row.
+	GetIncidentCommunityID(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
 	// GetInvitationByID is tenant-scoped by both id and community_id: the
 	// caller's community membership was already resolved and role-checked
 	// by scoped.Community/scoped.Invitation before this query ever runs,
@@ -99,6 +116,12 @@ type Querier interface {
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
 	GetUserMFA(ctx context.Context, userID uuid.UUID) (UserMfa, error)
+	// Detail lookup repeats the complete visibility predicate and binds both
+	// community and caller, so foreign/private ids resolve as no row.
+	GetVisibleIncidentByID(ctx context.Context, arg GetVisibleIncidentByIDParams) (Incident, error)
+	// Incident creation must also prove membership in the exact requested unit;
+	// community-level membership alone is not enough for unit scope.
+	HasActiveUnitMembership(ctx context.Context, arg HasActiveUnitMembershipParams) (bool, error)
 	// IncrementInvitationFailedAttempts records that a preview/accept call
 	// RESOLVED to this real invitation row (design D-6: "invitations.
 	// failed_attempts is still incremented, but only when the code resolved
@@ -121,6 +144,8 @@ type Querier interface {
 	// communities: tenant column office_id (tenant owner); id is the
 	// community tenant root (design D-5).
 	InsertCommunity(ctx context.Context, arg InsertCommunityParams) (Community, error)
+	// incidents: tenant column community_id (design D-5).
+	InsertIncident(ctx context.Context, arg InsertIncidentParams) (Incident, error)
 	// invitations: tenant column community_id (design D-5).
 	InsertInvitation(ctx context.Context, arg InsertInvitationParams) (Invitation, error)
 	InsertOTPChallenge(ctx context.Context, arg InsertOTPChallengeParams) (OtpChallenge, error)
@@ -191,6 +216,14 @@ type Querier interface {
 	// for GET /v1/me.
 	ListUnitMembershipsByUserID(ctx context.Context, userID uuid.UUID) ([]ListUnitMembershipsByUserIDRow, error)
 	ListUnitsByCommunityID(ctx context.Context, communityID uuid.UUID) ([]Unit, error)
+	// A private unit incident is visible only to its creator, an active
+	// member of that exact unit, or an admin/admin_staff of the community's
+	// owning office. Board roles are intentionally not an authorization
+	// predicate: being president alone does not grant private-unit access.
+	// Common incidents require community membership unless the caller is a
+	// scoped office administrator. Caller and community ids are explicit
+	// bound inputs, never inferred from an incident id alone.
+	ListVisibleIncidents(ctx context.Context, arg ListVisibleIncidentsParams) ([]Incident, error)
 	// Re-reads one challenge FOR UPDATE inside the transaction that will
 	// mark it verified, so two concurrent correct submissions cannot both
 	// consume it: the second waits on the lock and then finds verified_at set.

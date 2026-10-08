@@ -374,3 +374,55 @@ func TestMFAEnrollEmail_IssuanceCapForgetsCodesOutsideTheWindow(t *testing.T) {
 
 	f.enroll(t)
 }
+
+// The sliding window has a lower bound too, and the two tests above do not
+// pin it: both only prove the window is no LONGER than about
+// EnrollEmailIssueWindow, so a query that measured 1800 seconds, or 60, or
+// zero would satisfy them. This ages the codes to just INSIDE the window
+// instead and requires the refusal to stand, which fails for any window
+// materially shorter than EnrollEmailIssueWindow -- the realistic defect
+// modes being a wrong unit, a truncated conversion, or a window collapsing
+// to zero.
+//
+// The margin is five seconds rather than one. Unlike the test above, where
+// extra elapsed time only pushes the codes further outside the window and
+// cannot flake, here a slow request would push them past the boundary and
+// fail spuriously. The cost is that a window off by a second or two still
+// passes; that is not a defect mode worth trading flakiness for.
+//
+// The backdating deliberately keeps make_interval(secs => ...), the float
+// form the production query no longer uses, so this test does not share the
+// expression it is checking.
+func TestMFAEnrollEmail_IssuanceCapStillCountsCodesInsideTheWindow(t *testing.T) {
+	f := newEnrollFixture(t, "mfa-email-cap-window-inside@example.com")
+	for range mfa.EnrollEmailIssueLimit {
+		f.enroll(t)
+	}
+	lastCode := enrollEmailCode(t, f.db, f.userID)
+	// The row count is asserted because this test, unlike the one above,
+	// would pass VACUOUSLY if the backdating silently matched nothing: the
+	// codes would simply stay fresh, remain inside the window, and the 429
+	// would hold for the wrong reason.
+	tag, err := f.db.Write.Exec(t.Context(),
+		`UPDATE otp_challenges SET created_at = now() - make_interval(secs => $2) + interval '5 seconds'
+		 WHERE user_id = $1 AND purpose = 'mfa_enroll'`,
+		f.userID, mfa.EnrollEmailIssueWindow.Seconds(),
+	)
+	if err != nil {
+		t.Fatalf("age the challenges to just inside the window: %v", err)
+	}
+	if got, want := tag.RowsAffected(), int64(mfa.EnrollEmailIssueLimit); got != want {
+		t.Fatalf("expected the backdating to move %d challenges, moved %d", want, got)
+	}
+
+	resp, body := doJSON(t, f.client, http.MethodPost, f.srv.URL+"/v1/me/mfa/enroll", nil, f.auth)
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 while the codes are still inside the window, got %d body=%v", resp.StatusCode, body)
+	}
+	if n := countMFAEnrollChallenges(t, f.db, f.userID); n != mfa.EnrollEmailIssueLimit {
+		t.Fatalf("expected no challenge issued inside the window, got %d", n)
+	}
+	if got := enrollEmailCode(t, f.db, f.userID); got != lastCode {
+		t.Fatalf("expected no new enrollment email inside the window")
+	}
+}
