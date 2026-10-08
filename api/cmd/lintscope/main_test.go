@@ -182,6 +182,43 @@ SELECT * FROM audit_log WHERE created_at >= $1 AND created_at <= $2 ORDER BY cre
 	}
 }
 
+// TestLint_QueryLevelExceptionSkipsEnforcement proves queryExceptions
+// (design.md's "file:queryName" exception map, task 8.6's own
+// mechanism, introduced early for invitations.sql:SweepExpiredInvitations)
+// suppresses enforcement for exactly the named query, keyed by base
+// filename regardless of invocation directory, and does NOT blanket-
+// exempt every other query against the same scoped table.
+func TestLint_QueryLevelExceptionSkipsEnforcement(t *testing.T) {
+	schemaDir := writeFixture(t, "0008_invitations.sql", `
+CREATE TABLE invitations (
+    id uuid PRIMARY KEY,
+    community_id uuid NOT NULL,
+    status text NOT NULL
+);
+`)
+	queriesDir := writeFixture(t, "invitations.sql", `
+-- name: SweepExpiredInvitations :execrows
+UPDATE invitations SET status = 'blocked' WHERE status = 'pending';
+
+-- name: ListInvitationsUnscoped :many
+SELECT * FROM invitations;
+`)
+
+	failures, err := lint(schemaDir, queriesDir)
+	if err != nil {
+		t.Fatalf("lint returned an error: %v", err)
+	}
+	if len(failures) != 1 {
+		t.Fatalf("expected exactly one failure (ListInvitationsUnscoped, SweepExpiredInvitations excepted), got: %v", failures)
+	}
+	if !strings.Contains(failures[0], "ListInvitationsUnscoped") {
+		t.Errorf("expected the one remaining failure to name ListInvitationsUnscoped, got: %s", failures[0])
+	}
+	if strings.Contains(failures[0], "SweepExpiredInvitations") {
+		t.Errorf("expected SweepExpiredInvitations to be excepted, got it flagged: %s", failures[0])
+	}
+}
+
 // TestExtractTables_HandlesNestedParensInCheckConstraint proves the
 // paren-depth column splitter is not confused by a CHECK constraint
 // containing its own parens on the same line as a column definition —

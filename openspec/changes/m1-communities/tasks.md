@@ -151,32 +151,32 @@ through PR1/PR2.
 - [x] 5.6 GREEN: wrap the non-dry-run import in one transaction validating every row before any `INSERT`
 - [x] 5.7 RED: an exported CSV escapes a leading `=`/`+`/`-`/`@` cell; an imported row with a formula-prefixed owner-name is neutralized before storage (Formula-Injection Hardening, both scenarios)
 - [x] 5.8 GREEN: implement cell-prefix escaping shared by template/export and import ingestion
-- [x] 5.9 RED: an uploaded filename `../../etc/passwd.csv` is rejected or sanitized before any storage key is derived (Path-Traversal-Safe Filenames)
+- [x] 5.9 RED: an uploaded filename "../../etc/passwd.csv" (a test payload, not a path this task edits) is rejected or sanitized before any storage key is derived (Path-Traversal-Safe Filenames)
 - [x] 5.10 GREEN: implement filename sanitization; stream the upload body, never write under a client-supplied name
 - [x] 5.11 Run `make gen` if the import DTOs changed; commit regenerated artifacts
 
 ## Phase 6: Invitations (WU-4, PR4 — TDD, D-6)
 
-- [ ] 6.1 RED: `POST /v1/communities/:id/invitations` returns the plaintext short code exactly once; the persisted row contains only `token_hash`/`short_code_hash` (Invitation Creation With Hashed Secrets, both scenarios)
-- [ ] 6.2 GREEN: implement `scoped.Community` handler generating an 8-char unambiguous-alphabet short code via `crypto/rand`, SHA-256 hashing both secrets, roles `[admin, admin_staff]`
-- [ ] 6.3 RED: invitation created with `status=pending`; accept transitions `status=accepted` in the same transaction as the membership write; a `pending` invitation past `expires_at` reads as `expired` before the sweep runs (Explicit Status Column, all three scenarios)
-- [ ] 6.4 GREEN: implement the `status` state machine and read-time expiry derivation
-- [ ] 6.5 RED: accept after expiry rejected; second accept on an already-accepted invitation rejected (Fourteen-Day Expiry And Single Use, both scenarios)
-- [ ] 6.6 GREEN: implement the conditional `UPDATE ... WHERE status='pending' AND expires_at > now() RETURNING id`; zero rows ⇒ 409/404
-- [ ] 6.7 RED: `POST /v1/invitations/preview` with a valid short code returns community/unit/role and creates no account; the registered API surface has no `GET` operation with `token`/`short_code` as a query parameter (Preview Endpoint Is POST, both scenarios)
-- [ ] 6.8 GREEN: implement the `preview` handler; assert via the OpenAPI-walk test that no `GET` operation carries those query parameters
-- [ ] 6.9 RED: accept with no existing account creates `user`+`unit_member` together; accept with an existing account links the membership without duplicating the user; both response shapes are identical (Accept Creates Or Links An Account, all three scenarios)
-- [ ] 6.10 GREEN: implement `POST /v1/auth/accept-invitation` — one transaction, branch on existing email, uniform response shape
-- [ ] 6.11 RED: resend increments `sent_count`; a revoked invitation fails both preview and accept (Resend And Revoke, both scenarios)
-- [ ] 6.12 GREEN: implement `resend` (rate-limited) and `DELETE /v1/invitations/:id` (→`status=revoked`)
-- [ ] 6.13 RED: 10 failed short-code guesses from one IP+device pair lock an 11th attempt from that pair; 10 failed guesses against a resolved invitation from 10 distinct pairs do not lock an 11th distinct pair (Enumeration Lockout Is IP+Device Scoped, both scenarios)
-- [ ] 6.14 GREEN: wire `AttemptCounter` key `invite:{ip}:{deviceHash}` (SHA-256 of `X-Platform`+`X-App-Version`) into `preview`/`accept`, threshold 10/15min → 429 with `Retry-After`; increment `invitations.failed_attempts` only on a resolved invitation, as evidence only
-- [ ] 6.15 RED (Testcontainers): community B cannot list or revoke community A's invitation, 403/404 both ways (Cross-Tenant Isolation Proven By Test, both scenarios)
-- [ ] 6.16 GREEN: fix any resolver gap 6.15 surfaces (should already hold from Phase 1)
-- [ ] 6.17 GREEN: implement `api/internal/mail/templates.go` `RenderInvitation` following `RenderPasswordReset`; wire `river.InsertTx` for the invitation email job inside the creation transaction
-- [ ] 6.18 RED: the daily `invitations.expire` sweep job transitions past-expiry `pending` rows
-- [ ] 6.19 GREEN: implement the River periodic sweeper job
-- [ ] 6.20 Run `make gen`; commit regenerated artifacts for invitation DTOs
+- [x] 6.1 RED: `POST /v1/communities/:id/invitations` returns the plaintext short code exactly once; the persisted row contains only `token_hash`/`short_code_hash` (Invitation Creation With Hashed Secrets, both scenarios)
+- [x] 6.2 GREEN: implement `scoped.Community` handler generating an 8-char unambiguous-alphabet short code via `crypto/rand`, SHA-256 hashing both secrets, roles `[admin, admin_staff]`
+- [x] 6.3 RED: invitation created with `status=pending`; accept transitions `status=accepted` in the same transaction as the membership write; a `pending` invitation past `expires_at` reads as `expired` before the sweep runs (Explicit Status Column, all three scenarios)
+- [x] 6.4 GREEN: implement the `status` state machine and read-time expiry derivation
+- [x] 6.5 RED: accept after expiry rejected; second accept on an already-accepted invitation rejected (Fourteen-Day Expiry And Single Use, both scenarios)
+- [x] 6.6 GREEN: implement the conditional `UPDATE ... WHERE status='pending' AND expires_at > now() RETURNING id`; zero rows ⇒ 409/404
+- [x] 6.7 RED: `POST /v1/invitations/preview` with a valid short code returns community/unit/role and creates no account; the registered API surface has no `GET` operation with `token`/`short_code` as a query parameter (Preview Endpoint Is POST, both scenarios)
+- [x] 6.8 GREEN: implement the `preview` handler; assert via the OpenAPI-walk test that no `GET` operation carries those query parameters
+- [x] 6.9 RED: accept with no existing account creates `user`+`unit_member` together; accept with an existing account links the membership without duplicating the user; both response shapes are identical (Accept Creates Or Links An Account, all three scenarios)
+- [x] 6.10 GREEN: implement `POST /v1/auth/accept-invitation` — one transaction, branch on existing email, uniform response shape
+- [x] 6.11 RED: resend increments `sent_count`; a revoked invitation fails both preview and accept (Resend And Revoke, both scenarios)
+- [x] 6.12 GREEN: implement `resend` (rate-limited) and `DELETE /v1/invitations/:id` (→`status=revoked`)
+- [x] 6.13 RED: 10 failed short-code guesses from one IP+device pair lock an 11th attempt from that pair; 10 failed guesses against a resolved invitation from 10 distinct pairs do not lock an 11th distinct pair (Enumeration Lockout Is IP+Device Scoped, both scenarios)
+- [x] 6.14 GREEN: wire `AttemptCounter` key `invite:{ip}:{deviceHash}` (SHA-256 of `X-Platform`+`X-App-Version`) into `preview`/`accept`, threshold 10/15min → 429 with `Retry-After`; increment `invitations.failed_attempts` only on a resolved invitation, as evidence only
+- [x] 6.15 RED (Testcontainers): community B cannot list or revoke community A's invitation, 403/404 both ways (Cross-Tenant Isolation Proven By Test, both scenarios)
+- [x] 6.16 GREEN: fix any resolver gap 6.15 surfaces (should already hold from Phase 1)
+- [x] 6.17 GREEN: implement `api/internal/mail/templates.go` `RenderInvitation` following `RenderPasswordReset`; wire `river.InsertTx` for the invitation email job inside the creation transaction
+- [x] 6.18 RED: the daily `invitations.expire` sweep job transitions past-expiry `pending` rows
+- [x] 6.19 GREEN: implement the River periodic sweeper job
+- [x] 6.20 Run `make gen`; commit regenerated artifacts for invitation DTOs
 
 ## Phase 7: Public-Form Protection + Non-Superadmin TOTP (WU-5, PR5 — TDD, D-7)
 

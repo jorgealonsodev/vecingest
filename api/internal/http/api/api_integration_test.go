@@ -27,6 +27,7 @@ import (
 	"github.com/jorgealonsodev/vecingest/internal/platform/attempts"
 	"github.com/jorgealonsodev/vecingest/internal/platform/cache"
 	"github.com/jorgealonsodev/vecingest/internal/platform/mail"
+	"github.com/jorgealonsodev/vecingest/internal/platform/queue"
 	"github.com/jorgealonsodev/vecingest/internal/testhelpers"
 )
 
@@ -65,6 +66,18 @@ func newTestServer(t *testing.T) (*httptest.Server, *handlers.Deps, db.Handles) 
 	}
 
 	logMailer := mail.LogMailer{}
+
+	// Real River client over the SAME Testcontainers Postgres
+	// (river's own migration set already runs as part of the schema
+	// migration set every Testcontainers-backed test applies), so
+	// invitation creation's river.InsertTx call is exercised for real
+	// -- no fake Queue double, and no real SMTP server (task 6.17: "M1
+	// does not depend on production SMTP").
+	riverClient, err := queue.NewClient(handlesDB.Write.Pool(), nil, logMailer)
+	if err != nil {
+		t.Fatalf("build river client: %v", err)
+	}
+
 	deps := &handlers.Deps{
 		DB:           handlesDB,
 		AccessIssuer: token.Issuer{Secret: accessSecret},
@@ -81,6 +94,8 @@ func newTestServer(t *testing.T) (*httptest.Server, *handlers.Deps, db.Handles) 
 		AllowedOrigins:  []string{testOrigin},
 		ResetRequester:  handlers.DBResetRequester{DB: handlesDB.Write, Sender: logMailer},
 		TokenIssuer:     handlers.OpaqueTokenIssuer{},
+		InviteAttempts:  attempts.NewCounter(nil),
+		Queue:           queue.RiverInvitationQueue{Client: riverClient},
 	}
 
 	registry := health.NewRegistry(health.PostgresCheck{DB: handlesDB.Write})

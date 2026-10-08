@@ -54,9 +54,19 @@ func (noopWorker) Work(context.Context, *river.Job[noopArgs]) error { return nil
 // driver -- distinct from migrations/schema's own riverdatabasesql,
 // which only goose's database/sql-shaped migration runner needs). A nil
 // logger lets river.Config.WithDefaults install its own default logger.
-func NewClient(pool *pgxpool.Pool, logger *slog.Logger) (*river.Client[pgx.Tx], error) {
+//
+// sender wires InvitationEmailWorker's mail dispatch (design's
+// Interfaces/Contracts table: "Queue -- first producers in the
+// project"). A nil sender is a legitimate, supported value: the worker
+// then no-ops on that job kind instead of failing it (M1 does not
+// depend on production SMTP), and a producer-only client (built by
+// serve, which never calls Start) never invokes Work at all regardless
+// of what sender it was given.
+func NewClient(pool *pgxpool.Pool, logger *slog.Logger, sender RawSender) (*river.Client[pgx.Tx], error) {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &noopWorker{})
+	river.AddWorker(workers, &InvitationEmailWorker{Sender: sender})
+	river.AddWorker(workers, &invitationsExpireWorker{pool: pool})
 
 	driver := riverpgxv5.New(pool)
 	cfg := &river.Config{
@@ -64,6 +74,17 @@ func NewClient(pool *pgxpool.Pool, logger *slog.Logger) (*river.Client[pgx.Tx], 
 			river.QueueDefault: {MaxWorkers: 1},
 		},
 		Workers: workers,
+		// invitations.expire (design D-6; PRD §7.4 job table: "diario").
+		// The scheduler only actually runs once Start is called, so a
+		// producer-only client (serve, which never calls Start) never
+		// triggers it -- only the `worker` subcommand does.
+		PeriodicJobs: []*river.PeriodicJob{
+			river.NewPeriodicJob(
+				river.PeriodicInterval(invitationsExpireInterval),
+				func() (river.JobArgs, *river.InsertOpts) { return invitationsExpireArgs{}, nil },
+				&river.PeriodicJobOpts{ID: "invitations_expire"},
+			),
+		},
 	}
 	if logger != nil {
 		cfg.Logger = logger

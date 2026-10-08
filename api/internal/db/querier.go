@@ -12,6 +12,11 @@ import (
 )
 
 type Querier interface {
+	// AcceptInvitation implements design D-6's single-use write: the status
+	// transition only succeeds when the invitation is still pending and
+	// unexpired, so a concurrent or repeated accept observes zero rows
+	// rather than racing a prior read.
+	AcceptInvitation(ctx context.Context, arg AcceptInvitationParams) (uuid.UUID, error)
 	ConfirmUserMFAEnrollment(ctx context.Context, userID uuid.UUID) error
 	ConsumePasswordResetToken(ctx context.Context, id uuid.UUID) error
 	ConsumeUserMFARecoveryCode(ctx context.Context, arg ConsumeUserMFARecoveryCodeParams) (int64, error)
@@ -38,9 +43,28 @@ type Querier interface {
 	// lookup already scoped to one exact id has no other tenant's row to
 	// leak.
 	GetCommunityByID(ctx context.Context, id uuid.UUID) (Community, error)
-	GetInvitationByID(ctx context.Context, id uuid.UUID) (Invitation, error)
-	// Invitation resolver (design D-4): an {invitationId} route resolves
-	// community membership via the invitation's own owning community_id.
+	// GetInvitationByID is tenant-scoped by both id and community_id: the
+	// caller's community membership was already resolved and role-checked
+	// by scoped.Community/scoped.Invitation before this query ever runs,
+	// but the explicit community_id predicate is the same defense-in-depth
+	// unit_members.sql's three-bound queries already establish.
+	GetInvitationByID(ctx context.Context, arg GetInvitationByIDParams) (Invitation, error)
+	GetInvitationByShortCodeHash(ctx context.Context, shortCodeHash []byte) (Invitation, error)
+	// GetInvitationByTokenHash and GetInvitationByShortCodeHash back the
+	// unauthenticated preview/accept flow (invitations spec: "Preview
+	// Endpoint Is POST"; "Accept Creates Or Links An Account"). Both are
+	// global-uniqueness lookups by design (token_hash/short_code_hash are
+	// each UNIQUE across every community), so neither takes a tenant
+	// parameter -- the caller has no community context yet at this point in
+	// the flow, which is exactly why the invitation row itself is what
+	// supplies it (authz.ResolveCommunityViaInvitation, used by the
+	// AUTHENTICATED resend/revoke routes, is a completely separate path).
+	GetInvitationByTokenHash(ctx context.Context, tokenHash []byte) (Invitation, error)
+	// Invitation resolver (design D-4): a {invitationId} route resolves
+	// community membership via the invitation's own owning community_id,
+	// never a caller-supplied value. Returns the community_id regardless of
+	// status: a revoked/accepted/blocked invitation is still tied to a real
+	// community for cross-tenant isolation purposes.
 	GetInvitationCommunityID(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
 	GetOTPChallenge(ctx context.Context, id uuid.UUID) (OtpChallenge, error)
 	GetOfficeByID(ctx context.Context, id uuid.UUID) (Office, error)
@@ -63,6 +87,19 @@ type Querier interface {
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
 	GetUserMFA(ctx context.Context, userID uuid.UUID) (UserMfa, error)
+	// IncrementInvitationFailedAttempts records that a preview/accept call
+	// RESOLVED to this real invitation row (design D-6: "invitations.
+	// failed_attempts is still incremented, but only when the code resolved
+	// to a real invitation, and it is gate evidence rather than the
+	// mechanism"). It is called unconditionally on resolution, independent
+	// of whether the call goes on to succeed -- the enumeration lockout
+	// itself is enforced entirely by the IP+device AttemptCounter, never by
+	// this column (invitations spec: "failed_attempts alone does not
+	// enforce the lockout"). community_id is bound from the JUST-RESOLVED
+	// row (the caller always has it in hand at this point), so this is a
+	// genuine tenant filter, not merely a textual one.
+	IncrementInvitationFailedAttempts(ctx context.Context, arg IncrementInvitationFailedAttemptsParams) error
+	IncrementInvitationSentCount(ctx context.Context, arg IncrementInvitationSentCountParams) (int32, error)
 	IncrementOTPChallengeAttempts(ctx context.Context, id uuid.UUID) (int32, error)
 	// InsertAuditLog is the audit_log hash chain's single writer (D-O): the
 	// Semgrep rule single-writer-audit-log.yml (api/.semgrep/) fails the
@@ -121,6 +158,12 @@ type Querier interface {
 	// Community resolver, unit leg (design D-4): a caller's unit_members
 	// row for this community_id, never derived from a header.
 	ResolveCommunityRoleViaUnit(ctx context.Context, arg ResolveCommunityRoleViaUnitParams) (string, error)
+	// RevokeInvitation implements DELETE /v1/invitations/:id (invitations
+	// spec: "Resend And Revoke"). Only a still-pending invitation can be
+	// revoked; zero rows returned means it was already accepted/revoked/
+	// blocked, which the handler maps to a 409 rather than silently
+	// reporting success.
+	RevokeInvitation(ctx context.Context, arg RevokeInvitationParams) (uuid.UUID, error)
 	RevokeSession(ctx context.Context, id uuid.UUID) error
 	RevokeSessionFamily(ctx context.Context, familyID uuid.UUID) error
 	SetUserMFARecoveryCodes(ctx context.Context, arg SetUserMFARecoveryCodesParams) error
@@ -129,6 +172,18 @@ type Querier interface {
 	// sum is read-only, never a write-time constraint, so the caller
 	// decides what to do with a sum outside 100 ± 0.01.
 	SumParticipationCoefficientByCommunityID(ctx context.Context, communityID uuid.UUID) (pgtype.Numeric, error)
+	// SweepExpiredInvitations implements the daily invitations.expire job
+	// (design D-6; PRD §7.4 job table; task 6.18/6.19). It transitions
+	// past-expiry pending rows to 'blocked' -- the only CHECK-permitted
+	// terminal value left once 'accepted' and 'revoked' are excluded, since
+	// the invitations_status_check constraint (00008_invitations.sql) does
+	// not include an 'expired' value: expiry is reported at READ time via
+	// derivation (status='pending' AND expires_at<=now() reads as
+	// "expired"), and this sweep is the bookkeeping step that makes the
+	// stored column converge for reporting once the derivation window has
+	// passed, matching design D-6's "expired is derived at read time and
+	// never stored, and the daily invitations.expire job sweeps."
+	SweepExpiredInvitations(ctx context.Context) (int64, error)
 	TouchSessionLastUsed(ctx context.Context, id uuid.UUID) error
 	// UpdateCommunity persists the community-management: Community Update
 	// Restricted To Office Roles / Legal And Descriptive Fields Persisted

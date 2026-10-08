@@ -92,6 +92,16 @@ type UnitScoped interface {
 	ScopeUnitID() uuid.UUID
 }
 
+// InvitationScoped is scoped.Invitation's constraint (design D-4: the
+// {invitationId} route shape, used by resend/revoke). The input
+// declares which invitation it targets; the community membership is
+// resolved indirectly, via that invitation's own community_id
+// (authz.ResolveCommunityViaInvitation), never a client-supplied
+// community id.
+type InvitationScoped interface {
+	ScopeInvitationID() uuid.UUID
+}
+
 // UserID returns the resolved user id. It panics on an invalid
 // (zero-value or otherwise unresolved) Membership: unreachable by
 // construction, since only this package's resolvers ever set valid.

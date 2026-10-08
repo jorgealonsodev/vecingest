@@ -25,6 +25,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/auth/accept-invitation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Accept an invitation, creating or linking an account (public, unauthenticated) */
+        post: operations["acceptInvitation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/auth/forgot-password": {
         parameters: {
             query?: never;
@@ -180,6 +197,24 @@ export interface paths {
         patch: operations["updateCommunity"];
         trace?: never;
     };
+    "/v1/communities/{id}/invitations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a community's invitations (admin/admin_staff only) */
+        get: operations["listInvitations"];
+        put?: never;
+        /** Invite a resident to a community (admin/admin_staff only) */
+        post: operations["createInvitation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/communities/{id}/units": {
         parameters: {
             query?: never;
@@ -259,6 +294,57 @@ export interface paths {
         get: operations["healthReady"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/invitations/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview an invitation by token or short code (public, unauthenticated) */
+        post: operations["previewInvitation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/invitations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke an invitation (admin/admin_staff only) */
+        delete: operations["revokeInvitation"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/invitations/{id}/resend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resend an invitation (admin/admin_staff only) */
+        post: operations["resendInvitation"];
         delete?: never;
         options?: never;
         head?: never;
@@ -390,6 +476,23 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AcceptInvitationRequest: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/AcceptInvitationRequest.json
+             */
+            readonly $schema?: string;
+            consent: boolean;
+            device_name?: string;
+            name: string;
+            password: string;
+            phone?: string;
+            /** @enum {string} */
+            platform: "ios" | "android" | "web";
+            short_code?: string;
+            token?: string;
+        };
         AddOfficeMemberRequest: {
             /**
              * Format: uri
@@ -508,6 +611,46 @@ export interface components {
             reserve_fund?: string;
             secretary_is_office?: boolean;
         };
+        CreateInvitationRequest: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/CreateInvitationRequest.json
+             */
+            readonly $schema?: string;
+            /** Format: email */
+            email: string;
+            /** @enum {string} */
+            role: "owner" | "tenant";
+            /** Format: uuid */
+            unit_id: string;
+        };
+        CreateInvitationResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/CreateInvitationResponse.json
+             */
+            readonly $schema?: string;
+            /** Format: date-time */
+            accepted_at?: string;
+            community_id: string;
+            /** Format: date-time */
+            created_at: string;
+            email?: string;
+            /** Format: date-time */
+            expires_at: string;
+            id: string;
+            role: string;
+            /** Format: int32 */
+            sent_count: number;
+            short_code: string;
+            status: string;
+            token: string;
+            unit_id?: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
         CreateOfficeRequest: {
             /**
              * Format: uri
@@ -608,6 +751,24 @@ export interface components {
             readonly $schema?: string;
             accepted: boolean;
         };
+        InvitationResponse: {
+            /** Format: date-time */
+            accepted_at?: string;
+            community_id: string;
+            /** Format: date-time */
+            created_at: string;
+            email?: string;
+            /** Format: date-time */
+            expires_at: string;
+            id: string;
+            role: string;
+            /** Format: int32 */
+            sent_count: number;
+            status: string;
+            unit_id?: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
         ListCommunitiesResponse: {
             /**
              * Format: uri
@@ -616,6 +777,15 @@ export interface components {
              */
             readonly $schema?: string;
             communities: components["schemas"]["CommunityResponse"][] | null;
+        };
+        ListInvitationsResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/ListInvitationsResponse.json
+             */
+            readonly $schema?: string;
+            invitations: components["schemas"]["InvitationResponse"][] | null;
         };
         ListOfficeMembersResponse: {
             /**
@@ -743,6 +913,30 @@ export interface components {
             name: string;
             phone?: string;
         };
+        PreviewInvitationRequest: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/PreviewInvitationRequest.json
+             */
+            readonly $schema?: string;
+            short_code?: string;
+            token?: string;
+        };
+        PreviewInvitationResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/PreviewInvitationResponse.json
+             */
+            readonly $schema?: string;
+            community_id: string;
+            community_name: string;
+            /** Format: date-time */
+            expires_at: string;
+            role: string;
+            unit_id?: string;
+        };
         ReadyResponse: {
             /**
              * Format: uri
@@ -760,6 +954,16 @@ export interface components {
              */
             readonly $schema?: string;
             refresh_token?: string;
+        };
+        ResendInvitationResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/ResendInvitationResponse.json
+             */
+            readonly $schema?: string;
+            /** Format: int32 */
+            sent_count: number;
         };
         ResetPasswordRequest: {
             /**
@@ -779,6 +983,15 @@ export interface components {
              */
             readonly $schema?: string;
             accepted: boolean;
+        };
+        RevokeInvitationResponse: {
+            /**
+             * Format: uri
+             * @description A URL to the JSON Schema for this object.
+             * @example https://example.com/schemas/RevokeInvitationResponse.json
+             */
+            readonly $schema?: string;
+            status: string;
         };
         SessionSummary: {
             /** Format: date-time */
@@ -951,6 +1164,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OfficeResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    acceptInvitation: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Platform"?: string;
+                "X-App-Version"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AcceptInvitationRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginResponse"];
                 };
             };
             /** @description Error */
@@ -1329,6 +1579,72 @@ export interface operations {
             };
         };
     };
+    listInvitations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListInvitationsResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    createInvitation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateInvitationRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateInvitationResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
     createUnit: {
         parameters: {
             query?: never;
@@ -1478,6 +1794,104 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReadyResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    previewInvitation: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Platform"?: string;
+                "X-App-Version"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreviewInvitationRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreviewInvitationResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    revokeInvitation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevokeInvitationResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ErrorModel"];
+                };
+            };
+        };
+    };
+    resendInvitation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResendInvitationResponse"];
                 };
             };
             /** @description Error */

@@ -109,6 +109,37 @@ func Unit[I any, O any, PI interface {
 	})
 }
 
+// Invitation registers an invitation-scoped operation (design D-4: the
+// {invitationId} route shape, used by resend/revoke). It stamps the
+// SAME KindCommunity marker Community and Unit do -- all three
+// ultimately resolve to a KindCommunity Membership, community
+// membership just gets there via the invitation's own community_id
+// (authz.ResolveCommunityViaInvitation) rather than a route-level
+// community id, so A2's per-kind resolver/role check applies
+// identically.
+func Invitation[I any, O any, PI interface {
+	*I
+	authz.InvitationScoped
+}](api huma.API, op huma.Operation, roles []authz.Role, handler func(context.Context, PI, authz.Membership) (*O, error)) {
+	stampMarker(&op, authz.KindCommunity, roles)
+
+	huma.Register(api, op, func(ctx context.Context, in *I) (*O, error) {
+		pi := PI(in)
+		userID, ok := authz.UserIDFromContext(ctx)
+		if !ok {
+			return nil, apperr.New(401, apperr.CodeUnauthorized, "missing authenticated caller", nil)
+		}
+		membership, err := authz.ResolveCommunityViaInvitation(ctx, pi.ScopeInvitationID(), userID)
+		if err != nil {
+			return nil, resolveErrorResponse(err)
+		}
+		if !authz.RoleAllowed(membership.Role(), roles) {
+			return nil, forbidden()
+		}
+		return handler(ctx, pi, membership)
+	})
+}
+
 // Self registers an operation scoped to the caller's own membership set
 // and no path resource (design D-1): GET /v1/communities, GET /v1/me.
 func Self[I any, O any](api huma.API, op huma.Operation, handler func(context.Context, *I, authz.Memberships) (*O, error)) {

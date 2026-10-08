@@ -53,6 +53,14 @@ type Querier interface {
 	// unit's own community_id, one join, then the community resolver's
 	// predicate).
 	GetUnitCommunityID(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
+	// GetInvitationCommunityID is the invitation resolver's own lookup
+	// (design D-4: the {invitationId} route shape resolves community
+	// membership via the invitation's own community_id). It returns the
+	// community id regardless of the invitation's status: a revoked,
+	// accepted or blocked invitation is still tied to a real community
+	// for cross-tenant isolation purposes (invitations spec:
+	// "Cross-Tenant Isolation Proven By Test").
+	GetInvitationCommunityID(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
 }
 
 var queries Querier
@@ -134,6 +142,30 @@ func ResolveCommunityViaUnit(ctx context.Context, unitID, userID uuid.UUID) (Mem
 	}
 
 	communityID, err := queries.GetUnitCommunityID(ctx, unitID)
+	if err != nil {
+		if isNoRows(err) {
+			return Membership{}, ErrNoMembership
+		}
+		return Membership{}, err
+	}
+
+	return ResolveCommunity(ctx, communityID, userID)
+}
+
+// ResolveCommunityViaInvitation resolves the caller's membership for the
+// community owning invitationID (design D-4: the {invitationId} route
+// shape resolves via invitations.community_id, one join, then the
+// community resolver's predicate above, exactly mirroring
+// ResolveCommunityViaUnit). An invitation that does not exist resolves
+// to ErrNoMembership -- exactly like a foreign community -- so a caller
+// learns nothing about whether the invitation id itself is valid (D-4:
+// "Foreign resource → 404").
+func ResolveCommunityViaInvitation(ctx context.Context, invitationID, userID uuid.UUID) (Membership, error) {
+	if queries == nil {
+		return Membership{}, errNotConfigured
+	}
+
+	communityID, err := queries.GetInvitationCommunityID(ctx, invitationID)
 	if err != nil {
 		if isNoRows(err) {
 			return Membership{}, ErrNoMembership

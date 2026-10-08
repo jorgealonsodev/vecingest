@@ -28,6 +28,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 // defaultSchemaDir is used when the caller supplies only the queries
@@ -52,6 +53,24 @@ var exceptions = map[string]string{
 		"(GetAuditLogHead, ListAuditLogRange) intentionally read the " +
 		"whole hash chain. Revisit when M1 gives audit_log real " +
 		"per-community rows.",
+}
+
+// queryExceptions is the NARROWER, query-level exception mechanism
+// design.md's tenant-scope subsection anticipates for M1 ("a narrower
+// query-level exception map keyed file:queryName"), introduced here
+// ahead of Phase 8's own task (which retires the table-level audit_log
+// entry above into this same map) because Phase 6 already needs one
+// entry of its own: unlike audit_log, most `invitations` queries ARE
+// properly community_id-scoped, so a table-level exception would
+// blanket-exempt them too. Keys are `filepath.Base(file):queryName`, so
+// the check is independent of which directory lintscope is invoked
+// from.
+var queryExceptions = map[string]string{
+	"invitations.sql:SweepExpiredInvitations": "design D-6/PRD §7.4: the " +
+		"daily invitations.expire sweep job is intentionally cross-" +
+		"tenant — it is a periodic maintenance pass over every " +
+		"community's past-expiry pending invitations, exactly the same " +
+		"class of legitimate whole-table read/write as ListAuditLogRange.",
 }
 
 func main() {
@@ -117,6 +136,10 @@ func lint(schemaDir, queriesDir string) ([]string, error) {
 
 		if reason, excepted := exceptions[q.table]; excepted {
 			_ = reason // documented, not a silent skip — see the exceptions map's own comment
+			continue
+		}
+		if reason, excepted := queryExceptions[filepath.Base(q.file)+":"+q.name]; excepted {
+			_ = reason // documented, not a silent skip — see queryExceptions' own comment
 			continue
 		}
 

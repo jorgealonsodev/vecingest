@@ -29,6 +29,7 @@ import (
 	"github.com/jorgealonsodev/vecingest/internal/platform/attempts"
 	"github.com/jorgealonsodev/vecingest/internal/platform/cache"
 	"github.com/jorgealonsodev/vecingest/internal/platform/hibp"
+	"github.com/jorgealonsodev/vecingest/internal/platform/queue"
 )
 
 // mailCloseTimeout bounds how long serve's graceful shutdown waits for
@@ -210,6 +211,19 @@ func buildServeDeps(cfg config.Config, holder *secrets.Holder, handlesDB db.Hand
 		return nil, nil, fmt.Errorf("build mailer: %w", err)
 	}
 
+	// Producer-only River client (design's Interfaces/Contracts table:
+	// "Queue -- yes -- first producers in the project"): serve never
+	// calls Start on it, it only ever inserts jobs via InsertTx inside
+	// an already-open handler transaction (invitations: CreateInvitation).
+	// realMailer is passed as the registered worker's sender too, so a
+	// deployment that DOES route jobs through this same client (e.g. a
+	// future single-process mode) dispatches real mail, matching the
+	// worker subcommand's own wiring shape one-for-one.
+	riverClient, err := queue.NewClient(handlesDB.Write.Pool(), nil, realMailer)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build river client: %w", err)
+	}
+
 	deps := &handlers.Deps{
 		DB:           handlesDB,
 		AccessIssuer: token.Issuer{Secret: accessSecret, PreviousSecret: previousSecret},
@@ -229,6 +243,8 @@ func buildServeDeps(cfg config.Config, holder *secrets.Holder, handlesDB db.Hand
 		AllowedOrigins: cfg.CorsOrigins,
 		ResetRequester: handlers.DBResetRequester{DB: handlesDB.Write, Sender: realMailer},
 		TokenIssuer:    handlers.OpaqueTokenIssuer{},
+		InviteAttempts: attempts.NewCounter(nil),
+		Queue:          queue.RiverInvitationQueue{Client: riverClient},
 	}
 	return deps, realMailer, nil
 }
