@@ -23,3 +23,32 @@
 # later commit so no new instance of this recurs; this entry only
 # silences the one historical occurrence.
 2cb437ededb88a97f69e8a0ba85fb967f70f8a58:.gitleaksignore:generic-api-key:6
+
+# generic-api-key false positives, seven occurrences of ONE fixture value
+# at a single commit: the account password every invitation-accept HTTP
+# test posts. It is a well-known public example passphrase popularised by
+# a webcomic about password entropy, chosen precisely because it is
+# recognisable as a sample rather than a credential. It is not quoted here,
+# for the reason given at the top of this file.
+#
+# Verified before being ignored: `git grep` finds the value in exactly three
+# files, all of them tests -- invitation_test.go (the lines ignored here),
+# api_integration_test.go and internal/domain/auth/password/argon2_test.go.
+# No non-test source file references it, and no deployment, migration or
+# configuration artifact does either. In invitation_test.go it is only the
+# "password" field of a test request body, so it authenticates nothing
+# outside the Testcontainers-backed database each test creates and destroys.
+# Only the invitation_test.go occurrences are flagged by the rule; the other
+# two files are not, so they need no entry.
+#
+# Ignored rather than removed because commit a6976ab is already published
+# history: rewriting it would invalidate the native review receipts burned
+# against these commits. If the fixture is ever changed, drop these entries
+# instead of extending them.
+a6976abcbd04f5ca793cc4db8b187636649870f3:api/internal/http/api/invitation_test.go:generic-api-key:174
+a6976abcbd04f5ca793cc4db8b187636649870f3:api/internal/http/api/invitation_test.go:generic-api-key:246
+a6976abcbd04f5ca793cc4db8b187636649870f3:api/internal/http/api/invitation_test.go:generic-api-key:261
+a6976abcbd04f5ca793cc4db8b187636649870f3:api/internal/http/api/invitation_test.go:generic-api-key:270
+a6976abcbd04f5ca793cc4db8b187636649870f3:api/internal/http/api/invitation_test.go:generic-api-key:369
+a6976abcbd04f5ca793cc4db8b187636649870f3:api/internal/http/api/invitation_test.go:generic-api-key:405
+a6976abcbd04f5ca793cc4db8b187636649870f3:api/internal/http/api/invitation_test.go:generic-api-key:482
