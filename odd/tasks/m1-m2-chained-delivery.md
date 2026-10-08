@@ -70,8 +70,8 @@ needs no push. Slice 8 is the current local branch.
       merge-ready.
 - [x] D-6: `ci` restored to green on pull request #9 by fixing two blockers in
       the `go` job. `security` still blocks all nine.
-- [ ] D-7: Diagnose the pre-existing repository-wide `security` failure
-      (gitleaks whole-history scan, pnpm audit, semgrep, trivy).
+- [x] D-7: `security` diagnosed and fixed. All six jobs pass on pull request
+      #9; see the evidence below, including what this does NOT fix.
 - [x] D-8: `94dc063` and `784cc6c` reviewed and acknowledged under lineage
       `review-18d981b9d7ddebee`; authority burned.
 
@@ -144,6 +144,74 @@ needs no push. Slice 8 is the current local branch.
     isolated from the log.
 - No pull request is merge-ready. `security` blocks all nine, and `gofumpt`
   additionally blocks #9.
+
+### D-7 evidence
+- `security` run 37823679566 at `afe0b2e` is SUCCESS on all six jobs:
+  gitleaks, semgrep, trivy, pnpm audit, gosec and govulncheck. `ci` at the
+  same commit is also SUCCESS. This is the first green `security` in the
+  repository's history.
+- Four work units, each reproduced locally before any change, at the exact
+  tool versions CI pins (gitleaks 8.24.3, semgrep 1.176.1, trivy 0.70.0):
+  - `d1b71c2` gitleaks: all seven leaks were ONE fixture value on seven lines
+    of `invitation_test.go` at commit `a6976ab`, a well-known public example
+    passphrase. Ignored by fingerprint, not removed, because `a6976ab` is
+    published history whose review receipts are already burned.
+  - `9c8b2ee` dependencies: `trivy` and `pnpm audit` shared one root cause,
+    vulnerable transitive npm packages. Six fixable CVEs pinned with
+    range-scoped overrides, the mechanism `pnpm-workspace.yaml` already uses
+    for js-yaml. trivy went 9 findings to 2; pnpm audit went 20
+    vulnerabilities (12 high, 1 critical) to 8 (4 high, 0 critical).
+  - `c2da7da` semgrep: one blocking finding led to one GENUINE defect behind
+    three false positives. The genuine one was a binary floating-point
+    parameter generated under `internal/db` by
+    `make_interval(secs => ...::double precision)`, which the project's own
+    `no-float-money-go` guard forbids there; fixed at the query by
+    multiplying a whole-second integer into an interval. The three false
+    positives were a lexical rule matching its own documentation, reworded
+    rather than suppressed, so both guards stay strict.
+  - `afe0b2e` residual risk: the two CVEs that report no upstream fix.
+- WHAT THIS DOES NOT FIX, stated plainly: these four commits live only at the
+  tip of the chain, on pull request #9. Pull requests #1 to #8 have older
+  trees and their `security` runs stay red. That is historically accurate and
+  was not corrected, because propagating the fixes to the base of the chain
+  would mean rebasing all nine branches and destroying the burned review
+  receipts those commits carry.
+- Nothing mechanically blocks merging regardless: `main` has no branch
+  protection and the repository has no rulesets, so no check is a required
+  status. The gates are the pull request template and human discipline, not
+  GitHub enforcement. Delivery remains the user's decision.
+- RESIDUAL RISK ACCEPTED under the user's delegated decision, recorded as
+  entries 4 and 5 of `docs/security/threat-model.md`:
+  - CVE-2026-93687 `braces@3.0.3`, stack-exhaustion denial of service, only
+    via the `@react-native/jest-preset` devDependency chain expanding this
+    repository's own Jest globs. Directly analogous to the accepted
+    `image-size` entry.
+  - CVE-2026-85393 `node-forge@1.4.0`, RSA PKCS#1 v1.5 signature forgery.
+    Recorded as its own entry because it differs on both axes that matter: a
+    verification bypass rather than a denial of service, arriving through
+    `expo`, a production dependency. Acceptance rests on reachability that
+    was VERIFIED, not assumed: no first-party source imports it, `@expo/cli`
+    touches it only from two code-signing utilities, and the Expo Updates
+    manifest-signing path that would perform the vulnerable verification is
+    not configured here (no expo-updates or EAS package, no `eas.json`, no
+    `updates`/`codeSigning`/`runtimeVersion` key in `app/app.json`). It
+    carries a MANDATORY re-evaluation trigger in all three files: adopting
+    expo-updates code signing or an EAS Update pipeline invalidates the
+    acceptance.
+- Open follow-up raised INDEPENDENTLY by two sources, the verifier and the
+  approved review's `R3-window-predicate-untested`: the two OTP window tests
+  pin only the upper bound near 3601 seconds, so a window of 1800 or 3599
+  would pass both, and nothing tests the 3600-second boundary itself. The
+  lower bound is unpinned. Separate work, never a correction.
+- Also honest: a fractional-second window now loses its fraction, because Go
+  truncates before the value reaches the database. No current caller uses one;
+  `EnrollEmailIssueWindow` is exactly `time.Hour`.
+- Review receipts for this work: `c2da7da`'s content under lineage
+  `review-327034840632eee3` (high tier, all four lenses, approved,
+  acknowledged); `d1b71c2`, `9c8b2ee`, `c2da7da` and `afe0b2e` as a committed
+  range under lineage `review-8d95fc92ac319c12` (high tier, all four lenses,
+  12 files / 267 lines, approved with five informational findings,
+  acknowledged, authority burned).
 
 ### D-6 evidence
 - `ci` is now SUCCESS on all nine pull requests, `ci-required` included. The
