@@ -7,10 +7,26 @@ packages:
 # dependency of metro via expo): no fixed version is published upstream.
 # Accepted residual risk, recorded in docs/security/threat-model.md.
 # Written by `pnpm audit --ignore-unfixable`; do not add a fixable CVE here.
+#
+# CVE-2026-93687 (braces, stack-exhaustion DoS): no published fix. Reaches
+# the tree only via the @react-native/jest-preset devDependency chain,
+# expanding this repository's own Jest globs. Entry 4 in
+# docs/security/threat-model.md.
+#
+# CVE-2026-85393 (node-forge, RSA PKCS#1 v1.5 signature forgery): no
+# published fix. A verification bypass, not a DoS, arriving through the
+# production `expo` dependency, so the acceptance rests on verified
+# unreachability: no first-party import, and @expo/cli touches it only from
+# two code-signing utilities, whose Expo Updates manifest-signing path is
+# not configured here. Entry 5 in docs/security/threat-model.md carries a
+# MANDATORY re-evaluation trigger: adopting expo-updates code signing or an
+# EAS Update pipeline invalidates this acceptance.
 auditConfig:
   ignoreCves:
     - CVE-2025-71330
     - CVE-2025-71329
+    - CVE-2026-93687
+    - CVE-2026-85393
 
 # GHSA-2883-xcg3-v3hh (js-yaml < 4.3.2, CPU exhaustion on empty merge
 # sources). It arrives transitively as

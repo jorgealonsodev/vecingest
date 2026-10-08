@@ -133,3 +133,68 @@ upstream as of 2026-09-08 (`pnpm audit` reports "Patched versions: <0.0.0").
   so both scanners' otherwise-blocking gates reflect a reviewed acceptance
   rather than silent, undocumented suppression. Renovate tracks `metro`/
   `image-size` for a future fixed release (gate re-evaluated then).
+
+### 4. `braces` stack-exhaustion DoS, transitive via Jest (CVE-2026-93687)
+
+`pnpm audit` and Trivy both flag `braces@3.0.3` for a stack-overflow
+denial of service: its recursive AST walkers lack depth guards, so a
+deeply nested brace pattern under the character limit exhausts the call
+stack and kills the Node process with an uncaught `RangeError`. No fixed
+version is published upstream as of 2026-10-08 (`pnpm audit` reports
+"Patched versions: <0.0.0", Trivy reports no fixed version).
+
+- **Risk accepted**: the only path into the dependency tree is
+  `app > @react-native/jest-preset > babel-jest > @jest/transform >
+  micromatch > braces`, and `@react-native/jest-preset` is a
+  `devDependency`. The brace patterns it expands are this repository's own
+  Jest configuration globs, not attacker-controlled input, and the code
+  never ships in a built artifact. The worst outcome is a crashed local or
+  CI test process.
+- **Compensating controls**: recorded in `pnpm-workspace.yaml`
+  (`auditConfig.ignoreCves`) and `.trivyignore` with the same
+  justification, so both gates reflect a reviewed acceptance rather than a
+  silent suppression. Re-evaluate when a fixed `braces` is published or
+  when the Jest toolchain stops depending on it.
+
+### 5. `node-forge` RSA signature forgery, transitive via `@expo/cli` (CVE-2026-85393)
+
+`pnpm audit` and Trivy both flag `node-forge@1.4.0`: RSA PKCS#1 v1.5
+signature verification does not validate the element count in nested
+`DigestAlgorithm` sequences, so garbage bytes embedded there let an
+attacker forge valid signatures for arbitrary messages against
+low-exponent RSA keys. It is an incomplete fix for CVE-2026-33894. No
+fixed version is published upstream as of 2026-10-08 ("Patched versions:
+<0.0.0").
+
+This one is called out separately from entries 3 and 4 on purpose: it is a
+signature-verification bypass, not a denial of service, and it arrives
+through `expo`, which `app/package.json` declares as a production
+`dependency` rather than a `devDependency`. The acceptance therefore rests
+on the vulnerable code path being unreachable, not on the package being
+dev-only.
+
+- **Reachability, verified on 2026-10-08 rather than assumed**:
+  - No first-party source imports `node-forge`. Searched `app/src`,
+    `app/app`, `packages/shared/src` and `site`: no matches, so Metro
+    never bundles it into a shipped app binary.
+  - Inside `@expo/cli` it is referenced from exactly two places, both
+    code-signing utilities that run on a developer machine or in CI:
+    `build/src/utils/codesigning.js` and
+    `build/src/run/ios/codeSigning/Security.js`.
+  - The first of those is the Expo Updates manifest code-signing path, the
+    one that would actually perform the vulnerable signature
+    verification. It is NOT configured here: no `expo-updates` or EAS
+    package is installed, there is no `eas.json`, and `app/app.json`
+    declares no `updates`, `codeSigning` or `runtimeVersion` key.
+  - The second is local iOS code signing during `expo run:ios`, a
+    developer-machine operation against Apple's own keychain.
+- **Risk accepted** on that basis: the vulnerable verification is not
+  invoked by any configured flow, and the package cannot reach the
+  production runtime.
+- **Re-evaluation trigger, mandatory**: adopting `expo-updates` with
+  manifest code signing, or any EAS Update pipeline, puts this exact code
+  path into use and invalidates this acceptance. Revisit it before, not
+  after, enabling either. Also re-evaluate when a fixed `node-forge` ships.
+- **Compensating controls**: recorded in `pnpm-workspace.yaml`
+  (`auditConfig.ignoreCves`) and `.trivyignore` with this justification and
+  this trigger.

@@ -9,3 +9,30 @@
 # when Renovate reports a fixed image-size release.
 CVE-2025-71329
 CVE-2025-71330
+
+# CVE-2026-93687: braces@3.0.3, a stack-exhaustion denial of service in its
+# recursive AST walkers. No fixed version is published upstream. It arrives
+# only as app > @react-native/jest-preset > babel-jest > @jest/transform >
+# micromatch > braces, a devDependency, expanding this repository's own Jest
+# config globs rather than untrusted input; the worst outcome is a crashed
+# test process, and the code never ships in a built artifact.
+# Accepted residual risk, recorded as entry 4 in
+# docs/security/threat-model.md; revisit when a fixed braces is published.
+CVE-2026-93687
+
+# CVE-2026-85393: node-forge@1.4.0, RSA PKCS#1 v1.5 signature verification
+# accepting extra nested DigestAlgorithm elements, which allows forging
+# signatures against low-exponent RSA keys. No fixed version is published
+# upstream. This is a signature-verification bypass rather than a denial of
+# service, and it arrives through expo, a production dependency, so the
+# acceptance rests on reachability and was verified rather than assumed: no
+# first-party source imports node-forge, and @expo/cli only references it
+# from two code-signing utilities that run on a developer machine or in CI.
+# The Expo Updates manifest-signing path, the one that would perform the
+# vulnerable verification, is not configured here (no expo-updates or EAS
+# package, no eas.json, no updates/codeSigning/runtimeVersion key in
+# app/app.json). Accepted residual risk, recorded as entry 5 in
+# docs/security/threat-model.md, WITH A MANDATORY RE-EVALUATION TRIGGER:
+# adopting expo-updates code signing or an EAS Update pipeline puts this
+# code path into use and invalidates the acceptance.
+CVE-2026-85393
