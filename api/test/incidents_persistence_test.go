@@ -81,7 +81,6 @@ func TestIncidentPersistence(t *testing.T) {
 			{"unit without unit", incidentParams(f.community, pgtype.UUID{}, f.creator, "unit")},
 			{"undocumented scope", incidentParams(f.community, pgtype.UUID{}, f.creator, "private")},
 			{"missing creator", incidentParams(f.community, pgtype.UUID{}, uuid.New(), "common")},
-
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				tc.args.ID = uuid.New()
@@ -110,7 +109,7 @@ func TestIncidentPersistence(t *testing.T) {
 			t.Helper()
 			rows, err := q.ListVisibleIncidents(ctx, incidentdb.ListVisibleIncidentsParams{
 				CommunityID: f.community, UserID: user, Status: pgtype.Text{}, Category: pgtype.Text{},
-					UnitID: pgtype.UUID{}, CursorCreatedAt: pgtype.Timestamptz{}, CursorID: pgtype.UUID{}, PageSize: 20,
+				UnitID: pgtype.UUID{}, CursorCreatedAt: pgtype.Timestamptz{}, CursorID: pgtype.UUID{}, PageSize: 20,
 			})
 			if err != nil {
 				t.Fatalf("ListVisibleIncidents: %v", err)
@@ -247,8 +246,8 @@ func incidentIDs(rows []incidentdb.Incident) []uuid.UUID {
 }
 
 type incidentFixture struct {
-	community, foreignCommunity uuid.UUID
-	unitOne, unitTwo, foreignUnit uuid.UUID
+	community, foreignCommunity                                                             uuid.UUID
+	unitOne, unitTwo, foreignUnit                                                           uuid.UUID
 	creator, unitMember, otherCreator, president, outsider, admin, adminStaff, foreignAdmin uuid.UUID
 }
 
@@ -265,9 +264,14 @@ func seedIncidentPersistence(t *testing.T, db *sql.DB) incidentFixture {
 		id    uuid.UUID
 		label string
 	}{
-		{f.creator, "creator"}, {f.unitMember, "unit-member"}, {f.otherCreator, "other-creator"},
-		{f.president, "president"}, {f.outsider, "outsider"}, {f.admin, "admin"},
-		{f.adminStaff, "admin-staff"}, {f.foreignAdmin, "foreign-admin"},
+		{f.creator, "creator"},
+		{f.unitMember, "unit-member"},
+		{f.otherCreator, "other-creator"},
+		{f.president, "president"},
+		{f.outsider, "outsider"},
+		{f.admin, "admin"},
+		{f.adminStaff, "admin-staff"},
+		{f.foreignAdmin, "foreign-admin"},
 	}
 	for _, user := range users {
 		if _, err := db.ExecContext(ctx, `INSERT INTO users (id, email, password_hash, name) VALUES ($1, $2, 'test-hash', $3)`,
@@ -304,12 +308,14 @@ func seedIncidentPersistence(t *testing.T, db *sql.DB) incidentFixture {
 	}
 	for _, member := range []struct {
 		id, unit, community, user uuid.UUID
-		role                     string
-		boardRole                sql.NullString
-	}{{uuid.New(), f.unitOne, f.community, f.creator, "owner", sql.NullString{}},
+		role                      string
+		boardRole                 sql.NullString
+	}{
+		{uuid.New(), f.unitOne, f.community, f.creator, "owner", sql.NullString{}},
 		{uuid.New(), f.unitOne, f.community, f.unitMember, "tenant", sql.NullString{}},
 		{uuid.New(), f.unitTwo, f.community, f.otherCreator, "tenant", sql.NullString{}},
-		{uuid.New(), f.unitTwo, f.community, f.president, "owner", sql.NullString{String: "president", Valid: true}}} {
+		{uuid.New(), f.unitTwo, f.community, f.president, "owner", sql.NullString{String: "president", Valid: true}},
+	} {
 		if _, err := db.ExecContext(ctx, `INSERT INTO unit_members (id, unit_id, community_id, user_id, role, board_role) VALUES ($1, $2, $3, $4, $5, $6)`,
 			member.id, member.unit, member.community, member.user, member.role, nullableString(member.boardRole)); err != nil {
 			t.Fatalf("insert test unit member: %v", err)

@@ -488,11 +488,19 @@ func TestIncident_ListAndDetailVisibilityFiltersAndValidation(t *testing.T) {
 		}
 	}
 	invalidFilters := []url.Values{
-		{"status": {"future_status"}}, {"category": {"unknown"}}, {"unit_id": {"not-a-uuid"}},
-		{"unit_id": {foreignUnit.String()}}, {"unit_id": {deletedUnit.String()}},
-		{"limit": {"0"}}, {"limit": {"101"}}, {"limit": {"-1"}}, {"limit": {"many"}},
-		{"cursor": {"not-a-cursor"}}, {"cursor": {strings.Repeat("a", 1025)}},
-		{"unexpected": {"x"}}, {"category": {""}},
+		{"status": {"future_status"}},
+		{"category": {"unknown"}},
+		{"unit_id": {"not-a-uuid"}},
+		{"unit_id": {foreignUnit.String()}},
+		{"unit_id": {deletedUnit.String()}},
+		{"limit": {"0"}},
+		{"limit": {"101"}},
+		{"limit": {"-1"}},
+		{"limit": {"many"}},
+		{"cursor": {"not-a-cursor"}},
+		{"cursor": {strings.Repeat("a", 1025)}},
+		{"unexpected": {"x"}},
+		{"category": {""}},
 	}
 	for _, values := range invalidFilters {
 		resp, body := list(communityID, memberToken, values)

@@ -42,7 +42,7 @@ type fakeQuerier struct {
 	// Admin_staff Scope Access). Every user id absent from this set
 	// defaults to enabled=true, so every test written before this gate
 	// existed keeps resolving exactly as it did.
-	mfaDisabledUsers map[uuid.UUID]bool
+	mfaDisabledUsers     map[uuid.UUID]bool
 	incidentCommunities  map[uuid.UUID]uuid.UUID
 	incidentLookupErr    error
 	visibleIncidentErr   error
