@@ -399,12 +399,20 @@ func TestMFAEnrollEmail_IssuanceCapStillCountsCodesInsideTheWindow(t *testing.T)
 		f.enroll(t)
 	}
 	lastCode := enrollEmailCode(t, f.db, f.userID)
-	if _, err := f.db.Write.Exec(t.Context(),
+	// The row count is asserted because this test, unlike the one above,
+	// would pass VACUOUSLY if the backdating silently matched nothing: the
+	// codes would simply stay fresh, remain inside the window, and the 429
+	// would hold for the wrong reason.
+	tag, err := f.db.Write.Exec(t.Context(),
 		`UPDATE otp_challenges SET created_at = now() - make_interval(secs => $2) + interval '5 seconds'
 		 WHERE user_id = $1 AND purpose = 'mfa_enroll'`,
 		f.userID, mfa.EnrollEmailIssueWindow.Seconds(),
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatalf("age the challenges to just inside the window: %v", err)
+	}
+	if got, want := tag.RowsAffected(), int64(mfa.EnrollEmailIssueLimit); got != want {
+		t.Fatalf("expected the backdating to move %d challenges, moved %d", want, got)
 	}
 
 	resp, body := doJSON(t, f.client, http.MethodPost, f.srv.URL+"/v1/me/mfa/enroll", nil, f.auth)
