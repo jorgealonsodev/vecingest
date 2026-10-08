@@ -20,9 +20,28 @@ type Querier interface {
 	// password_hash.
 	EnsureSuperadmin(ctx context.Context, id uuid.UUID) error
 	GetAuditLogHead(ctx context.Context) (GetAuditLogHeadRow, error)
+	// GetCommunityByID reads by the community's own id, which is itself the
+	// tenant root (design D-5) -- the explicit column list (rather than
+	// SELECT *) keeps office_id textually present for lint-scope, since a
+	// lookup already scoped to one exact id has no other tenant's row to
+	// leak.
+	GetCommunityByID(ctx context.Context, id uuid.UUID) (Community, error)
+	GetInvitationByID(ctx context.Context, id uuid.UUID) (Invitation, error)
+	// Invitation resolver (design D-4): an {invitationId} route resolves
+	// community membership via the invitation's own owning community_id.
+	GetInvitationCommunityID(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
 	GetOTPChallenge(ctx context.Context, id uuid.UUID) (OtpChallenge, error)
+	GetOfficeByID(ctx context.Context, id uuid.UUID) (Office, error)
+	// office resolver (design D-4): office scope resolves by (office_id,
+	// user_id), never from a header or body.
+	GetOfficeMemberByOfficeAndUser(ctx context.Context, arg GetOfficeMemberByOfficeAndUserParams) (OfficeMember, error)
 	GetPasswordResetTokenByHash(ctx context.Context, tokenHash []byte) (PasswordResetToken, error)
 	GetSessionByRefreshTokenHash(ctx context.Context, refreshTokenHash []byte) (Session, error)
+	GetUnitByID(ctx context.Context, id uuid.UUID) (Unit, error)
+	// Unit resolver (design D-4): a {unitId} route resolves community
+	// membership via the unit's own community_id, never a caller-supplied
+	// value.
+	GetUnitCommunityID(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
 	GetUserMFA(ctx context.Context, userID uuid.UUID) (UserMfa, error)
@@ -33,9 +52,23 @@ type Querier interface {
 	// internal/domain/audit.Append invokes it. Do not call this query
 	// directly from anywhere else.
 	InsertAuditLog(ctx context.Context, arg InsertAuditLogParams) (AuditLog, error)
+	// communities: tenant column office_id (tenant owner); id is the
+	// community tenant root (design D-5).
+	InsertCommunity(ctx context.Context, arg InsertCommunityParams) (Community, error)
+	// invitations: tenant column community_id (design D-5).
+	InsertInvitation(ctx context.Context, arg InsertInvitationParams) (Invitation, error)
 	InsertOTPChallenge(ctx context.Context, arg InsertOTPChallengeParams) (OtpChallenge, error)
+	// offices: id is itself the tenant root (design D-5).
+	InsertOffice(ctx context.Context, arg InsertOfficeParams) (Office, error)
+	// office_members: tenant column office_id (design D-5).
+	InsertOfficeMember(ctx context.Context, arg InsertOfficeMemberParams) (OfficeMember, error)
 	InsertPasswordResetToken(ctx context.Context, arg InsertPasswordResetTokenParams) (PasswordResetToken, error)
 	InsertSession(ctx context.Context, arg InsertSessionParams) (Session, error)
+	// units: tenant column community_id (design D-5).
+	InsertUnit(ctx context.Context, arg InsertUnitParams) (Unit, error)
+	// unit_members: tenant column community_id, denormalised NOT NULL FK
+	// (design D-5).
+	InsertUnitMember(ctx context.Context, arg InsertUnitMemberParams) (UnitMember, error)
 	InsertUser(ctx context.Context, arg InsertUserParams) (User, error)
 	// platform-bootstrap: Idempotent Superadmin Bootstrap / seed Refuses To
 	// Run Outside Non-Production -- both bootstrap-superadmin and seed need
@@ -45,8 +78,27 @@ type Querier interface {
 	// bootstrap-superadmin only, ensure is_superadmin via EnsureSuperadmin.
 	InsertUserIgnoreConflict(ctx context.Context, arg InsertUserIgnoreConflictParams) (int64, error)
 	ListAuditLogRange(ctx context.Context, arg ListAuditLogRangeParams) ([]AuditLog, error)
+	ListCommunitiesByOfficeID(ctx context.Context, officeID uuid.UUID) ([]Community, error)
+	ListInvitationsByCommunityID(ctx context.Context, communityID uuid.UUID) ([]Invitation, error)
 	ListLiveSessionsByFamilyID(ctx context.Context, familyID uuid.UUID) ([]Session, error)
+	ListOfficeMembers(ctx context.Context, officeID uuid.UUID) ([]OfficeMember, error)
+	// Self resolver (design D-4): the caller's full office-membership set,
+	// for GET /v1/me. Looked up by user, not by office -- the documented
+	// exception D-5 names for office_members_user_id_idx.
+	ListOfficeMembershipsByUserID(ctx context.Context, userID uuid.UUID) ([]ListOfficeMembershipsByUserIDRow, error)
+	ListUnitMembersByCommunityID(ctx context.Context, communityID uuid.UUID) ([]UnitMember, error)
+	// Self resolver (design D-4): the caller's full unit-membership set,
+	// for GET /v1/me.
+	ListUnitMembershipsByUserID(ctx context.Context, userID uuid.UUID) ([]ListUnitMembershipsByUserIDRow, error)
+	ListUnitsByCommunityID(ctx context.Context, communityID uuid.UUID) ([]Unit, error)
 	MarkOTPChallengeVerified(ctx context.Context, id uuid.UUID) error
+	// Community resolver, office leg (design D-4): an admin/admin_staff
+	// reaches a community whose office_id matches one of their
+	// office_members rows -- never a client-supplied office id.
+	ResolveCommunityRoleViaOffice(ctx context.Context, arg ResolveCommunityRoleViaOfficeParams) (string, error)
+	// Community resolver, unit leg (design D-4): a caller's unit_members
+	// row for this community_id, never derived from a header.
+	ResolveCommunityRoleViaUnit(ctx context.Context, arg ResolveCommunityRoleViaUnitParams) (string, error)
 	RevokeSession(ctx context.Context, id uuid.UUID) error
 	RevokeSessionFamily(ctx context.Context, familyID uuid.UUID) error
 	SetUserMFARecoveryCodes(ctx context.Context, arg SetUserMFARecoveryCodesParams) error

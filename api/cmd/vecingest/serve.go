@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/jorgealonsodev/vecingest/internal/authz"
 	"github.com/jorgealonsodev/vecingest/internal/config"
 	"github.com/jorgealonsodev/vecingest/internal/config/secrets"
 	"github.com/jorgealonsodev/vecingest/internal/db"
@@ -93,7 +94,7 @@ func runServe(ctx context.Context, args []string, stdout io.Writer, lookup confi
 
 	registry := health.NewRegistry(health.PostgresCheck{DB: handlesDB.Write})
 
-	r, _, err := httpapi.New(httpapi.Config{
+	r, hapi, err := httpapi.New(httpapi.Config{
 		Router: router.Config{
 			AppEnv:      cfg.AppEnv,
 			ProxyIP:     cfg.ProxyIP,
@@ -106,6 +107,14 @@ func runServe(ctx context.Context, args []string, stdout io.Writer, lookup confi
 	})
 	if err != nil {
 		return fmt.Errorf("serve: build API: %w", err)
+	}
+
+	// D-2 rung 2: the fail-closed boot assertion runs after api.New(...)
+	// and before ListenAndServe. A non-nil error aborts startup here,
+	// returned up to main -- no panic outside main, per
+	// rules.apply.guidelines.
+	if err := authz.AssertScopedRegistration(hapi.OpenAPI(), r, authz.PublicOperations); err != nil {
+		return fmt.Errorf("serve: boot assertion: %w", err)
 	}
 
 	listenCtx, stopListen := context.WithCancel(ctx)
