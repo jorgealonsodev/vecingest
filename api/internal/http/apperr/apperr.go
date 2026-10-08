@@ -28,6 +28,7 @@ const (
 	CodeNotFound                = "NOT_FOUND"
 	CodeValidation              = "VALIDATION_ERROR"
 	CodeInternal                = "INTERNAL_ERROR"
+	CodeConflict                = "CONFLICT"
 )
 
 // Error is the stable envelope. It implements huma.StatusError

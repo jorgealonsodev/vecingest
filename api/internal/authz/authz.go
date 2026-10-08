@@ -84,6 +84,14 @@ type OfficeScoped interface {
 	ScopeOfficeID() uuid.UUID
 }
 
+// UnitScoped is scoped.Unit's constraint (design D-4: the {unitId} route
+// shape). The input declares which unit it targets; the community
+// membership is resolved indirectly, via that unit's own community_id
+// (authz.ResolveCommunityViaUnit), never a client-supplied community id.
+type UnitScoped interface {
+	ScopeUnitID() uuid.UUID
+}
+
 // UserID returns the resolved user id. It panics on an invalid
 // (zero-value or otherwise unresolved) Membership: unreachable by
 // construction, since only this package's resolvers ever set valid.

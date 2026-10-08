@@ -12,24 +12,91 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const deleteUnitMember = `-- name: DeleteUnitMember :execrows
+UPDATE unit_members SET deleted_at = now(), updated_at = now()
+WHERE id = $1 AND unit_id = $2 AND community_id = $3 AND deleted_at IS NULL
+`
+
+type DeleteUnitMemberParams struct {
+	ID          uuid.UUID `json:"id"`
+	UnitID      uuid.UUID `json:"unit_id"`
+	CommunityID uuid.UUID `json:"community_id"`
+}
+
+func (q *Queries) DeleteUnitMember(ctx context.Context, arg DeleteUnitMemberParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteUnitMember, arg.ID, arg.UnitID, arg.CommunityID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const getUnitMemberByID = `-- name: GetUnitMemberByID :one
+SELECT id, unit_id, community_id, user_id, role, tenure, board_role, board_from, board_to, notification_address, electronic_notifications_consent_at, consent_text_version, valid_from, valid_to, deleted_at, created_at, updated_at FROM unit_members WHERE id = $1 AND unit_id = $2 AND community_id = $3 AND deleted_at IS NULL
+`
+
+type GetUnitMemberByIDParams struct {
+	ID          uuid.UUID `json:"id"`
+	UnitID      uuid.UUID `json:"unit_id"`
+	CommunityID uuid.UUID `json:"community_id"`
+}
+
+// unit-management: Unit Member Management Scoped To Community --
+// unit_id AND community_id are both bound parameters (never just the
+// path-supplied memberId alone), so a memberId belonging to a
+// different unit or a different community can never be read, updated
+// or deleted through this unit's route.
+func (q *Queries) GetUnitMemberByID(ctx context.Context, arg GetUnitMemberByIDParams) (UnitMember, error) {
+	row := q.db.QueryRow(ctx, getUnitMemberByID, arg.ID, arg.UnitID, arg.CommunityID)
+	var i UnitMember
+	err := row.Scan(
+		&i.ID,
+		&i.UnitID,
+		&i.CommunityID,
+		&i.UserID,
+		&i.Role,
+		&i.Tenure,
+		&i.BoardRole,
+		&i.BoardFrom,
+		&i.BoardTo,
+		&i.NotificationAddress,
+		&i.ElectronicNotificationsConsentAt,
+		&i.ConsentTextVersion,
+		&i.ValidFrom,
+		&i.ValidTo,
+		&i.DeletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const insertUnitMember = `-- name: InsertUnitMember :one
-INSERT INTO unit_members (id, unit_id, community_id, user_id, role, tenure, notification_address)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO unit_members (
+    id, unit_id, community_id, user_id, role, tenure, notification_address,
+    electronic_notifications_consent_at, consent_text_version
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING id, unit_id, community_id, user_id, role, tenure, board_role, board_from, board_to, notification_address, electronic_notifications_consent_at, consent_text_version, valid_from, valid_to, deleted_at, created_at, updated_at
 `
 
 type InsertUnitMemberParams struct {
-	ID                  uuid.UUID   `json:"id"`
-	UnitID              uuid.UUID   `json:"unit_id"`
-	CommunityID         uuid.UUID   `json:"community_id"`
-	UserID              uuid.UUID   `json:"user_id"`
-	Role                string      `json:"role"`
-	Tenure              string      `json:"tenure"`
-	NotificationAddress pgtype.Text `json:"notification_address"`
+	ID                               uuid.UUID          `json:"id"`
+	UnitID                           uuid.UUID          `json:"unit_id"`
+	CommunityID                      uuid.UUID          `json:"community_id"`
+	UserID                           uuid.UUID          `json:"user_id"`
+	Role                             string             `json:"role"`
+	Tenure                           string             `json:"tenure"`
+	NotificationAddress              pgtype.Text        `json:"notification_address"`
+	ElectronicNotificationsConsentAt pgtype.Timestamptz `json:"electronic_notifications_consent_at"`
+	ConsentTextVersion               pgtype.Text        `json:"consent_text_version"`
 }
 
 // unit_members: tenant column community_id, denormalised NOT NULL FK
-// (design D-5).
+// (design D-5). electronic_notifications_consent_at/consent_text_version
+// are settable at creation (unit-management: Consent And Notification
+// Fields Captured Per Member, "created without consent" scenario --
+// null when the caller passes no consent).
 func (q *Queries) InsertUnitMember(ctx context.Context, arg InsertUnitMemberParams) (UnitMember, error) {
 	row := q.db.QueryRow(ctx, insertUnitMember,
 		arg.ID,
@@ -39,6 +106,8 @@ func (q *Queries) InsertUnitMember(ctx context.Context, arg InsertUnitMemberPara
 		arg.Role,
 		arg.Tenure,
 		arg.NotificationAddress,
+		arg.ElectronicNotificationsConsentAt,
+		arg.ConsentTextVersion,
 	)
 	var i UnitMember
 	err := row.Scan(
@@ -69,6 +138,53 @@ SELECT id, unit_id, community_id, user_id, role, tenure, board_role, board_from,
 
 func (q *Queries) ListUnitMembersByCommunityID(ctx context.Context, communityID uuid.UUID) ([]UnitMember, error) {
 	rows, err := q.db.Query(ctx, listUnitMembersByCommunityID, communityID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []UnitMember
+	for rows.Next() {
+		var i UnitMember
+		if err := rows.Scan(
+			&i.ID,
+			&i.UnitID,
+			&i.CommunityID,
+			&i.UserID,
+			&i.Role,
+			&i.Tenure,
+			&i.BoardRole,
+			&i.BoardFrom,
+			&i.BoardTo,
+			&i.NotificationAddress,
+			&i.ElectronicNotificationsConsentAt,
+			&i.ConsentTextVersion,
+			&i.ValidFrom,
+			&i.ValidTo,
+			&i.DeletedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUnitMembersByUnitID = `-- name: ListUnitMembersByUnitID :many
+SELECT id, unit_id, community_id, user_id, role, tenure, board_role, board_from, board_to, notification_address, electronic_notifications_consent_at, consent_text_version, valid_from, valid_to, deleted_at, created_at, updated_at FROM unit_members WHERE unit_id = $1 AND community_id = $2 AND deleted_at IS NULL ORDER BY created_at ASC
+`
+
+type ListUnitMembersByUnitIDParams struct {
+	UnitID      uuid.UUID `json:"unit_id"`
+	CommunityID uuid.UUID `json:"community_id"`
+}
+
+func (q *Queries) ListUnitMembersByUnitID(ctx context.Context, arg ListUnitMembersByUnitIDParams) ([]UnitMember, error) {
+	rows, err := q.db.Query(ctx, listUnitMembersByUnitID, arg.UnitID, arg.CommunityID)
 	if err != nil {
 		return nil, err
 	}
@@ -153,4 +269,61 @@ func (q *Queries) ResolveCommunityRoleViaUnit(ctx context.Context, arg ResolveCo
 	var role string
 	err := row.Scan(&role)
 	return role, err
+}
+
+const updateUnitMember = `-- name: UpdateUnitMember :one
+UPDATE unit_members SET
+    role = $4,
+    tenure = $5,
+    notification_address = $6,
+    electronic_notifications_consent_at = $7,
+    consent_text_version = $8,
+    updated_at = now()
+WHERE id = $1 AND unit_id = $2 AND community_id = $3 AND deleted_at IS NULL
+RETURNING id, unit_id, community_id, user_id, role, tenure, board_role, board_from, board_to, notification_address, electronic_notifications_consent_at, consent_text_version, valid_from, valid_to, deleted_at, created_at, updated_at
+`
+
+type UpdateUnitMemberParams struct {
+	ID                               uuid.UUID          `json:"id"`
+	UnitID                           uuid.UUID          `json:"unit_id"`
+	CommunityID                      uuid.UUID          `json:"community_id"`
+	Role                             string             `json:"role"`
+	Tenure                           string             `json:"tenure"`
+	NotificationAddress              pgtype.Text        `json:"notification_address"`
+	ElectronicNotificationsConsentAt pgtype.Timestamptz `json:"electronic_notifications_consent_at"`
+	ConsentTextVersion               pgtype.Text        `json:"consent_text_version"`
+}
+
+func (q *Queries) UpdateUnitMember(ctx context.Context, arg UpdateUnitMemberParams) (UnitMember, error) {
+	row := q.db.QueryRow(ctx, updateUnitMember,
+		arg.ID,
+		arg.UnitID,
+		arg.CommunityID,
+		arg.Role,
+		arg.Tenure,
+		arg.NotificationAddress,
+		arg.ElectronicNotificationsConsentAt,
+		arg.ConsentTextVersion,
+	)
+	var i UnitMember
+	err := row.Scan(
+		&i.ID,
+		&i.UnitID,
+		&i.CommunityID,
+		&i.UserID,
+		&i.Role,
+		&i.Tenure,
+		&i.BoardRole,
+		&i.BoardFrom,
+		&i.BoardTo,
+		&i.NotificationAddress,
+		&i.ElectronicNotificationsConsentAt,
+		&i.ConsentTextVersion,
+		&i.ValidFrom,
+		&i.ValidTo,
+		&i.DeletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

@@ -145,6 +145,74 @@ const UpdateCommunityRequest = z
     secretary_is_office: z.boolean(),
   })
   .partial();
+const UnitMemberCreateRequest = z.object({
+  consent_text_version: z.string().optional(),
+  electronic_notifications_consent: z.boolean().optional(),
+  email: z.string().email(),
+  notification_address: z.string().optional(),
+  role: z.enum(["owner", "tenant"]),
+  tenure: z.enum(["full_owner", "bare_owner", "usufructuary"]).optional(),
+});
+const CreateUnitRequest = z.object({
+  $schema: z.string().url().optional(),
+  block: z.string().max(64).optional(),
+  cadastral_ref: z.string().max(64).optional(),
+  door: z.string().max(32).optional(),
+  floor: z.string().max(32).optional(),
+  members: z.union([z.array(UnitMemberCreateRequest), z.null()]).optional(),
+  participation_coefficient: z.string().optional(),
+  type: z.enum(["flat", "premises", "garage", "storage"]),
+});
+const UnitMemberResponse = z.object({
+  $schema: z.string().url().optional(),
+  community_id: z.string(),
+  consent_text_version: z.string().optional(),
+  created_at: z.string().datetime({ offset: true }),
+  electronic_notifications_consent_at: z
+    .string()
+    .datetime({ offset: true })
+    .optional(),
+  id: z.string(),
+  notification_address: z.string().optional(),
+  role: z.string(),
+  tenure: z.string(),
+  unit_id: z.string(),
+  updated_at: z.string().datetime({ offset: true }),
+  user_id: z.string(),
+});
+const UnitCreateResponse = z.object({
+  $schema: z.string().url().optional(),
+  block: z.string().optional(),
+  cadastral_ref: z.string().optional(),
+  community_id: z.string(),
+  created_at: z.string().datetime({ offset: true }),
+  door: z.string().optional(),
+  floor: z.string().optional(),
+  id: z.string(),
+  members: z.union([z.array(UnitMemberResponse), z.null()]).optional(),
+  participation_coefficient: z.string().optional(),
+  type: z.string(),
+  updated_at: z.string().datetime({ offset: true }),
+  warnings: z.union([z.array(z.string()), z.null()]).optional(),
+});
+const UnitImportRowResult = z.object({
+  block: z.string().optional(),
+  door: z.string().optional(),
+  errors: z.union([z.array(z.string()), z.null()]).optional(),
+  floor: z.string().optional(),
+  owner_dni_cif: z.string().optional(),
+  owner_name: z.string().optional(),
+  row: z.number().int(),
+  type: z.string().optional(),
+  unit_id: z.string().optional(),
+});
+const UnitImportResponse = z.object({
+  $schema: z.string().url().optional(),
+  dry_run: z.boolean(),
+  imported: z.number().int(),
+  rows: z.union([z.array(UnitImportRowResult), z.null()]),
+  warnings: z.union([z.array(z.string()), z.null()]).optional(),
+});
 const LiveResponse = z.object({
   $schema: z.string().url().optional(),
   ok: z.boolean(),
@@ -190,6 +258,20 @@ const AddOfficeMemberRequest = z.object({
   $schema: z.string().url().optional(),
   email: z.string().email(),
 });
+const ListUnitMembersResponse = z.object({
+  $schema: z.string().url().optional(),
+  members: z.union([z.array(UnitMemberResponse), z.null()]),
+});
+const UpdateUnitMemberRequest = z
+  .object({
+    $schema: z.string().url(),
+    consent_text_version: z.string(),
+    electronic_notifications_consent: z.boolean(),
+    notification_address: z.string(),
+    role: z.enum(["owner", "tenant"]),
+    tenure: z.enum(["full_owner", "bare_owner", "usufructuary"]),
+  })
+  .partial();
 const Cookie = z.object({
   Domain: z.string(),
   Expires: z.string().datetime({ offset: true }),
@@ -238,6 +320,12 @@ export const schemas = {
   CreateCommunityRequest,
   CommunityDetailResponse,
   UpdateCommunityRequest,
+  UnitMemberCreateRequest,
+  CreateUnitRequest,
+  UnitMemberResponse,
+  UnitCreateResponse,
+  UnitImportRowResult,
+  UnitImportResponse,
   LiveResponse,
   ReadyResponse,
   MeResponse,
@@ -247,6 +335,8 @@ export const schemas = {
   OfficeMemberResponse,
   ListOfficeMembersResponse,
   AddOfficeMemberRequest,
+  ListUnitMembersResponse,
+  UpdateUnitMemberRequest,
   Cookie,
   ErrorDetail,
   ErrorModel,

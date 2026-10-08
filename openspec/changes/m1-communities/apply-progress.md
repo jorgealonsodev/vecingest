@@ -239,3 +239,131 @@ vacuous pass or a compile error masking the real gap.
 ### Status
 
 25/25 Phase 1 tasks complete. 9/9 Phase 2 tasks complete (pre-existing, this run). 11/11 Phase 3 tasks complete (this run). **Phase 4 (WU-3, PR3) NOT started per this run's explicit instruction to stop after Phase 3.**
+
+## Work Unit: WU-3 / PR3 — Phase 4 (Unit Management) + Phase 5 (Unit CSV Import)
+
+**Status**: Phase 4 (tasks 4.1–4.13) COMPLETE. Phase 5 (tasks 5.1–5.11) COMPLETE. Phase 6 (WU-4, invitations) NOT started per this run's explicit instruction to stop after Phase 5.
+
+**Branch**: `feature/m1-communities-pr3-units` (base: `feature/m1-communities-pr2-offices`, which already carries PR1+PR2). Not merged, not pushed, no commit created — delivery is the user's decision.
+
+### Completed Tasks (Phase 4, 4.1–4.13)
+
+All 13 tasks marked `[x]` in `tasks.md`.
+
+- [x] 4.1/4.2 `POST /v1/communities/:id/units` via `scoped.Community`, roles `[admin, admin_staff]`; `community_id` taken from the resolved membership, never a request field (there is no such field on the DTO at all)
+- [x] 4.3/4.4 duplicate `(community_id, block, floor, door)` → Postgres unique-violation (SQLSTATE 23505) mapped to 409 via a new `isUniqueViolation` helper (mirrors `internal/domain/auth/mfa`'s `SQLState()` classification pattern) and a new `apperr.CodeConflict`
+- [x] 4.5/4.6 coefficient-sum check implemented as a response-level `warnings []string` field on `CreateUnit`'s response only (see Deviations #1 below for why no separate list/read endpoint carries it)
+- [x] 4.7/4.8 `unit_members.role` restricted to `owner|tenant` via an `enum` tag (huma's own schema validation rejects `board_role` outright with 422 "unexpected property" — stronger than silently ignoring it); co-owners created as independent rows in the same transaction as the unit
+- [x] 4.9/4.10 `electronic_notifications_consent`/`consent_text_version` added to `InsertUnitMember`'s query and to the create/update DTOs; consent timestamp set only when the caller explicitly opts in
+- [x] 4.11/4.12 `ListUnitMembers`/`UpdateUnitMember`/`DeleteUnitMember` in `unit_members.go`, registered via a NEW `scoped.Unit` generic constructor (see Deviations #2) resolving community membership via `units.community_id`
+- [x] 4.13 `make gen` run twice; second run byte-identical (`git diff --exit-code` clean on `openapi.yaml`, sqlc code, TS client, Zod schemas)
+
+### Completed Tasks (Phase 5, 5.1–5.11)
+
+All 11 tasks marked `[x]` in `tasks.md`.
+
+- [x] 5.1/5.2 `GET /v1/communities/:id/units/import/template` via `scoped.Community` + `huma.StreamResponse`, streaming a CSV header row (`portal,floor,door,type,coefficient,owner_name,owner_dni_cif`)
+- [x] 5.3/5.4 `POST /v1/communities/:id/units/import?dry_run=true` validates every row (format, type enum, coefficient parse, in-file AND against-DB duplicate `block/floor/door`) and writes nothing
+- [x] 5.5/5.6 non-dry-run import wraps every `InsertUnit` in ONE transaction; any row error (from the same up-front validation pass) skips the transaction entirely — "no write is even attempted", stronger than "written then rolled back"
+- [x] 5.7/5.8 `csvSafeCell` (leading-apostrophe escape for `=+-@`) shared by the template writer and import ingestion (`csv_safety.go`)
+- [x] 5.9/5.10 `sanitizeImportFilename` (`csv_safety.go`) takes `filepath.Base` after normalizing backslashes, rejecting a traversal-only result; the upload is streamed via `io.LimitReader` straight into CSV parsing, never written to disk under any name
+- [x] 5.11 `make gen` run twice; second run byte-identical
+
+### Files Changed
+
+| File | Action | What Was Done |
+|------|--------|----------------|
+| `api/internal/authz/authz.go` | Modified | Added `UnitScoped` interface (design D-4's `{unitId}` route shape) |
+| `api/internal/authz/resolve.go` | Modified | Added `GetUnitCommunityID` to the `Querier` interface; added `ResolveCommunityViaUnit` (unit → community_id lookup, then the existing community resolver) |
+| `api/internal/authz/scoped/register.go` | Modified | Added the `Unit[I,O,PI]` generic constructor, mirroring `Community`/`Office` but resolving via `ResolveCommunityViaUnit`; stamps `Marker{Kind: KindCommunity}` (no new `Kind` needed — A2's resolver/role check is identical) |
+| `api/internal/authz/scoped/register_test.go` | Modified | Extended the shared `fakeQuerier` with `unitCommunities`/`GetUnitCommunityID` |
+| `api/internal/authz/scoped/unit_register_test.go` | Created | 3 RED→GREEN tests for `scoped.Unit`: resolves via unit→community, foreign community via unit → 404, unknown unit → 404 |
+| `api/internal/db/queries/units.sql` | Modified | Added `SumParticipationCoefficientByCommunityID` |
+| `api/internal/db/queries/unit_members.sql` | Modified | Extended `InsertUnitMember` with consent columns; added `ListUnitMembersByUnitID`, `GetUnitMemberByID`, `UpdateUnitMember`, `DeleteUnitMember` (all three-bound: `id`+`unit_id`+`community_id`) |
+| `api/internal/db/*.sql.go`, `querier.go` | Generated | `go tool sqlc generate` |
+| `api/internal/http/apperr/apperr.go` | Modified | Added `CodeConflict` |
+| `api/internal/http/handlers/deps.go` | Modified | Added `isUniqueViolation` (SQLSTATE 23505 classification) |
+| `api/internal/http/dto/units.go` | Created | `CreateUnitRequest/Input`, `UnitMemberCreateRequest`, `UnitResponse`, `UnitMemberResponse`, `UnitCreateResponse`, `ListUnitMembersInput/Response`, `UpdateUnitMemberRequest/Input`, `DeleteUnitMemberInput` |
+| `api/internal/http/dto/unit_csv_import.go` | Created | `GetUnitImportTemplateInput`, `UnitImportFile`, `CreateUnitImportInput` (multipart), `UnitImportRowResult`, `UnitImportResponse` |
+| `api/internal/http/handlers/units.go` | Created | `CreateUnit`, `coefficientWarnings`, `unitResponse`, `unitMemberResponse`, `RegisterUnits` |
+| `api/internal/http/handlers/unit_members.go` | Created | `ListUnitMembers`, `UpdateUnitMember`, `DeleteUnitMember`, `RegisterUnitMembers` |
+| `api/internal/http/handlers/csv_safety.go` | Created | `csvSafeCell`, `sanitizeImportFilename` |
+| `api/internal/http/handlers/csv_safety_test.go` | Created | Table-test unit tests for both functions (Testing Strategy classifies CSV formula escaping as unit-level, not integration-level) |
+| `api/internal/http/handlers/unit_csv_import.go` | Created | `GetUnitImportTemplate`, `ImportUnits`, `writeImportedUnits`, `parseImportRows`, `RegisterUnitCSVImport` |
+| `api/internal/http/api/api.go` | Modified | Wired `RegisterUnits`, `RegisterUnitMembers`, `RegisterUnitCSVImport` |
+| `api/internal/http/api/unit_test.go` | Created | 8 integration tests (Phase 4) |
+| `api/internal/http/api/unit_csv_import_test.go` | Created | 7 integration tests (Phase 5) + the `doMultipartCSV` test helper |
+| `api/openapi/openapi.yaml`, `packages/shared/src/client/openapi-types.ts`, `packages/shared/src/schemas/index.ts` | Generated | `make gen` |
+
+### TDD Cycle Evidence (Phase 4)
+
+Every RED below was produced by PLANTING a targeted logic violation (never removing route
+registration) in already-passing code, confirming the SPECIFIC test fails at the assertion
+naming the scenario, then reverting — per this run's explicit instruction, not a 404-only
+"route absent" RED (that proves a route was missing, not that any assertion checks anything).
+
+| Task | Test | What was broken (planted) | RED assertion observed | GREEN |
+|---|---|---|---|---|
+| 4.1/4.2 | `TestUnit_CreationScopedToCommunity` | `unitManageRoles` widened to include `owner`/`tenant` | `unit_test.go:29: expected 403 for an owner creating a unit, got 200 body=map[...]` | ✅ reverted, 8/8 pass |
+| 4.3/4.4 | `TestUnit_UniquenessPerCommunity` | `isUniqueViolation(err)` short-circuited to always-false | `unit_test.go:64: expected 409 for a duplicate block/floor/door, got 500 body=map[code:INTERNAL_ERROR ...]` | ✅ reverted |
+| 4.5/4.6 | `TestUnit_ParticipationCoefficientSumIsAWarning` | `coefficientTarget` changed from 100 to 50 | `unit_test.go:97: expected no coefficient-sum warning at exactly 100, got map[... warnings:[community participation coefficients sum to 100, expected 100 ± 0.01]]` | ✅ reverted |
+| 4.9/4.10 | `TestUnit_ConsentAndNotificationFieldsCaptured` | consent timestamp always stamped regardless of the request flag | `unit_test.go:192: expected no consent timestamp without explicit consent, got 2026-09-17T...` | ✅ reverted |
+| 4.11/4.12 (PATCH persists) | `TestUnitMembers_UpdatePersists` | `NotificationAddress` update short-circuited to never apply | `unit_test.go:306: expected the new notification_address to survive a re-read, got <nil>` | ✅ reverted — this is the exact Phase-3-shaped gap this run's instructions warned about: a PATCH that returns 200 without persisting stays invisible to a negative-only suite |
+| 4.11/4.12 (DELETE persists) | `TestUnitMembers_DeletePersists` | `DeleteUnitMember` query call skipped, `rowsAffected` hardcoded to 1 | `unit_test.go:360: expected the deleted member to be absent from a re-read, got map[... members:[map[...id:...]]]` | ✅ reverted |
+| 4.11 (resolver mechanism) | `TestUnit_ResolvesCommunityMembershipViaUnitID`, `TestUnit_ForeignCommunityViaUnitResolvesToNoMembership`, `TestUnit_UnknownUnitResolvesToNotFound` | N/A — genuine RED came from `scoped.Unit` not existing yet: `internal/authz/scoped/unit_register_test.go:31:9: undefined: scoped.Unit` (compile failure, not a runtime 404) | compile-time RED | ✅ implemented `ResolveCommunityViaUnit` + `scoped.Unit`, 25/25 authz-package tests pass |
+
+### TDD Cycle Evidence (Phase 5)
+
+| Task | Test | What was broken (planted) | RED assertion observed | GREEN |
+|---|---|---|---|---|
+| 5.3/5.4/5.5/5.6 | `TestUnitImport_DryRunValidatesWithoutWriting`, `TestUnitImport_RowByRowValidationBeforeAnyWrite` | the `if in.DryRun \|\| hasErrors` write-gate short-circuited to `if false && (...)`, so validation no longer prevented the write attempt | `unit_csv_import_test.go:105: expected 200, got 500 body=...INTERNAL_ERROR` and `unit_csv_import_test.go:175: expected 200 ..., got 500 body=...INTERNAL_ERROR` (invalid rows now reach the DB layer and fail loudly instead of being cleanly rejected pre-write) | ✅ reverted, 7/7 pass |
+| 5.7/5.8 | `TestUnitImport_FormulaInjectionNeutralizedOnIngestion` | `csvSafeCell` call on `owner_name` skipped | `unit_csv_import_test.go:218: expected the formula-prefixed owner name to be neutralized, got "=SUM(A1:A9)"` | ✅ reverted |
+| 5.9/5.10 (pure function) | `TestSanitizeImportFilename` | N/A — genuine RED was `undefined: sanitizeImportFilename` (compile failure) before the function existed | compile-time RED | ✅ implemented, 14/14 `csv_safety_test.go` cases pass |
+| 5.9/5.10 (HTTP-level, honesty note) | `TestUnitImport_PathTraversalSafeFilename` | tried skipping the handler's own `sanitizeImportFilename` call (`filename := file.Filename`) | **test still PASSED** — see Issues Found #3: Go's `mime/multipart` stdlib already runs `filepath.Base` on the `Content-Disposition` filename before huma ever sees it, so this specific plant could not distinguish the handler's own sanitization from the stdlib's. Genuine behavioural RED/GREEN evidence for this requirement comes from the pure-function unit test above, not this HTTP-level plant | reverted anyway (the call stays as documented defense-in-depth and the sole path that also rejects a traversal-only filename) |
+| hostile input (UTF-8) | `TestUnitImport_HostileInputHardening` | `utf8.Valid(raw)` check short-circuited to `if false && !utf8.Valid(raw)` | `unit_csv_import_test.go:320: expected 400 for invalid UTF-8, got 500 body=...INTERNAL_ERROR` | ✅ reverted |
+| hostile input (row cap) | `TestUnitImport_HostileInputHardening` | `len(dataRows) > maxImportRows` check short-circuited to `if false && ...` | test observed **5001 units actually imported** with no rejection (a real, not merely status-code, RED) | ✅ reverted |
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `cd api && go test -race ./internal/http/api/... -run "TestUnit\|TestUnitImport" -v` → **15/15 pass**; `cd api && go test ./internal/http/handlers/... -run "TestCSVSafeCell\|TestSanitizeImportFilename" -v` → **14/14 pass**; `cd api && go test ./internal/authz/... -v` → **25/25 pass** |
+| Runtime harness command/scenario and exact result | Testcontainers Postgres 17, real HTTP round-trip through the actual chi/huma router including a real `multipart/form-data` request built by hand (`doMultipartCSV`, since no prior M1 endpoint uploads a file) — every Phase 4/5 assertion exercises the real `bearerAuthAndRateLimit` → `scoped.Community`/`scoped.Unit` → resolver → handler chain |
+| Rollback boundary | Revert `api/internal/http/handlers/{units,unit_members,unit_csv_import,csv_safety}.go`, `api/internal/http/dto/{units,unit_csv_import}.go`, `api/internal/http/api/{unit_test,unit_csv_import_test}.go`, `api/internal/http/handlers/csv_safety_test.go`; revert the three `Register*` lines in `api/internal/http/api/api.go`; revert `authz.go`/`resolve.go`/`scoped/register.go`'s `Unit`-related additions and `scoped/register_test.go`'s `fakeQuerier` extension; revert the `unit_members.sql`/`units.sql` additions and re-run `go tool sqlc generate`; revert `apperr.go`'s `CodeConflict` and `deps.go`'s `isUniqueViolation` |
+
+### Full-Suite Verification
+
+- `cd api && go build ./...` → clean
+- `cd api && go vet ./...` → clean
+- `gofmt -l api/` → clean (no files listed)
+- `cd api && go test -race ./...` → **333/333 pass**, 36 packages (up from Phase 3's 300; +2 CSV-safety-package tests were already counted in `handlers`, +3 `scoped.Unit` tests, +8 Phase 4 integration tests, +7 Phase 5 integration tests — net +33)
+- `cd api && go run ./cmd/lintscope internal/db/queries migrations/schema` → `OK — every query against a tenant-scoped table references its tenant column`
+- `export PATH="$PATH:$(go env GOPATH)/bin"; gofumpt -l api/` → clean (no files listed)
+- `golangci-lint run ./...` → **No issues found** (one `errcheck` finding on `resp.Body.Close()` in the new CSV-import test file was found and fixed during this run, before the final clean pass)
+- `gosec -quiet ./...` → **26 issues**, IDENTICAL COUNT to the environment's documented pre-existing baseline (`config.go`, `seed.go`, `cmd/lintscope/parse.go`, `cmd/lintcompose/main.go`, `cmd/openapi-gen/main.go`, `internal/platform/hibp/client.go` — none of them files this run touched or created); grepped the full gosec output for every file this run created/modified and found only the 4 pre-existing, already-`//nolint`-annotated `apperr.go` findings (G101 substring-matches on `Credentials`/`Token`, present before this run's one-line `CodeConflict` addition). **Zero new gosec findings from this run's own files.**
+- `make gen` (openapi-gen + sqlc generate + `pnpm --filter @vecingest/shared build`) → run twice; `git diff --exit-code` on `openapi.yaml`, `packages/shared/src/client/openapi-types.ts`, `packages/shared/src/schemas/index.ts`, `internal/db/*` → **exit 0, byte-identical**
+
+### Deviations from Design
+
+1. **CSV import (Phase 5) creates `units` rows only — NOT `unit_members`/user accounts.** `owner_name`/`owner_dni_cif` are parsed, validated, and formula-neutralized per row (satisfying the template's documented column set and the formula-injection scenario), but are NOT persisted to any column and are only echoed back in the row result. Reasoning, not an oversight: (a) the frozen schema (D-5; no migration authorized for this work unit) has no column for either on any table; (b) `unit_members.user_id` is a NOT NULL FK to a real `users` row, and creating one needs a unique `email`, which the spec's documented column set (`portal, floor, door, type, coefficient, owner name, DNI/CIF`) does not include; (c) `tasks.md`'s own Phase 5 task list (5.1–5.11) never mentions member/account creation, only unit rows, dry-run validation, the transaction boundary, and the two hardening scenarios. Owner-account linkage for a CSV-imported unit is Phase 6/WU-4's invitation flow; `CreateUnit` (Phase 4, single-unit creation) already covers linking an EXISTING account's email to a unit at creation time via `UnitMemberCreateRequest`.
+2. **`scoped.Unit` is a NEW generic constructor**, not explicitly named in `design.md`'s File Changes table (which lists `scoped/register.go` generically). It stamps the SAME `Marker{Kind: KindCommunity}` `scoped.Community` does — both ultimately resolve to a `KindCommunity` `Membership`, just via a different lookup path (`ResolveCommunityViaUnit`: unit → `community_id` → the existing community resolver, per D-4's own table row for the `{unitId}` route shape). This was necessary because `authz.CommunityScoped`'s `ScopeCommunityID()` method is synchronous with no DB access, and a `{unitId}`-shaped route has no community id available without a lookup.
+3. **Unit creation's write role set (`unitManageRoles = [admin, admin_staff]`) is used for BOTH create AND unit-member PATCH/DELETE**, stricter than `unit-management: Unit Member Management Scoped To Community`'s literal minimum (any membership tied to the community, no role restriction stated). `ListUnitMembers` uses the full 4-role set (spec's literal minimum) since no scenario restricts reads. This mirrors `communities.go`'s existing read/write role split and was a design choice, not a spec requirement — flagged per "if you discover the design is wrong or incomplete, note it" (here: the design/spec is silent, not wrong, so this is a reasonable default rather than a gap).
+4. **Coefficient-sum warnings (task 4.5/4.6) appear ONLY on `CreateUnit`'s response**, not on any "list units" or "get unit" endpoint. `tasks.md`'s Phase 4 task list never includes a `GET /v1/communities/:id/units` or `PATCH /v1/units/:id` task, even though both routes are named in `PRD_go.md` line 817/821 and `design.md`'s Testing Strategy classifies "coefficient sum warning" as a unit/table test. Both RED scenarios (97 → warning, 100 → no warning) are exercised via two consecutive `CreateUnit` calls, which is sufficient for the two stated scenarios without inventing an out-of-scope endpoint.
+5. **`participation_coefficient` is `numeric(6,4)`** (max 2 integer digits) — an individual unit's coefficient must stay under 100 (a real-world constraint: coefficients are per-unit shares of the whole building, not the community-level sum target). Test fixtures were corrected during this run after hitting a genuine SQLSTATE 22003 (`numeric field overflow`) from an initial `"100"` fixture value — not a handler bug, a test-data bug, documented for anyone extending these fixtures later.
+
+### Issues Found
+
+1. See TDD Cycle Evidence's honesty note on `TestUnitImport_PathTraversalSafeFilename`: the HTTP-level plant could not distinguish the handler's own `sanitizeImportFilename` from Go's stdlib `mime/multipart` already running `filepath.Base` on the `Content-Disposition` filename. The handler's own call still adds value (rejects a traversal-only filename with 400, which the stdlib does not do — it would instead produce an empty string), but is not independently provable via an HTTP-level regression test with the tools available in this session.
+2. `writeImportedUnits`'s per-row `parseOptionalNumeric(r.coefficient)` re-parse (line ~183) is dead-code-safe but genuinely unreachable in practice, since `parseImportRows` already validated every coefficient cell before any row reaches the write path. Kept deliberately as defense-in-depth ("never silently insert an unparsable value") rather than trusting the earlier pass implicitly.
+3. **Review workload**: measured authored line count (git diff --stat, excluding sqlc-generated `*.sql.go`/`querier.go`, generated `openapi.yaml`/TS client/Zod artifacts, `go.mod`/`go.sum`, and `tasks.md`'s own checkbox edits) for this entire WU-3/PR3 batch (Phase 4 + Phase 5 together, per the explicit combined assignment) is **2,114 changed lines** across 19 files — well above the 400-line budget, and, like PR2 before it, above what `tasks.md`'s own Review Workload Forecast implied for WU-3 ("PR3 (base: PR2)" with a `go test ... -run TestUnit` focused command, no `size:exception` flagged in advance). This run's explicit instructions state the 400-line figure is "an advisory planning heuristic, not a hard cap" for this session, so implementation proceeded as one cohesive work unit rather than being artificially split (Phase 4 and Phase 5 share `units.go`'s helpers — `unitResponse`, `coefficientWarnings`, `unitManageRoles` — splitting them would either duplicate those helpers or introduce an artificial cross-PR dependency). Flagging honestly for the maintainer, consistent with the PR1/PR2 precedent: a `size:exception` recommendation for PR3, or a split along the Phase 4/Phase 5 file boundary (`units.go`+`unit_members.go` vs `unit_csv_import.go`+`csv_safety.go`) if the maintainer prefers two smaller reviews.
+
+### Review Workload / PR Boundary
+
+- Mode: chained PR slice (`feature-branch-chain`, per `tasks.md`), explicitly authorized to exceed the 400-line budget as an advisory heuristic for this run.
+- Current work unit: WU-3 (Phase 4 tasks 4.1–4.13 + Phase 5 tasks 5.1–5.11, this run) — unit management + CSV import, PR3 (base: `feature/m1-communities-pr2-offices`, which already carries PR1+PR2).
+- Boundary: starts from PR2's tip; ends with a fully green `go test -race ./...` (333/333) including 15 new Phase 4/5 integration tests plus 3 new `scoped.Unit` authz tests plus 14 new CSV-safety table tests, a clean `go run ./cmd/lintscope`, clean `gofmt`/`gofumpt`/`golangci-lint`, no new `gosec` findings, and a clean, idempotent `make gen`.
+- Estimated review budget impact: ~2,114 authored lines (see Issues Found #3) — recommend `size:exception` for PR3, consistent with PR1's precedent, or a Phase-4/Phase-5 split at review time.
+
+### Status
+
+25/25 Phase 1 tasks complete. 9/9 Phase 2 tasks complete. 11/11 Phase 3 tasks complete. **13/13 Phase 4 tasks complete (this run). 11/11 Phase 5 tasks complete (this run).** Phase 6 (WU-4, invitations) NOT started per this run's explicit instruction to stop after Phase 5.

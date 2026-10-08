@@ -29,6 +29,17 @@ type fakeQuerier struct {
 	// communityViaUnitRoles maps "communityID|userID" -> role for
 	// ResolveCommunityRoleViaUnit (the owner/tenant leg).
 	communityViaUnitRoles map[string]string
+	// unitCommunities maps unitID -> communityID for GetUnitCommunityID
+	// (design D-4: the {unitId} route shape resolves via units.community_id).
+	unitCommunities map[uuid.UUID]uuid.UUID
+}
+
+func (f *fakeQuerier) GetUnitCommunityID(_ context.Context, unitID uuid.UUID) (uuid.UUID, error) {
+	communityID, ok := f.unitCommunities[unitID]
+	if !ok {
+		return uuid.UUID{}, pgx.ErrNoRows
+	}
+	return communityID, nil
 }
 
 func key(a, b uuid.UUID) string { return a.String() + "|" + b.String() }

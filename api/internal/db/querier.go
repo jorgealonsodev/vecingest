@@ -8,6 +8,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
@@ -24,6 +25,7 @@ type Querier interface {
 	// unit count is a plain count of this tenant's own rows, never a
 	// reserve-fund/quorum/balance aggregate from a later milestone.
 	CountUnitsByCommunityID(ctx context.Context, communityID uuid.UUID) (int64, error)
+	DeleteUnitMember(ctx context.Context, arg DeleteUnitMemberParams) (int64, error)
 	// platform-bootstrap: Idempotent Superadmin Bootstrap -- a second
 	// bootstrap-superadmin run against an existing, non-superadmin user
 	// (e.g. one first created by seed) promotes it, but NEVER touches its
@@ -52,6 +54,12 @@ type Querier interface {
 	// membership via the unit's own community_id, never a caller-supplied
 	// value.
 	GetUnitCommunityID(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
+	// unit-management: Unit Member Management Scoped To Community --
+	// unit_id AND community_id are both bound parameters (never just the
+	// path-supplied memberId alone), so a memberId belonging to a
+	// different unit or a different community can never be read, updated
+	// or deleted through this unit's route.
+	GetUnitMemberByID(ctx context.Context, arg GetUnitMemberByIDParams) (UnitMember, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
 	GetUserMFA(ctx context.Context, userID uuid.UUID) (UserMfa, error)
@@ -77,7 +85,10 @@ type Querier interface {
 	// units: tenant column community_id (design D-5).
 	InsertUnit(ctx context.Context, arg InsertUnitParams) (Unit, error)
 	// unit_members: tenant column community_id, denormalised NOT NULL FK
-	// (design D-5).
+	// (design D-5). electronic_notifications_consent_at/consent_text_version
+	// are settable at creation (unit-management: Consent And Notification
+	// Fields Captured Per Member, "created without consent" scenario --
+	// null when the caller passes no consent).
 	InsertUnitMember(ctx context.Context, arg InsertUnitMemberParams) (UnitMember, error)
 	InsertUser(ctx context.Context, arg InsertUserParams) (User, error)
 	// platform-bootstrap: Idempotent Superadmin Bootstrap / seed Refuses To
@@ -97,6 +108,7 @@ type Querier interface {
 	// exception D-5 names for office_members_user_id_idx.
 	ListOfficeMembershipsByUserID(ctx context.Context, userID uuid.UUID) ([]ListOfficeMembershipsByUserIDRow, error)
 	ListUnitMembersByCommunityID(ctx context.Context, communityID uuid.UUID) ([]UnitMember, error)
+	ListUnitMembersByUnitID(ctx context.Context, arg ListUnitMembersByUnitIDParams) ([]UnitMember, error)
 	// Self resolver (design D-4): the caller's full unit-membership set,
 	// for GET /v1/me.
 	ListUnitMembershipsByUserID(ctx context.Context, userID uuid.UUID) ([]ListUnitMembershipsByUserIDRow, error)
@@ -112,6 +124,11 @@ type Querier interface {
 	RevokeSession(ctx context.Context, id uuid.UUID) error
 	RevokeSessionFamily(ctx context.Context, familyID uuid.UUID) error
 	SetUserMFARecoveryCodes(ctx context.Context, arg SetUserMFARecoveryCodesParams) error
+	// SumParticipationCoefficientByCommunityID backs unit-management:
+	// Participation Coefficient Sum Is A Warning, Not A Block (§5.2) -- the
+	// sum is read-only, never a write-time constraint, so the caller
+	// decides what to do with a sum outside 100 ± 0.01.
+	SumParticipationCoefficientByCommunityID(ctx context.Context, communityID uuid.UUID) (pgtype.Numeric, error)
 	TouchSessionLastUsed(ctx context.Context, id uuid.UUID) error
 	// UpdateCommunity persists the community-management: Community Update
 	// Restricted To Office Roles / Legal And Descriptive Fields Persisted
@@ -127,6 +144,7 @@ type Querier interface {
 	// above for the identical reason: an update already scoped to one
 	// exact id (WHERE id = $1) has no other tenant's row to touch.
 	UpdateCommunity(ctx context.Context, arg UpdateCommunityParams) (Community, error)
+	UpdateUnitMember(ctx context.Context, arg UpdateUnitMemberParams) (UnitMember, error)
 	UpdateUserLastLogin(ctx context.Context, arg UpdateUserLastLoginParams) error
 	UpdateUserMFALastTOTPStep(ctx context.Context, arg UpdateUserMFALastTOTPStepParams) (int64, error)
 	UpdateUserPassword(ctx context.Context, arg UpdateUserPasswordParams) error

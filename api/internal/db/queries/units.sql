@@ -22,3 +22,11 @@ SELECT * FROM units WHERE community_id = $1 AND deleted_at IS NULL ORDER BY bloc
 -- reserve-fund/quorum/balance aggregate from a later milestone.
 -- name: CountUnitsByCommunityID :one
 SELECT count(*) FROM units WHERE community_id = $1 AND deleted_at IS NULL;
+
+-- SumParticipationCoefficientByCommunityID backs unit-management:
+-- Participation Coefficient Sum Is A Warning, Not A Block (§5.2) -- the
+-- sum is read-only, never a write-time constraint, so the caller
+-- decides what to do with a sum outside 100 ± 0.01.
+-- name: SumParticipationCoefficientByCommunityID :one
+SELECT COALESCE(SUM(participation_coefficient), 0)::numeric AS sum
+FROM units WHERE community_id = $1 AND deleted_at IS NULL;

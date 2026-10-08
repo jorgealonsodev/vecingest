@@ -145,3 +145,19 @@ func (q *Queries) ListUnitsByCommunityID(ctx context.Context, communityID uuid.U
 	}
 	return items, nil
 }
+
+const sumParticipationCoefficientByCommunityID = `-- name: SumParticipationCoefficientByCommunityID :one
+SELECT COALESCE(SUM(participation_coefficient), 0)::numeric AS sum
+FROM units WHERE community_id = $1 AND deleted_at IS NULL
+`
+
+// SumParticipationCoefficientByCommunityID backs unit-management:
+// Participation Coefficient Sum Is A Warning, Not A Block (§5.2) -- the
+// sum is read-only, never a write-time constraint, so the caller
+// decides what to do with a sum outside 100 ± 0.01.
+func (q *Queries) SumParticipationCoefficientByCommunityID(ctx context.Context, communityID uuid.UUID) (pgtype.Numeric, error) {
+	row := q.db.QueryRow(ctx, sumParticipationCoefficientByCommunityID, communityID)
+	var sum pgtype.Numeric
+	err := row.Scan(&sum)
+	return sum, err
+}
