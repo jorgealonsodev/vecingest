@@ -948,9 +948,16 @@ func incidentPageIDs(t *testing.T, body map[string]any) []string {
 // duplicated or reordered row is reported at its first differing position.
 func assertIncidentIDs(t *testing.T, label string, got, want []string) {
 	t.Helper()
+	// G602 on want[i] below is a gosec false positive: i ranges over
+	// min(len(got), len(want)), so it is strictly less than both lengths by
+	// construction. gosec cannot follow min()'s provenance, and rewriting the
+	// loop as `for i, gotID := range got` with an explicit
+	// `if i >= len(want) { break }` guard does not satisfy it either, so the
+	// clearer form is kept and the rule suppressed per line, following the
+	// documented-suppression convention already used across this module.
 	for i := range min(len(got), len(want)) {
-		if got[i] != want[i] {
-			t.Fatalf("%s: order/skip at %d: want %s got %s", label, i, want[i], got[i])
+		if got[i] != want[i] { //nolint:gosec // G602: i < len(want) by construction, see above
+			t.Fatalf("%s: order/skip at %d: want %s got %s", label, i, want[i], got[i]) //nolint:gosec // G602: same false positive as the comparison above
 		}
 	}
 	if len(got) != len(want) {
