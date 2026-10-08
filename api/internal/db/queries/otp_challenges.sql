@@ -55,6 +55,14 @@ FOR UPDATE;
 -- window_seconds. created_at is the database's own clock, so the window
 -- is measured against now() rather than the caller's clock. It caps
 -- issuance, not use: superseded and expired challenges count too.
+--
+-- window_seconds is a whole number of seconds, multiplied into an
+-- interval rather than passed to make_interval(secs => ...), whose secs
+-- argument only accepts double precision. That cast made sqlc emit a
+-- binary floating-point parameter under internal/db, which api/.semgrep's
+-- no-float-money-go guard forbids there. Every caller's window is a whole
+-- number of seconds, so integer arithmetic is exact and the guard stays
+-- strict instead of being suppressed.
 SELECT count(*) FROM otp_challenges
 WHERE user_id = sqlc.arg(user_id) AND purpose = sqlc.arg(purpose)
-  AND created_at > now() - make_interval(secs => sqlc.arg(window_seconds)::double precision);
+  AND created_at > now() - (sqlc.arg(window_seconds)::int * interval '1 second');

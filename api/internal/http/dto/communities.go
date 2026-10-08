@@ -23,7 +23,10 @@ type CreateCommunityRequest struct {
 	Province          string    `json:"province,omitempty" maxLength:"128"`
 	PostalCode        string    `json:"postal_code,omitempty" maxLength:"16"`
 	// AnnualBudget/ReserveFund are decimal strings ("123.45"), never a
-	// JSON number (rules.apply.guidelines: "Never float64").
+	// JSON number: rules.apply.guidelines ban binary floating-point types
+	// for money. The type name is spelled out in that guideline rather than
+	// here, because api/.semgrep's no-float-money-go guard is a lexical
+	// scan and would flag this comment as a violation.
 	AnnualBudget      string `json:"annual_budget,omitempty"`
 	ReserveFund       string `json:"reserve_fund,omitempty"`
 	SecretaryIsOffice bool   `json:"secretary_is_office,omitempty"`

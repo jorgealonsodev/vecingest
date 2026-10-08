@@ -66,19 +66,27 @@ func (q *Queries) ConsumeOTPChallengeAttempt(ctx context.Context, arg ConsumeOTP
 const countOTPChallengesIssuedSince = `-- name: CountOTPChallengesIssuedSince :one
 SELECT count(*) FROM otp_challenges
 WHERE user_id = $1 AND purpose = $2
-  AND created_at > now() - make_interval(secs => $3::double precision)
+  AND created_at > now() - ($3::int * interval '1 second')
 `
 
 type CountOTPChallengesIssuedSinceParams struct {
 	UserID        uuid.UUID `json:"user_id"`
 	Purpose       string    `json:"purpose"`
-	WindowSeconds float64   `json:"window_seconds"`
+	WindowSeconds int32     `json:"window_seconds"`
 }
 
 // How many challenges of purpose were issued to user_id within the last
 // window_seconds. created_at is the database's own clock, so the window
 // is measured against now() rather than the caller's clock. It caps
 // issuance, not use: superseded and expired challenges count too.
+//
+// window_seconds is a whole number of seconds, multiplied into an
+// interval rather than passed to make_interval(secs => ...), whose secs
+// argument only accepts double precision. That cast made sqlc emit a
+// binary floating-point parameter under internal/db, which api/.semgrep's
+// no-float-money-go guard forbids there. Every caller's window is a whole
+// number of seconds, so integer arithmetic is exact and the guard stays
+// strict instead of being suppressed.
 func (q *Queries) CountOTPChallengesIssuedSince(ctx context.Context, arg CountOTPChallengesIssuedSinceParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countOTPChallengesIssuedSince, arg.UserID, arg.Purpose, arg.WindowSeconds)
 	var count int64

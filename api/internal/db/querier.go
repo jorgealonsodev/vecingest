@@ -31,6 +31,14 @@ type Querier interface {
 	// window_seconds. created_at is the database's own clock, so the window
 	// is measured against now() rather than the caller's clock. It caps
 	// issuance, not use: superseded and expired challenges count too.
+	//
+	// window_seconds is a whole number of seconds, multiplied into an
+	// interval rather than passed to make_interval(secs => ...), whose secs
+	// argument only accepts double precision. That cast made sqlc emit a
+	// binary floating-point parameter under internal/db, which api/.semgrep's
+	// no-float-money-go guard forbids there. Every caller's window is a whole
+	// number of seconds, so integer arithmetic is exact and the guard stays
+	// strict instead of being suppressed.
 	CountOTPChallengesIssuedSince(ctx context.Context, arg CountOTPChallengesIssuedSinceParams) (int64, error)
 	// CountOfficeMembersByOfficeID backs community-management: Community
 	// Detail Excludes Cross-Milestone Aggregates -- the community detail

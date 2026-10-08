@@ -16,7 +16,7 @@ SET ROLE vecingest_owner;
 -- 'sms' is dropped rather than kept alongside 'email': an accepted value that
 -- no code path can produce is an invitation to write code that produces it.
 -- If SMS ever comes back (PRD 11 names the trigger: the first challenge to a
--- voter's identity, or a real compromised-mailbox case), it returns as its own
+-- voter's identity, or a genuine compromised-mailbox case), it returns as its own
 -- migration, together with the provider.
 ALTER TABLE otp_challenges DROP CONSTRAINT otp_challenges_channel_check;
 ALTER TABLE otp_challenges ADD CONSTRAINT otp_challenges_channel_check

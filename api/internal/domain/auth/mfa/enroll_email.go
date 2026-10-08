@@ -119,7 +119,10 @@ var ErrEnrollEmailIssueLimited = errors.New("mfa: enrollment code issuance limit
 func IssueEnrollEmailChallenge(ctx context.Context, tx pgx.Tx, clock Clock, key [32]byte, userID uuid.UUID) (challengeID uuid.UUID, code string, err error) {
 	q := db.New(tx)
 	issued, err := q.CountOTPChallengesIssuedSince(ctx, db.CountOTPChallengesIssuedSinceParams{
-		UserID: userID, Purpose: EnrollEmailPurpose, WindowSeconds: EnrollEmailIssueWindow.Seconds(),
+		// Whole seconds, not Duration.Seconds(): the query multiplies an
+		// integer into an interval, and EnrollEmailIssueWindow is an exact
+		// number of seconds, so this truncating division loses nothing.
+		UserID: userID, Purpose: EnrollEmailPurpose, WindowSeconds: int32(EnrollEmailIssueWindow / time.Second),
 	})
 	if err != nil {
 		return uuid.Nil, "", fmt.Errorf("mfa: count issued enrollment challenges: %w", err)

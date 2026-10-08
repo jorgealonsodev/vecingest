@@ -22,7 +22,10 @@ type CreateUnitRequest struct {
 	Door  string `json:"door,omitempty" maxLength:"32"`
 	Type  string `json:"type" enum:"flat,premises,garage,storage"`
 	// ParticipationCoefficient is a decimal string ("12.3456"), never a
-	// JSON number (rules.apply.guidelines: "Never float64").
+	// JSON number: rules.apply.guidelines ban binary floating-point types
+	// for this value. The type name is spelled out in that guideline rather
+	// than here, because api/.semgrep's no-float-money-go guard is a lexical
+	// scan and would flag this comment as a violation.
 	ParticipationCoefficient string                    `json:"participation_coefficient,omitempty"`
 	CadastralRef             string                    `json:"cadastral_ref,omitempty" maxLength:"64"`
 	Members                  []UnitMemberCreateRequest `json:"members,omitempty"`
