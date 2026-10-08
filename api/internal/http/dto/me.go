@@ -6,14 +6,33 @@ import (
 	"github.com/google/uuid"
 )
 
-// MeResponse is GET /v1/me's response shape at M0: id, email and
-// is_superadmin only -- no role, no memberships (user-profile: GET
-// /v1/me Response Shape). Those arrive at M1 with the office/community
-// schema.
+// MeResponse is GET /v1/me's response shape: id, email, is_superadmin
+// and the caller's memberships (user-profile: GET /v1/me Response
+// Shape). memberships is always an array, empty for a caller with no
+// membership rows -- never null, never omitted.
 type MeResponse struct {
-	ID           uuid.UUID `json:"id"`
-	Email        string    `json:"email"`
-	IsSuperadmin bool      `json:"is_superadmin"`
+	ID           uuid.UUID         `json:"id"`
+	Email        string            `json:"email"`
+	IsSuperadmin bool              `json:"is_superadmin"`
+	Memberships  []MembershipEntry `json:"memberships" nullable:"false"`
+}
+
+// Membership scopes M1 can return. A company scope joins the same field
+// at M8 with no breaking change; M1 never emits it, since
+// company_members does not exist yet.
+const (
+	MembershipScopeOffice    = "office"
+	MembershipScopeCommunity = "community"
+)
+
+// MembershipEntry is one element of GET /v1/me's memberships array,
+// discriminated by Scope. ID and Name are the office's or the
+// community's own, according to Scope.
+type MembershipEntry struct {
+	Scope string    `json:"scope" enum:"office,community" doc:"Which resource the membership is tied to."`
+	ID    uuid.UUID `json:"id" doc:"The office id (scope office) or the community id (scope community)."`
+	Name  string    `json:"name" doc:"The office or community name."`
+	Role  string    `json:"role" enum:"admin,admin_staff,owner,tenant"`
 }
 
 type MeInput struct {

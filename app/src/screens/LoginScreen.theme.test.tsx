@@ -30,6 +30,12 @@ function flatStyle(element: {
 // module — rather than spying on the `react-native` barrel export — is the
 // reliable way to control it in this RN version, since the barrel re-exports
 // it through a non-configurable lazy getter.
+const mockPush = jest.fn();
+jest.mock("expo-router", () => ({
+  ...jest.requireActual("expo-router"),
+  useRouter: () => ({ replace: jest.fn(), push: mockPush }),
+}));
+
 jest.mock("react-native/Libraries/Utilities/useWindowDimensions", () => ({
   __esModule: true,
   default: jest.fn(() => ({
@@ -168,7 +174,7 @@ describe("LoginScreen — mobile layout content", () => {
     expect(screen.getByLabelText("Ocultar contraseña")).toBeTruthy();
   });
 
-  it("keeps the invitation-code entry point visually present but non-functional", async () => {
+  it("enables the invitation-code entry point and opens the invitation screen", async () => {
     await render(
       <PaperProvider theme={lightTheme}>
         <LoginScreen />
@@ -176,8 +182,10 @@ describe("LoginScreen — mobile layout content", () => {
     );
 
     const invitation = screen.getByTestId("login-invitation-link");
-    expect(invitation.props.accessibilityState?.disabled).toBe(true);
-    expect(screen.getByText("Próximamente")).toBeTruthy();
+    expect(invitation.props.accessibilityState?.disabled).toBe(false);
+    expect(screen.queryByText("Próximamente")).toBeNull();
+    await fireEvent.press(invitation);
+    expect(mockPush).toHaveBeenCalledWith("/(auth)/invitation");
   });
 });
 

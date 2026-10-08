@@ -27,7 +27,12 @@ describe("Portal route", () => {
   it("renders the authenticated portal for a real session", async () => {
     setSession({ accessToken: "a-valid-access-token", csrfToken: null });
     (apiClient.GET as jest.Mock).mockResolvedValue({
-      data: { id: "user-1", email: "vecino@example.com", is_superadmin: false },
+      data: {
+        id: "user-1",
+        email: "vecino@example.com",
+        is_superadmin: false,
+        memberships: [],
+      },
       error: undefined,
     });
 

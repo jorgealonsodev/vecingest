@@ -857,10 +857,43 @@ components:
           type: string
         is_superadmin:
           type: boolean
+        memberships:
+          items:
+            $ref: "#/components/schemas/MembershipEntry"
+          type: array
       required:
         - id
         - email
         - is_superadmin
+        - memberships
+      type: object
+    MembershipEntry:
+      additionalProperties: false
+      properties:
+        id:
+          description: The office id (scope office) or the community id (scope community).
+          type: string
+        name:
+          description: The office or community name.
+          type: string
+        role:
+          enum:
+            - admin
+            - admin_staff
+            - owner
+            - tenant
+          type: string
+        scope:
+          description: Which resource the membership is tied to.
+          enum:
+            - office
+            - community
+          type: string
+      required:
+        - scope
+        - id
+        - name
+        - role
       type: object
     OfficeMemberResponse:
       additionalProperties: false

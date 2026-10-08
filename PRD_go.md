@@ -539,8 +539,16 @@ unit_transfers                  -- cambios de titularidad
 
 invitations
   id, community_id FK, unit_id FK, email nullable, role (owner | tenant),
-  token_hash (unique), short_code_hash (unique) nullable, expires_at, accepted_at, sent_count,
-  failed_attempts int
+  token_hash (unique), short_code_hash (unique) nullable,
+  status NOT NULL DEFAULT 'pending' CHECK IN (pending | accepted | revoked | blocked),
+  expires_at, accepted_at, sent_count, failed_attempts int
+
+  Desviación deliberada registrada (diseño D-6): `status` es una columna explícita mantenida
+  transaccionalmente, no un estado derivado solo de marcas de tiempo. El uso único se impone en
+  la escritura (`UPDATE ... WHERE status = 'pending' AND expires_at > now()`), no en una lectura
+  previa, lo que elimina la carrera entre comprobar y aceptar. `expires_at` sigue siendo
+  autoritativo para la caducidad: `expired` se deriva en lectura y nunca se almacena, y el job
+  diario `invitations.expire` (§7.4) barre las caducadas.
 
 password_reset_tokens
   id, user_id FK, token_hash (unique), expires_at (1 h), used_at, requested_ip
@@ -940,7 +948,8 @@ Componentes compartidos: `IncidentCard`, `IncidentStatusBadge`, `AttachmentPicke
 Cosas que, si no se fijan al principio, cada módulo resuelve de forma distinta.
 
 **Autorización y multi-tenant**
-- No se usa RLS de Postgres; la autorización vive en la aplicación. Patrón único: middleware `RequireMembership(scope, roles...)` de `chi` que resuelve la membresía a partir del recurso de la ruta (`{communityId}`, `{incidentId}` → comunidad de la incidencia) con una consulta indexada y la inyecta en el `context.Context` como `Membership`. Nunca se toma la comunidad activa de una cabecera ni del body. Los handlers reciben la membresía como argumento explícito; un handler sin ella no compila para rutas con ámbito (interfaz obligatoria).
+- No se usa RLS de Postgres; la autorización vive en la aplicación. Las operaciones con ámbito se registran **exclusivamente** mediante los constructores tipados de `internal/authz/scoped` —`Community`, `Unit`, `Invitation`, `Office` y `Self`—, cuya firma **no es asignable a `huma.Register`**: cada constructor exige un handler que recibe la `authz.Membership` como argumento explícito y un input que declara su propia columna tenant (`authz.CommunityScoped` / `authz.OfficeScoped`). `authz.Membership` no tiene campo ni constructor exportados —solo los resolvers de ese paquete la construyen y el valor cero falla en todo accesor—, de modo que un handler con ámbito que no reciba la membresía es un **error de compilación**, no un hallazgo de revisión. `Unit` e `Invitation` estampan el mismo marcador `KindCommunity` que `Community`, porque la membresía de comunidad se alcanza a través del `community_id` del propio recurso (`authz.ResolveCommunityViaUnit` / `authz.ResolveCommunityViaInvitation`) en lugar de un id de comunidad en la ruta. La membresía resuelta nunca se toma de una cabecera ni del body.
+- El arranque de `serve` falla cerrado mediante `authz.AssertScopedRegistration`, que ejecuta tres comprobaciones en orden: **A1** — toda operación documentada bajo un prefijo con ámbito lleva el marcador de registro; **A2** — todo marcador declara un `Kind` con resolver registrado y, en los tipos que lo exigen, un conjunto de roles no vacío; **A3** — el conjunto de rutas que `chi.Walk` sirve realmente no excede el conjunto documentado en el modelo OpenAPI más una lista de excepciones revisada. **A3 es imprescindible**: una operación con `Hidden: true` se enruta pero nunca se añade a `Paths`, por lo que es invisible para A1 y ninguna comprobación que lea una sola superficie puede garantizar el aislamiento.
 - Toda consulta `sqlc` sobre una tabla con ámbito lleva `community_id`/`office_id`/`company_id` como parámetro obligatorio; el linter propio (`make lint-scope`, un script sobre los `.sql`) falla si una consulta a esas tablas no filtra por su columna de ámbito.
 - Decisión de "membresía activa" en la app: se guarda en Zustand y solo sirve para navegación; la API no la conoce.
 

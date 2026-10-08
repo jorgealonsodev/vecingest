@@ -249,38 +249,38 @@ breaking a different invariant each round is what it set out to end.
 
 ## Phase 8: GET /v1/me Memberships, lint-scope, Permission Matrix (WU-6, PR6 — TDD)
 
-- [ ] 8.1 RED: a non-superadmin user with no memberships gets an empty `memberships` array; a superadmin gets `is_superadmin: true`; a user with one office and one community membership gets both typed entries (GET /v1/me Response Shape, all three scenarios)
-- [ ] 8.2 GREEN: implement `dto/me.go` `memberships[]` with a `scope` discriminator; modify `api/internal/http/handlers/me.go` to populate it from `authz.Memberships`
-- [ ] 8.3 RED: revoking a session via `DELETE /v1/me/sessions/:id` leaves `GET /v1/me`'s `memberships` unchanged (Remote Session Listing and Revocation Endpoints, revoke scenario)
-- [ ] 8.4 GREEN: confirm session revocation and membership reads stay independent — no shared cache (D interfaces table: membership lookups deliberately uncached)
-- [ ] 8.5 RED: `make lint-scope` fails on a deliberately tenant-blind new audit query that is not `GetAuditLogHead`/`ListAuditLogRange`
-- [ ] 8.6 GREEN: modify `api/cmd/lintscope/main.go` — retire the blanket `audit_log` table exception; add the query-level exception map keyed `file:queryName` holding exactly those two entries with their reason
-- [ ] 8.7 RED: `make lint-scope` passes green with all M1 tenant tables and no table-wide `audit_log` exception
-- [ ] 8.8 GREEN: fix any query lint-scope flags; re-run and confirm green
-- [ ] 8.9 RED (generated from `openapi.yaml` at test time): the permission-matrix test fails when a newly registered scoped route is not yet reflected in it (A route missing from the generated matrix fails the check)
-- [ ] 8.10 GREEN: implement the matrix generator reading `api/openapi/openapi.yaml`, asserting 403/404 for every operation × role × own/foreign-resource combination
-- [ ] 8.11 RED (Testcontainers): an `admin` of office A gets 403/404 against a community owned by office B, exercised across every M1 scoped route (Foreign community access denied, 100% route coverage)
-- [ ] 8.12 GREEN: fix any resolver or role-check gap 8.11 surfaces across offices/communities/units/invitations
-- [ ] 8.13 Run `cd api && go test -race ./...`; confirm 100% route coverage in the permission-matrix report (PRD §10.1 M1 gate item 1)
+- [x] 8.1 RED: a non-superadmin user with no memberships gets an empty `memberships` array; a superadmin gets `is_superadmin: true`; a user with one office and one community membership gets both typed entries (GET /v1/me Response Shape, all three scenarios)
+- [x] 8.2 GREEN: implement `dto/me.go` `memberships[]` with a `scope` discriminator; modify `api/internal/http/handlers/me.go` to populate it from `authz.Memberships`
+- [x] 8.3 RED: revoking a session via `DELETE /v1/me/sessions/:id` leaves `GET /v1/me`'s `memberships` unchanged (Remote Session Listing and Revocation Endpoints, revoke scenario)
+- [x] 8.4 GREEN: confirm session revocation and membership reads stay independent — no shared cache (D interfaces table: membership lookups deliberately uncached)
+- [x] 8.5 RED: `make lint-scope` fails on a deliberately tenant-blind new audit query that is not `GetAuditLogHead`/`ListAuditLogRange`
+- [x] 8.6 GREEN: modify `api/cmd/lintscope/main.go` — retire the blanket `audit_log` table exception; add the query-level exception map keyed `file:queryName` holding exactly those two entries with their reason
+- [x] 8.7 RED: `make lint-scope` passes green with all M1 tenant tables and no table-wide `audit_log` exception
+- [x] 8.8 GREEN: fix any query lint-scope flags; re-run and confirm green
+- [x] 8.9 RED (generated from `openapi.yaml` at test time): the permission-matrix test fails when a newly registered scoped route is not yet reflected in it (A route missing from the generated matrix fails the check)
+- [x] 8.10 GREEN: implement the matrix generator reading `api/openapi/openapi.yaml`, asserting 403/404 for every operation × role × own/foreign-resource combination
+- [x] 8.11 RED (Testcontainers): an `admin` of office A gets 403/404 against a community owned by office B, exercised across every M1 scoped route (Foreign community access denied, 100% route coverage)
+- [x] 8.12 GREEN: fix any resolver or role-check gap 8.11 surfaces across offices/communities/units/invitations
+- [x] 8.13 Run `cd api && go test -race ./...`; confirm 100% route coverage in the permission-matrix report (PRD §10.1 M1 gate item 1)
 
 ## Phase 9: App Portal Memberships (WU-7, PR7 — TDD RNTL)
 
-- [ ] 9.1 RED (RNTL): a user with one `scope: community` membership renders exactly one selectable row (Portal Renders Real Membership Rows, populated scenario)
-- [ ] 9.2 GREEN: implement the populated branch in `app/src/screens/PortalScreen.tsx`, replacing the hardcoded empty state
-- [ ] 9.3 RED (RNTL, regression guard): a user with an empty `memberships` array still sees the unchanged empty state
-- [ ] 9.4 GREEN: confirm the empty-state branch is preserved unchanged
-- [ ] 9.5 RED (RNTL): a user with three memberships (owner/tenant/admin_staff) sees a context selector listing all three with their roles (Context Selector For Multiple Memberships)
-- [ ] 9.6 GREEN: implement the context selector, resolving the chosen membership's scope path parameters client-side, no new endpoint
-- [ ] 9.7 RED (RNTL): a valid short code at `portal-invitation-link` shows the preview before account creation; an invalid/expired code shows a generic error (Invitation-Code Entry Point Enabled, both scenarios)
-- [ ] 9.8 GREEN: enable `portal-invitation-link`, wire it to `POST /v1/invitations/preview` then the accept-invitation screen
-- [ ] 9.9 Run `pnpm --filter app test`; confirm the regenerated `packages/shared` memberships types are consumed with no hand-written type
+- [x] 9.1 RED (RNTL): a user with one `scope: community` membership renders exactly one selectable row (Portal Renders Real Membership Rows, populated scenario)
+- [x] 9.2 GREEN: implement the populated branch in `app/src/screens/PortalScreen.tsx`, replacing the hardcoded empty state
+- [x] 9.3 RED (RNTL, regression guard): a user with an empty `memberships` array still sees the unchanged empty state
+- [x] 9.4 GREEN: confirm the empty-state branch is preserved unchanged
+- [x] 9.5 RED (RNTL): a user with three memberships (owner/tenant/admin_staff) sees a context selector listing all three with their roles (Context Selector For Multiple Memberships)
+- [x] 9.6 GREEN: implement the context selector, resolving the chosen membership's scope path parameters client-side, no new endpoint
+- [x] 9.7 RED (RNTL): a valid short code at `portal-invitation-link` shows the preview before account creation; an invalid/expired code shows a generic error (Invitation-Code Entry Point Enabled, both scenarios)
+- [x] 9.8 GREEN: enable `portal-invitation-link`, wire it to `POST /v1/invitations/preview` then the accept-invitation screen
+- [x] 9.9 Run `pnpm --filter app test`; confirm the regenerated `packages/shared` memberships types are consumed with no hand-written type
 
 ## Phase 10: PRD Corrections, Security Gate, Checkpoint A Closure (WU-8, PR8 — document discipline)
 
-- [ ] 10.1 Corregir `PRD_go.md` §7.7 (español): sustituir "un handler sin ella no compila para rutas con ámbito (interfaz obligatoria)" por la redacción del diseño D-1/D-2, NO por la de la propuesta, que quedó superada. La propuesta nombraba un único `scoped.Register` y describía el arranque comparando solo `api.OpenAPI()`; ambas cosas son falsas contra huma v2.39.1 y escribirlas en el PRD reintroduciría el error en el documento de referencia. El texto correcto dice: (a) los handlers con ámbito se registran exclusivamente mediante los constructores tipados `scoped.Community` / `scoped.Office` / `scoped.Self`, cuya firma no es asignable a `huma.Register`; (b) el arranque de `serve` falla si alguna operación con ámbito documentada carece del marcador (A1), si un marcador no tiene resolver ni roles (A2), o si `chi.Walk` sirve una ruta que no está documentada ni en la lista de excepciones revisada (A3); y (c) A3 es imprescindible porque una operación `Hidden: true` se enruta pero nunca llega a `api.OpenAPI()`, de modo que ninguna comprobación que lea una sola superficie puede garantizar el aislamiento
-- [ ] 10.2 Corregir `PRD_go.md` §7.3 (español): documentar `invitations.status` como columna explícita, la desviación deliberada frente a un estado derivado solo de marcas de tiempo
-- [ ] 10.3 Modify `openspec/config.yaml` — add the permission-matrix requirement and the tenant-scope disclosure rule per the design's binding
-- [ ] 10.4 Create `docs/security/gates/M1.md` — Checkpoint A/B split per §10.1, including the scoped exception row for deferred Turnstile coverage on `register-company`/contact forms
-- [ ] 10.5 Archive Checkpoint A evidence: `go test -race ./...`, `pnpm --filter app test`, permission-matrix 100% coverage, `make lint-scope` green — link each gate item to its passing test
-- [ ] 10.6 Verify by inspection: `make gen && git diff --exit-code` clean across `openapi.yaml`, sqlc code, TS client, Zod schemas for the whole M1 struct set
-- [ ] 10.7 Cross-check: every Checkpoint A row in `docs/security/gates/M1.md` cites a passing test or green workflow run, never a bare assertion
+- [x] 10.1 Corregir `PRD_go.md` §7.7 (español): sustituir "un handler sin ella no compila para rutas con ámbito (interfaz obligatoria)" por la redacción del diseño D-1/D-2, NO por la de la propuesta, que quedó superada. La propuesta nombraba un único `scoped.Register` y describía el arranque comparando solo `api.OpenAPI()`; ambas cosas son falsas contra huma v2.39.1 y escribirlas en el PRD reintroduciría el error en el documento de referencia. El texto correcto dice: (a) los handlers con ámbito se registran exclusivamente mediante los constructores tipados `scoped.Community` / `scoped.Office` / `scoped.Self`, cuya firma no es asignable a `huma.Register`; (b) el arranque de `serve` falla si alguna operación con ámbito documentada carece del marcador (A1), si un marcador no tiene resolver ni roles (A2), o si `chi.Walk` sirve una ruta que no está documentada ni en la lista de excepciones revisada (A3); y (c) A3 es imprescindible porque una operación `Hidden: true` se enruta pero nunca llega a `api.OpenAPI()`, de modo que ninguna comprobación que lea una sola superficie puede garantizar el aislamiento
+- [x] 10.2 Corregir `PRD_go.md` §7.3 (español): documentar `invitations.status` como columna explícita, la desviación deliberada frente a un estado derivado solo de marcas de tiempo
+- [x] 10.3 Modify `openspec/config.yaml` — add the permission-matrix requirement and the tenant-scope disclosure rule per the design's binding
+- [x] 10.4 Create `docs/security/gates/M1.md` — Checkpoint A/B split per §10.1, including the scoped exception row for deferred Turnstile coverage on `register-company`/contact forms
+- [x] 10.5 Archive Checkpoint A evidence: `go test -race ./...`, `pnpm --filter app test`, permission-matrix 100% coverage, `make lint-scope` green — link each gate item to its passing test
+- [x] 10.6 Verify by inspection: `make gen && git diff --exit-code` clean across `openapi.yaml`, sqlc code, TS client, Zod schemas for the whole M1 struct set
+- [x] 10.7 Cross-check: every Checkpoint A row in `docs/security/gates/M1.md` cites a passing test or green workflow run, never a bare assertion

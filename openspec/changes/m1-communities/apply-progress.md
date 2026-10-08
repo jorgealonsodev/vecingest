@@ -1164,3 +1164,269 @@ reader will hit them. The session's stated budget was 200 lines with
 mechanism and a second mailer contract do not fit it. `size:exception` is the
 honest classification. Nothing was compressed and no test was dropped to
 approach a number.
+
+## Work Unit: WU-6 / PR6 — Phase 8: GET /v1/me Memberships, lint-scope, Permission Matrix
+
+**Branch**: `feature/m1-communities-pr6-me-memberships` (base: `feature/m1-communities-pr5-turnstile`,
+which already carries PR1–PR5 and their correction rounds). Not pushed, no PR —
+delivery is the user's decision.
+
+### 8.1–8.4 — `GET /v1/me` memberships
+
+- `dto.MeResponse` gained `memberships: MembershipEntry[]` (`nullable:"false"`,
+  so the published schema is `type: array`, never `array | null`), each entry
+  `{scope: office|community, id, name, role}`.
+- `handlers.Me` fills it through `listOwnMemberships`, backed by two new sqlc
+  queries: `ListOfficeMembershipSummariesByUserID` (`office_members ⋈ offices`)
+  and `ListCommunityMembershipSummariesByUserID` (`SELECT DISTINCT` over
+  `unit_members ⋈ communities`, so several units held in one community under
+  one role are one entry; owner+tenant in one community stay two).
+- Tests: `api/internal/http/api/me_test.go` — `TestMe_MembershipsResponseShape`
+  (the three spec scenarios plus "admin without a second factor still reads
+  their memberships") and `TestMe_RevokingASessionLeavesMembershipsUnchanged`
+  (two real logins, revoke family B through A, B's token is refused 401, A's
+  memberships are identical before and after).
+
+| Task | RED observed | GREEN |
+|---|---|---|
+| 8.1 | All four subtests failed on the assertion `expected a memberships field in GET /v1/me, got map[$schema:… email:… id:… is_superadmin:…]` | pass after 8.2 |
+| 8.3 | Failed at the same assertion (`me_test.go:179`), i.e. on the missing field, not on independence: there was no `memberships` to change yet. Stated honestly — no separate independence RED was planted | pass after 8.2 with no further code |
+| 8.4 | Confirmation by inspection: `Me` reads both legs from Postgres on every request; `RevokeSession` touches only `sessions` and `RevocationCache` (keyed by family id). No cache sits on the membership path, matching the design's "membership lookups deliberately not cached" | `TestMe_RevokingASessionLeavesMembershipsUnchanged` green |
+
+**Deviation (8.2) — populated from the caller's membership rows, not from
+`authz.Memberships`.** `authz.ResolveSelf` runs the mandatory-TOTP gate over
+the whole Self route class, and its own doc comment names `GET /v1/me` as part
+of the bootstrap path that must survive that gate (an admin with no second
+factor must read their profile, enroll, and log in again with a code).
+Routing `Me` through `ResolveSelf`/`scoped.Self` would turn that profile read
+into a 403 for exactly that admin. `Me` therefore stays a plain
+`huma.Register` operation and lists the caller's own rows through two
+description-only queries; they return plain DTO data, never an
+`authz.Membership`, so nothing read here can be used to authorize anything.
+The new subtest "admin without a second factor still reads their
+memberships" pins that choice.
+
+Focused: `cd api && go test -count=1 ./internal/http/api/ -run 'TestMe_|TestAuthFlow'` → 15 passed.
+`make gen` regenerated `openapi.yaml`, `openapi-types.ts`, `schemas/index.ts`
+(`memberships: z.array(MembershipEntry)`); `pnpm --filter app typecheck` clean.
+
+### 8.5–8.8 — `lint-scope`: table-wide `audit_log` exception retired
+
+- `api/cmd/lintscope/main.go`: the table-level `exceptions` map and its branch
+  in `lint` are **removed**, not emptied — `queryExceptions` (keyed
+  `file:queryName`) is now the only exception mechanism. It holds exactly
+  `audit_log.sql:GetAuditLogHead` and `audit_log.sql:ListAuditLogRange`, each
+  with its reason, beside the pre-existing `invitations.sql:SweepExpiredInvitations`
+  (Phase 6 introduced the map early for it).
+- Tests (`cmd/lintscope/main_test.go`): `TestLint_DocumentedExceptionSkipsEnforcement`
+  (which asserted the table-wide pass) is replaced by
+  `TestLint_TenantBlindNewAuditQueryFails`; added
+  `TestQueryExceptions_AuditLogHoldsExactlyTheTwoChainReads` and
+  `TestLint_RealSchemaScopesEveryM1TenantTable`.
+
+| Task | RED observed | GREEN |
+|---|---|---|
+| 8.5 | Planted `ListAuditLogByUser` (`SELECT * FROM audit_log WHERE user_id = $1`) into the real `internal/db/queries/audit_log.sql`: `make lint-scope` → `lintscope: OK …`, exit 0 (the defect). Unit tests: `expected exactly one failure (the tenant-blind ListAuditLogByUser), got: []` and `expected audit_log query exceptions [… GetAuditLogHead … ListAuditLogRange], got []` | after 8.6, `make lint-scope` with the plant → `audit_log.sql: query "ListAuditLogByUser" against tenant-scoped table "audit_log" does not reference its tenant column "community_id"`, `make: *** [lint-scope] Error 1`; plant removed |
+| 8.7 | Did **not** fail: with the plant removed, `make lint-scope` is green and `TestLint_RealSchemaScopesEveryM1TenantTable` passed on first run (lint-scope already sees `office_members`/`communities` → `office_id`, `units`/`unit_members`/`invitations`/`audit_log` → `community_id`). Recorded as a coverage guard, not a RED | green |
+| 8.8 | No query flagged — nothing to fix | `make lint-scope` → OK; `go test ./cmd/lintscope/` → 11 passed |
+
+### 8.9–8.13 — Permission matrix generated from `openapi.yaml`
+
+New file `api/internal/http/api/permission_matrix_test.go`:
+
+- **Row set generated at test time** from `api/openapi/openapi.yaml`
+  (`loadDocumentedOperations`, `gopkg.in/yaml.v3`). Every documented operation
+  is either exercised (`matrixCases`, keyed by operationId) or exempt with a
+  reason (`matrixExemptions`, plus every `authz.PublicOperations` entry, whose
+  reason is taken from that reviewed file rather than restated).
+- **Allowed roles are never restated**: they are read from the live
+  registration's own marker (`op.Metadata[authz.MetadataKey]`) via a DB-free
+  `httpapi.New`.
+- `TestPermissionMatrix_CoverageCheckFailsOnAnUncoveredRoute` (8.9, pure):
+  an undocumented-in-matrix scoped route and a stale matrix row are both gaps.
+- `TestPermissionMatrix_RouteCoverage` (8.13, no Docker): document vs rows vs
+  live markers — a marker-bearing (tenant-scoped) operation can be neither
+  exempted nor left out, and an exercised row must carry a marker.
+- `TestPermissionMatrix_ForeignResourceDenied` (8.10/8.11, Testcontainers):
+  17 operations × 6 callers (`admin`, `admin_staff`, `owner`, `tenant` of
+  tenant A; `outsider`; `superadmin`) × own/foreign = **180 assertions**.
+  Foreign resource → 403/404 for every caller; outsider and superadmin → 403/404
+  on tenant A too (superadmin is not a tenant bypass); own resource with a role
+  the marker allows → **2xx** (positive control: a denial is authorization, not
+  a malformed request); own resource, member, role not allowed → 403; no
+  membership in the scope kind → 403/404. The four `scoped.Self` rows assert
+  no 5xx and that the body never carries a tenant-B identifier. Every case
+  builds fresh resources (unit, member, pending invitation), so destructive
+  rows never affect the next one, and each request uses its own simulated
+  client address so the router's 60/min per-IP budget does not turn rows into 429.
+
+| Task | RED observed | GREEN |
+|---|---|---|
+| 8.9 | `matrixCoverageGaps` written as a `return nil` stub first: `expected exactly two gaps (uncovered createWidget, stale deleteGadget), got []` | implemented; pass |
+| 8.10 | — (generator) | `TestPermissionMatrix_RouteCoverage`: `34/34 documented operations covered (100%): 17 exercised (17 tenant-scoped markers), 17 exempt with a reason` |
+| 8.11 | **Passed on first run** — no real gap exists. To prove it is not vacuous, PLANTED in `authz.ResolveCommunity` a fallback letting any office member resolve any community: 24 failures (12 community-kind operations × admin/admin_staff), e.g. `GET /v1/communities/<B> as admin on foreign resource: expected 403 or 404, got 200`, `DELETE /v1/units/<B>/members/<m> as admin_staff … got 204`. `createCommunity` (office-kind) correctly unaffected. Plant reverted (`git checkout`) | 180/180 green |
+| 8.12 | Nothing surfaced by 8.11 → no resolver or role-check change; none of the extra handler files was touched | — |
+| 8.13 | — | full `go test -race -count=1 ./...` green; route coverage 100 % (above) |
+
+**Deviations.**
+1. The matrix lives in `api/internal/http/api/` (package `api_test`), not
+   `api/test/` as the Work Units table's focused command suggests: it needs this
+   package's real-router harness (`newTestServer`, `mintAccessToken`,
+   `seedOfficeWithAdmin`…), and `api/test/`'s existing `TestPrivilegeMatrix` is
+   a different thing — the DB-level append-only privilege matrix
+   (db-access-control), which was left untouched. Focused command:
+   `cd api && go test -count=1 ./internal/http/api/ -run TestPermissionMatrix -v`.
+2. Because roles come from the live marker, the matrix cannot catch an
+   over-wide role set declared at registration; per-endpoint role tests
+   (`TestCommunity_*`, `TestUnit*`, `TestInvitation_*`) still own that.
+3. `createOffice` is exempt (platform-level, superadmin-only, no tenant
+   resource) rather than exercised; its rule is `TestOffice_CreationRestrictedToSuperadmin`.
+
+### Verification (WU-6)
+
+- `cd api && go test -race -count=1 ./...` → every package `ok`, exit 0.
+- `gofumpt -l .` clean; `golangci-lint run ./...` → 0 issues (one G101 on the
+  matrix's deliberately unusable placeholder password hash, annotated like
+  `public_form_protection_test.go`'s fixture).
+- `make lint-scope` → OK. `make gen` → no diff.
+
+### Review Workload / PR Boundary
+
+- Mode: chained PR slice (`feature-branch-chain`); WU-6 / PR6, base PR5.
+- Three work-unit commits: `/v1/me` memberships (8.1–8.4), lint-scope (8.5–8.8),
+  permission matrix (8.9–8.13).
+
+### Status
+
+**13/13 Phase 8.** Phase 9 (WU-7, app portal memberships) not started.
+
+## Work Unit: WU-7 / PR7 — Phase 9: App Portal Memberships
+
+**Branch**: `feature/m1-communities-pr7-app-portal` (base: `feature/m1-communities-pr6-me-memberships`).
+Not pushed, no PR — delivery is the user's decision.
+
+### 9.1–9.4 — populated portal rows, empty state preserved (`1e849a8`)
+
+- `PortalScreen` renders one `radio` row per `GET /v1/me` membership
+  (`testID="portal-membership-<scope>-<id>"`, inside the `radiogroup`
+  `portal-memberships`), showing the office/community name and a Spanish role
+  label (`Propietario`, `Inquilino`, `Administrador`, `Personal del despacho`)
+  typed as `Record<Membership["role"], string>`, so a new generated role fails
+  the typecheck. An empty array renders the original empty state.
+- Existing `PortalScreen` and route-test fixtures were missing `memberships`
+  (they predate PR6) and crashed on `me.memberships.length` once the populated
+  branch landed (`TypeError: Cannot read properties of undefined (reading
+  'length')`, 6 tests). They were updated to the real contract
+  (`memberships: []`, never null), not guarded with `?? []`.
+
+| Task | RED observed | GREEN |
+|---|---|---|
+| 9.1 | `Unable to find an element with testID: /^portal-membership-/` | pass after 9.2 |
+| 9.3 | **Passed on first run** — 9.2 had kept the branch. To prove it is not vacuous, PLANTED `memberships.length >= 0`: `Unable to find an element with testID: portal-empty-state`. Plant reverted | — |
+| 9.4 | Confirmation by inspection: `git diff -w` of the empty-state block shows no removed lines (indentation only, it moved under the conditional) | 11/11 portal tests green |
+
+### 9.5–9.6 — context selector (`0d119aa`)
+
+- Rows are selectable: pressing one sets `accessibilityState.selected` on it and
+  clears the others. A single membership is preselected; several start
+  unselected.
+- `app/src/screens/portalContext.ts` — `resolvePortalContext(membership)`
+  resolves the pick client-side into a path + params pair shaped for the
+  generated `apiClient`: community → `/v1/communities/{id}` with
+  `{path: {id}}`; office → `/v1/offices/me` with no path parameter (office
+  routes are caller-scoped server-side). No new endpoint.
+
+| Task | RED observed | GREEN |
+|---|---|---|
+| 9.5 (listing) | **Passed on first run** — 9.2's rows already carry name + role; stated honestly | — |
+| 9.5 (selection) | `Expected: false, Received: undefined` (no `accessibilityState.selected`) | pass after 9.6 |
+| 9.6 (resolver) | `Cannot find module './portalContext'` | `portalContext.test.ts` 2/2 |
+| 9.6 (single-membership preselect) | Assertion written after the implementation; PLANTED `length === -1`: `Received: false`. Plant reverted | pass |
+
+**Deviation (9.6) — "Acceder" stays disabled.** The spec requires letting the
+user "pick one to proceed", but no role portal screen exists to navigate into
+(the spec says "No new screen"). The pick is resolved and held in state; the
+CTA keeps `disabled` with the hint "El acceso a cada portal todavía no está
+disponible" rather than a button that goes nowhere.
+
+### 9.7–9.8 — invitation-code entry enabled (`07dcf71`)
+
+**Product decision (user, 2026-10-06).** Use the EXISTING sessionless backend
+flow, no new endpoint, following the Stitch screens "Código de invitación"
+(`4b98138c2d4747a7bd0567e5ac174f2a`) and "Invitación reconocida"
+(`607f8aeb9682403987dc2b297615be76`). Design D-6 stays intact: preview never
+returns or shows the invited email (an earlier orchestrator note asking to
+show it was withdrawn — `PreviewInvitationResponse` has no email field).
+
+- Both entry points are enabled: `portal-invitation-link` (PortalScreen) and
+  `login-invitation-link` (LoginScreen; the Stitch "Iniciar sesión" design
+  shows it). Each `router.push("/(auth)/invitation")`.
+- New route `app/app/(auth)/invitation.tsx` → `InvitationScreen`, three steps
+  held in local state on one route. The short code is never a route param: it
+  is a credential (same reason preview is POST, D-6).
+  1. Code: 8 alphanumeric characters, uppercased as typed; "Continuar" enables
+     at 8. `POST /v1/invitations/preview {short_code}`. Any failure → one
+     generic "El código no es válido o ha caducado."
+  2. Preview: community name, "Inmueble: Asignado por tu administración" when
+     `unit_id` is present (the response carries an id, not a label), role
+     label (`ROLE_LABELS`, moved to `portalContext.ts`), "Válida hasta el
+     dd/mm/aaaa". "No soy yo" leaves (`router.back()`, or login with no
+     history) with no call.
+  3. Accept: name, password (≥12, validated with the generated
+     `schemas.AcceptInvitationRequest`), consent checkbox, platform →
+     `POST /v1/auth/accept-invitation`. On `AUTH_MFA_REQUIRED` the TOTP field
+     appears and the user retries with `totp_code`. Success stores the session
+     exactly as `LoginScreen` does (`setSession` with both tokens, so any
+     current one is replaced; `persistRefreshToken` when a refresh token is
+     returned) and `router.replace("/portal")`. Any other failure → one
+     generic message, current session untouched.
+- The `.expo/types/router.d.ts` typed-routes file (gitignored, local) had to be
+  regenerated (`expo start` once) for `tsc` to accept the new route.
+
+| Test | RED observed | GREEN |
+|---|---|---|
+| 9.7 Continuar disabled <8, uppercased | stub `InvitationScreen` returning `null`: `Unable to find an element with testID: invitation-code-input` | pass |
+| 9.7 valid code → preview before account action | same | pass |
+| 9.7 invalid/expired → generic error | same | pass |
+| "No soy yo" backs out, no accept call | same | pass |
+| accept success → session replaced, lands on `/portal` | same | pass |
+| `AUTH_MFA_REQUIRED` → TOTP field, retry with `totp_code` | same | pass |
+| accept failure → generic error, session kept | same | pass |
+| no consent → blocked before accept | same | pass |
+| `portal-invitation-link` enabled, pushes route | `Expected: false, Received: true` (`accessibilityState.disabled`) | pass |
+| `login-invitation-link` enabled, pushes route | `Expected: false, Received: true` | pass |
+| invitation route smoke test | `Cannot find module '../../app/(auth)/invitation'` | pass |
+
+**Deviations.**
+- No name prefill: `MeResponse` has no `name` field. `name` is required by the
+  contract on both branches (the handler ignores it when linking).
+- "¿No has recibido la invitación?" is shown as plain guidance text ("Contacta
+  con tu administración de fincas."), not a link: it has no defined behaviour.
+- The design's "Paso 1 de 3" stepper and administration-office card are not
+  built (preview returns no office data).
+
+### 9.9 — generated types consumed
+
+`Membership = z.infer<typeof schemas.MembershipEntry>` and the screen's `Me`
+from `schemas.MeResponse`; `PortalContext.path` is constrained to
+`keyof paths` from `@vecingest/shared/client`. No hand-written membership type
+in `app/src` (grep for literal role/scope unions outside tests: none).
+
+### Verification (WU-7)
+
+- `pnpm --filter app test` → 11 suites, 46 tests passed.
+- `pnpm --filter app typecheck` → exit 0.
+- `pnpm --filter app lint` → `Checked 37 files … No fixes applied`, exit 0.
+- `make gen` → exit 0; `git status --short` empty afterwards.
+
+After 9.7–9.8 (`07dcf71`):
+
+- `pnpm --filter app test` → 13 suites, 55 tests passed.
+- `pnpm --filter app typecheck` → exit 0.
+- `pnpm --filter app lint` → `Checked 41 files … No fixes applied`, exit 0.
+- `make gen` → exit 0; only these doc edits pending in `git status --short`.
+
+### Status
+
+**9/9 Phase 9** (9.1–9.9). 9.7–9.8 implemented per the user's product
+decision (sessionless preview + accept, session replacement, D-6 intact).

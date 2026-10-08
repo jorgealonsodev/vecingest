@@ -21,6 +21,20 @@ SELECT role FROM unit_members WHERE community_id = $1 AND user_id = $2 AND delet
 -- name: ListUnitMembershipsByUserID :many
 SELECT community_id, unit_id, role FROM unit_members WHERE user_id = $1 AND deleted_at IS NULL;
 
+-- GET /v1/me's profile listing (user-profile: GET /v1/me Response
+-- Shape): the caller's community memberships WITH the community name.
+-- DISTINCT collapses several units held in one community under the same
+-- role into the single entry the response describes; owner and tenant
+-- in the same community stay two entries. Like
+-- ListOfficeMembershipSummariesByUserID, a description of the caller's
+-- own rows, never an authorization decision.
+-- name: ListCommunityMembershipSummariesByUserID :many
+SELECT DISTINCT um.community_id, c.name AS community_name, um.role
+FROM unit_members um
+JOIN communities c ON c.id = um.community_id AND c.deleted_at IS NULL
+WHERE um.user_id = $1 AND um.deleted_at IS NULL
+ORDER BY c.name ASC, um.community_id ASC, um.role ASC;
+
 -- name: ListUnitMembersByCommunityID :many
 SELECT * FROM unit_members WHERE community_id = $1 AND deleted_at IS NULL ORDER BY created_at ASC;
 

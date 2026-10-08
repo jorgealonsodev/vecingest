@@ -89,6 +89,14 @@ rules:
     - Reference the applicable milestone security gate (docs/security/gates/M<n>.md, PRD section 10.1) when the change affects that milestone's scope.
   specs:
     - Use Given/When/Then for scenarios; use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY).
+    - >
+      Tenant-scope disclosure: every requirement covering a tenant-scoped route MUST state which
+      scope resolves it (`scoped.Community` / `Unit` / `Invitation` / `Office` / `Self`), the roles
+      it accepts, and the response for a caller outside the tenant. A resource in another tenant
+      MUST deny with 403 or 404 — 404 is preferred, because it does not confirm that the resource
+      exists — while a caller inside the tenant with an insufficient role MUST return exactly 403.
+      A requirement that leaves this undisclosed is incomplete, because the permission matrix
+      asserts this distinction on every documented route.
     - Reuse the glossary in PRD_go.md section 12 for entity names; do not invent new domain terms.
     - Legal rules (deadlines, percentages, majorities) are DATA in the `legal_rules` table, never hardcoded constants — specs must not encode a legal threshold as a fixed value.
   design:
@@ -103,7 +111,7 @@ rules:
     guidelines:
       - "Go: wrap errors with context (`fmt.Errorf(\"...: %w\", err)`), no `panic` outside `main`, `context.Context` on every I/O-performing function, no unmanaged goroutines."
       - "No ORM. Every sqlc query against a scoped table MUST filter by its tenant column (`community_id`/`office_id`/`company_id`) — this is enforced by `make lint-scope`."
-      - "Authorization lives in the app via `RequireMembership(scope, roles...)` chi middleware, never Postgres RLS, never a header/body-supplied tenant."
+      - "Authorization lives in the app, never Postgres RLS and never a header/body-supplied tenant. Scoped operations are registered ONLY through the typed `internal/authz/scoped` constructors (`Community`, `Unit`, `Invitation`, `Office`, `Self`), whose signature is not assignable to `huma.Register`; a scoped handler that does not take `authz.Membership` is a compile error. There is no `RequireMembership` chi middleware."
       - "Money: `numeric` in Postgres, `shopspring/decimal` in Go, decimal strings in the API (\"123.45\"). Never `float64`."
       - "Dates: store UTC (`timestamptz`). Compute Spanish legal deadlines (LPH) in `Europe/Madrid` via `time.LoadLocation` (tzdata embedded with `time/tzdata`). Natural-day deadlines count from 00:00 of the day after the triggering event."
       - "Legal rules (LPH deadlines/majorities/percentages) are read from the `legal_rules` table through `internal/legal` (`Rules.Get(ctx, key, at time.Time)`); never hardcode a legal threshold as a Go constant."
@@ -116,6 +124,23 @@ rules:
   verify:
     test_command: "cd api && go test -race ./...   |   pnpm --filter app test"
     build_command: "cd api && go build ./...   |   pnpm --filter app exec tsc --noEmit"
+    permission_matrix:
+      required: true
+      test: "api/internal/http/api/permission_matrix_test.go"
+      generated_from: "api/openapi/openapi.yaml"
+      requirement: >
+        Every route x role x own/foreign-resource combination MUST be exercised, at 100 % route
+        coverage, on every PR. The matrix is GENERATED from openapi.yaml at test time and never
+        hand-listed: an operation that is neither exercised nor explicitly allowlisted MUST fail
+        the test, so adding a route without covering it cannot pass silently. Foreign resource
+        => 403 or 404 (`permission_matrix_test.go:588`), member of the scope with an insufficient
+        role => exactly 403 (`:596`).
+      boot_assertion: >
+        Complementary and not a substitute: `authz.AssertScopedRegistration` runs A1 (every scoped
+        documented operation carries the registration marker), A2 (every marker has a registered
+        resolver and, where required, a non-empty role set) and A3 (the chi route set does not
+        exceed the documented set plus a reviewed allowlist). A3 is what catches a `Hidden: true`
+        operation, which is routed but never added to `Paths` and is therefore invisible to A1.
     coverage_threshold: 80
     coverage_scope: "api/internal/domain/... and api/internal/legal/... only"
     security_gate_note: "PRD DoD point 10 requires golangci-lint/gosec/govulncheck/gitleaks/Trivy/Semgrep green and a scope-membership 403 test on every new route."

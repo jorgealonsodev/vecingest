@@ -118,6 +118,47 @@ func (q *Queries) ListOfficeMembers(ctx context.Context, officeID uuid.UUID) ([]
 	return items, nil
 }
 
+const listOfficeMembershipSummariesByUserID = `-- name: ListOfficeMembershipSummariesByUserID :many
+SELECT om.office_id, o.name AS office_name, om.role
+FROM office_members om
+JOIN offices o ON o.id = om.office_id AND o.deleted_at IS NULL
+WHERE om.user_id = $1 AND om.deleted_at IS NULL
+ORDER BY o.name ASC, om.office_id ASC, om.role ASC
+`
+
+type ListOfficeMembershipSummariesByUserIDRow struct {
+	OfficeID   uuid.UUID `json:"office_id"`
+	OfficeName string    `json:"office_name"`
+	Role       string    `json:"role"`
+}
+
+// GET /v1/me's profile listing (user-profile: GET /v1/me Response
+// Shape): the caller's office memberships WITH the office name the
+// response must carry. Looked up by user, like
+// ListOfficeMembershipsByUserID above (the same documented D-5
+// exception). It is a description of the caller's own rows, never an
+// authorization decision -- authz.ResolveSelf remains the only path that
+// turns these rows into authz.Memberships.
+func (q *Queries) ListOfficeMembershipSummariesByUserID(ctx context.Context, userID uuid.UUID) ([]ListOfficeMembershipSummariesByUserIDRow, error) {
+	rows, err := q.db.Query(ctx, listOfficeMembershipSummariesByUserID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListOfficeMembershipSummariesByUserIDRow
+	for rows.Next() {
+		var i ListOfficeMembershipSummariesByUserIDRow
+		if err := rows.Scan(&i.OfficeID, &i.OfficeName, &i.Role); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listOfficeMembershipsByUserID = `-- name: ListOfficeMembershipsByUserID :many
 SELECT office_id, role FROM office_members WHERE user_id = $1 AND deleted_at IS NULL
 `

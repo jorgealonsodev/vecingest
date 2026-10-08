@@ -8,16 +8,11 @@
 // against the raw `.sql` query files sqlc consumes (no database
 // connection required, so it works in the fast CI lane too).
 //
-// At M0 the auth-subset schema has exactly one table carrying a tenant
-// column: audit_log.community_id, and design.md documents it as a
-// deliberate M0 exception (see the exceptions map below) — every other
-// M0 table is identity-scoped (user_id/id), not tenant-scoped, and
-// carries none of the three columns this tool enforces. That makes
-// today's run trivially green, which is the point: the check exists and
-// is wired into CI now, so the first M1+ query against a real scoped
-// table (community_id on an incident, office_id on a document, …) that
-// forgets its tenant filter fails CI instead of leaking across
-// communities in production.
+// Exceptions are recorded per QUERY, never per table (see
+// queryExceptions): M1 gives audit_log real per-community rows, so the
+// table-wide audit_log exception M0 carried is retired (design D-5), and
+// a new tenant-blind query against any scoped table -- audit_log
+// included -- fails CI instead of inheriting a blanket pass.
 //
 // Usage:
 //
@@ -40,32 +35,22 @@ const defaultSchemaDir = "migrations/schema"
 // any one of these is a "scoped table" for the purpose of this check.
 var tenantColumns = []string{"community_id", "office_id", "company_id"}
 
-// exceptions documents tables that carry a tenant column but are
-// deliberately excluded from enforcement, so "no scope filter" is
-// always a recorded decision and never a silent oversight — the same
-// discipline design.md's own tenant-scope subsection applies to "no
-// scope column at all".
-var exceptions = map[string]string{
-	"audit_log": "design.md (tenant-scope subsection): community_id is " +
-		"nullable and legitimately NULL for M0 authentication events — " +
-		"there is no tenant context to filter by yet. InsertAuditLog " +
-		"already carries the column explicitly; the two read queries " +
-		"(GetAuditLogHead, ListAuditLogRange) intentionally read the " +
-		"whole hash chain. Revisit when M1 gives audit_log real " +
-		"per-community rows.",
-}
-
-// queryExceptions is the NARROWER, query-level exception mechanism
-// design.md's tenant-scope subsection anticipates for M1 ("a narrower
-// query-level exception map keyed file:queryName"), introduced here
-// ahead of Phase 8's own task (which retires the table-level audit_log
-// entry above into this same map) because Phase 6 already needs one
-// entry of its own: unlike audit_log, most `invitations` queries ARE
-// properly community_id-scoped, so a table-level exception would
-// blanket-exempt them too. Keys are `filepath.Base(file):queryName`, so
-// the check is independent of which directory lintscope is invoked
-// from.
+// queryExceptions is the query-level exception map design.md's
+// tenant-scope subsection (D-5) specifies, keyed
+// `filepath.Base(file):queryName` so the check is independent of which
+// directory lintscope is invoked from. It is the ONLY exception
+// mechanism: there is deliberately no table-level map, so "no scope
+// filter" is always a recorded decision about one named query and never
+// a blanket pass for a whole table. Every entry carries its reason.
 var queryExceptions = map[string]string{
+	"audit_log.sql:GetAuditLogHead": "design D-5: reads the head of the " +
+		"single, global audit hash chain (D-O) to link the next entry; " +
+		"the chain spans every tenant by construction, so a " +
+		"community_id filter would break the chain, not scope it.",
+	"audit_log.sql:ListAuditLogRange": "design D-5: the hash-chain " +
+		"verifier walks a time range of the whole global chain; " +
+		"verification is meaningful only over every tenant's entries " +
+		"in order, so the read is intentionally cross-tenant.",
 	"invitations.sql:SweepExpiredInvitations": "design D-6/PRD §7.4: the " +
 		"daily invitations.expire sweep job is intentionally cross-" +
 		"tenant — it is a periodic maintenance pass over every " +
@@ -134,10 +119,6 @@ func lint(schemaDir, queriesDir string) ([]string, error) {
 			continue // not a tenant-scoped table at all
 		}
 
-		if reason, excepted := exceptions[q.table]; excepted {
-			_ = reason // documented, not a silent skip — see the exceptions map's own comment
-			continue
-		}
 		if reason, excepted := queryExceptions[filepath.Base(q.file)+":"+q.name]; excepted {
 			_ = reason // documented, not a silent skip — see queryExceptions' own comment
 			continue

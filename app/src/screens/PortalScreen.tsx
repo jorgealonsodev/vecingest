@@ -32,8 +32,40 @@ import {
   WEB_PAGE_BACKGROUND,
   WEB_SURFACE,
 } from "../theme";
+import {
+  type Membership,
+  type PortalContext,
+  ROLE_LABELS,
+  resolvePortalContext,
+} from "./portalContext";
 
 type Me = z.infer<typeof schemas.MeResponse>;
+
+const SCOPE_LABELS: Record<Membership["scope"], string> = {
+  community: "Comunidad",
+  office: "Despacho",
+};
+
+const SCOPE_ICONS: Record<
+  Membership["scope"],
+  "home-city-outline" | "briefcase-outline"
+> = {
+  community: "home-city-outline",
+  office: "briefcase-outline",
+};
+
+type Selection = { key: string; context: PortalContext };
+
+function membershipKey(membership: Membership): string {
+  return `${membership.scope}-${membership.id}`;
+}
+
+function selectMembership(membership: Membership): Selection {
+  return {
+    key: membershipKey(membership),
+    context: resolvePortalContext(membership),
+  };
+}
 
 type LoadState =
   | { status: "loading" }
@@ -48,23 +80,25 @@ type LoadState =
  * contexto", WEB project `14138416730329310203`, screen
  * `537dd208d9d649b6a56afa3f29f51de1`).
  *
- * Both Stitch screens are a portal/context picker fed by communities,
- * viviendas, roles, and memberships — none of which exist yet (M1, see
- * `docs/pendientes-funcionalidad.md`). What CAN be real today is the one
- * thing this screen exists to prove: the session `LoginScreen` created
- * actually works. `GET /v1/me` is called with the in-memory access token
- * and its response (`{id, email, is_superadmin}`) is rendered directly —
- * that round trip, not a fabricated portal list, is the evidence.
+ * Both Stitch screens are a portal/context picker fed by the caller's
+ * memberships. Since M1, `GET /v1/me` returns them (`memberships`, never
+ * null, typed from the generated `schemas.MeResponse`), and this screen
+ * renders one selectable row per membership (app-portal-memberships: Portal
+ * Renders Real Membership Rows). An empty array keeps the original honest
+ * empty state, unchanged.
  *
- * The design's selectable rows, "remember my choice" toggle, and the fake
- * "Colegiación Oficial nº 4.192" legend are not built: there is no
- * membership data to populate rows with, no client-side signal a
- * "remember choice" toggle could honestly drive without something to
- * remember, and the collegiate number is demo-persona copy, not real
- * per-user data. The empty state, the disabled primary action, and the
- * disabled invitation-code entry point (mirroring `LoginScreen`'s
- * `login-invitation-link`) are honest substitutes — see
- * `docs/pendientes-funcionalidad.md` for the full gap.
+ * The rows are a radio group (Context Selector For Multiple Memberships):
+ * picking one resolves its working context client-side via
+ * `resolvePortalContext`, with no "set active context" endpoint. "Acceder"
+ * stays disabled: no role portal screen exists yet to navigate into, and
+ * enabling a button that goes nowhere would be dishonest.
+ *
+ * Still not built: the design's "remember my choice" toggle (no column or
+ * endpoint persists that preference, `docs/funcionalidad/app-movil-2.md`)
+ * and the fake "Colegiación Oficial nº 4.192" legend (demo-persona copy,
+ * not real per-user data). The invitation-code entry point
+ * (`portal-invitation-link`) opens `InvitationScreen`, the same sessionless
+ * preview + accept flow `LoginScreen`'s `login-invitation-link` opens.
  *
  * Sign-out (`POST /v1/auth/logout`) is real and is the only enabled action
  * besides the redirect guard: reached with no in-memory access token (a
@@ -83,6 +117,11 @@ export function PortalScreen() {
 
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [signingOut, setSigningOut] = useState(false);
+  // The picked working context, resolved client-side from the membership's
+  // scope (see `./portalContext.ts`). A single membership is preselected —
+  // there is no choice to make — while several start unselected so the
+  // user picks deliberately.
+  const [selection, setSelection] = useState<Selection | null>(null);
 
   // Guards against a stale response (unmount, or a retry started before an
   // earlier request settled) writing state that no longer applies — an
@@ -124,6 +163,11 @@ export function PortalScreen() {
       return;
     }
 
+    setSelection(
+      data.memberships.length === 1
+        ? selectMembership(data.memberships[0])
+        : null,
+    );
     setState({ status: "ready", me: data });
   }, []);
 
@@ -201,32 +245,20 @@ export function PortalScreen() {
 
   const invitationRow = (
     <Pressable
-      disabled
       accessibilityRole="link"
-      accessibilityState={{ disabled: true }}
-      accessibilityLabel="Añadir otra comunidad o empresa con código, no disponible todavía"
+      accessibilityState={{ disabled: false }}
+      accessibilityLabel="Añadir otra comunidad o empresa con código"
       testID="portal-invitation-link"
+      onPress={() => router.push("/(auth)/invitation")}
       style={styles.invitationRow}
     >
       <MaterialCommunityIcons
         name="plus-circle-outline"
         size={16}
-        color={activeTheme.colors.onSurfaceVariant}
+        color={activeTheme.colors.primary}
       />
-      <Text
-        variant="labelMedium"
-        style={{ color: activeTheme.colors.onSurfaceVariant }}
-      >
+      <Text variant="labelMedium" style={{ color: activeTheme.colors.primary }}>
         Añadir otra comunidad o empresa con código
-      </Text>
-      <Text
-        variant="labelSmall"
-        style={[
-          styles.invitationBadge,
-          { color: activeTheme.colors.onSurfaceVariant },
-        ]}
-      >
-        Próximamente
       </Text>
     </Pressable>
   );
@@ -317,44 +349,66 @@ export function PortalScreen() {
           </Text>
         </View>
 
-        <View
-          testID="portal-empty-state"
-          style={[
-            styles.emptyState,
-            {
-              backgroundColor: activeTheme.colors.surfaceVariant,
-              borderColor: activeTheme.colors.outline,
-            },
-          ]}
-        >
-          <MaterialCommunityIcons
-            name="home-city-outline"
-            size={28}
-            color={activeTheme.colors.onSurfaceVariant}
-          />
-          <Text
-            variant="bodyMedium"
+        {me.memberships.length > 0 ? (
+          <View
+            testID="portal-memberships"
+            accessibilityRole="radiogroup"
+            style={styles.membershipList}
+          >
+            {me.memberships.map((membership) => (
+              <MembershipRow
+                key={membershipKey(membership)}
+                membership={membership}
+                selected={selection?.key === membershipKey(membership)}
+                onSelect={() => setSelection(selectMembership(membership))}
+                theme={activeTheme}
+              />
+            ))}
+          </View>
+        ) : (
+          <View
+            testID="portal-empty-state"
             style={[
-              styles.emptyStateTitle,
-              { color: activeTheme.colors.onSurface },
+              styles.emptyState,
+              {
+                backgroundColor: activeTheme.colors.surfaceVariant,
+                borderColor: activeTheme.colors.outline,
+              },
             ]}
           >
-            Todavía no perteneces a ninguna comunidad ni empresa.
-          </Text>
-          <Text
-            variant="bodySmall"
-            style={{ color: activeTheme.colors.onSurfaceVariant }}
-          >
-            Un administrador debe crear una comunidad e invitarte para que
-            aparezca aquí.
-          </Text>
-        </View>
+            <MaterialCommunityIcons
+              name="home-city-outline"
+              size={28}
+              color={activeTheme.colors.onSurfaceVariant}
+            />
+            <Text
+              variant="bodyMedium"
+              style={[
+                styles.emptyStateTitle,
+                { color: activeTheme.colors.onSurface },
+              ]}
+            >
+              Todavía no perteneces a ninguna comunidad ni empresa.
+            </Text>
+            <Text
+              variant="bodySmall"
+              style={{ color: activeTheme.colors.onSurfaceVariant }}
+            >
+              Un administrador debe crear una comunidad e invitarte para que
+              aparezca aquí.
+            </Text>
+          </View>
+        )}
 
         <PrimaryButton
           testID="portal-primary-cta"
           accessibilityLabel="Acceder"
           accessibilityState={{ disabled: true }}
-          accessibilityHint="No hay ninguna comunidad ni empresa disponible todavía"
+          accessibilityHint={
+            me.memberships.length > 0
+              ? "El acceso a cada portal todavía no está disponible"
+              : "No hay ninguna comunidad ni empresa disponible todavía"
+          }
           disabled
           style={styles.submit}
         >
@@ -405,6 +459,59 @@ export function PortalScreen() {
         {body}
       </ScrollView>
     </View>
+  );
+}
+
+function MembershipRow({
+  membership,
+  selected,
+  onSelect,
+  theme,
+}: {
+  membership: Membership;
+  selected: boolean;
+  onSelect: () => void;
+  theme: MD3Theme;
+}) {
+  return (
+    <Pressable
+      testID={`portal-membership-${membership.scope}-${membership.id}`}
+      accessibilityRole="radio"
+      accessibilityState={{ selected }}
+      accessibilityLabel={`${SCOPE_LABELS[membership.scope]} ${membership.name}, ${ROLE_LABELS[membership.role]}`}
+      onPress={onSelect}
+      style={[
+        styles.membershipRow,
+        selected
+          ? {
+              borderColor: theme.colors.primary,
+              backgroundColor: theme.colors.secondaryContainer,
+            }
+          : { borderColor: theme.colors.outline },
+      ]}
+    >
+      <MaterialCommunityIcons
+        name={SCOPE_ICONS[membership.scope]}
+        size={24}
+        color={theme.colors.onSurfaceVariant}
+      />
+      <View style={styles.membershipText}>
+        <Text variant="bodyLarge" style={{ color: theme.colors.onSurface }}>
+          {membership.name}
+        </Text>
+        <Text
+          variant="bodySmall"
+          style={{ color: theme.colors.onSurfaceVariant }}
+        >
+          {ROLE_LABELS[membership.role]}
+        </Text>
+      </View>
+      <MaterialCommunityIcons
+        name={selected ? "radiobox-marked" : "radiobox-blank"}
+        size={20}
+        color={selected ? theme.colors.primary : theme.colors.onSurfaceVariant}
+      />
+    </Pressable>
   );
 }
 
@@ -473,6 +580,22 @@ const styles = StyleSheet.create({
     gap: spacing.space8,
     padding: spacing.space24,
   },
+  membershipList: {
+    gap: spacing.space8,
+  },
+  membershipRow: {
+    alignItems: "center",
+    borderRadius: 12,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: spacing.space12,
+    minHeight: MIN_TOUCH_TARGET,
+    padding: spacing.space16,
+  },
+  membershipText: {
+    flex: 1,
+    gap: spacing.space4,
+  },
   emptyStateTitle: {
     textAlign: "center",
   },
@@ -490,9 +613,6 @@ const styles = StyleSheet.create({
     gap: spacing.space8,
     minHeight: MIN_TOUCH_TARGET,
     justifyContent: "center",
-  },
-  invitationBadge: {
-    fontStyle: "italic",
   },
   signOutRow: {
     alignItems: "center",
