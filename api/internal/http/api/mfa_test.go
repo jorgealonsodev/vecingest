@@ -66,7 +66,7 @@ func TestMFA_EnrollThenVerifyActivates(t *testing.T) {
 
 	code := validTOTPCode(t, secret)
 	resp, body = doJSON(t, client, http.MethodPost, srv.URL+"/v1/me/mfa/verify", map[string]any{
-		"code": code,
+		"code": code, "email_code": enrollEmailCode(t, handlesDB, userID),
 	}, auth)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 on verify, got %d body=%v", resp.StatusCode, body)
@@ -117,7 +117,9 @@ func TestMFA_VerifyAgainstAlreadyActiveFactorSucceeds(t *testing.T) {
 	_, body := doJSON(t, client, http.MethodPost, srv.URL+"/v1/me/mfa/enroll", nil, auth)
 	secret, _ := body["secret"].(string)
 	firstCode := validTOTPCode(t, secret)
-	resp, body := doJSON(t, client, http.MethodPost, srv.URL+"/v1/me/mfa/verify", map[string]any{"code": firstCode}, auth)
+	resp, body := doJSON(t, client, http.MethodPost, srv.URL+"/v1/me/mfa/verify", map[string]any{
+		"code": firstCode, "email_code": enrollEmailCode(t, handlesDB, userID),
+	}, auth)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 activating TOTP, got %d body=%v", resp.StatusCode, body)
 	}
@@ -151,7 +153,9 @@ func TestMFA_EnrollWithInvalidCodeStaysInactive(t *testing.T) {
 
 	doJSON(t, client, http.MethodPost, srv.URL+"/v1/me/mfa/enroll", nil, auth)
 
-	resp, body := doJSON(t, client, http.MethodPost, srv.URL+"/v1/me/mfa/verify", map[string]any{"code": "000000"}, auth)
+	resp, body := doJSON(t, client, http.MethodPost, srv.URL+"/v1/me/mfa/verify", map[string]any{
+		"code": "000000", "email_code": enrollEmailCode(t, handlesDB, userID),
+	}, auth)
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected 401 for an invalid code, got %d body=%v", resp.StatusCode, body)
 	}
@@ -179,7 +183,9 @@ func TestMFA_ReEnrollAlreadyActiveConflicts(t *testing.T) {
 	_, body := doJSON(t, client, http.MethodPost, srv.URL+"/v1/me/mfa/enroll", nil, auth)
 	secret, _ := body["secret"].(string)
 	code := validTOTPCode(t, secret)
-	doJSON(t, client, http.MethodPost, srv.URL+"/v1/me/mfa/verify", map[string]any{"code": code}, auth)
+	doJSON(t, client, http.MethodPost, srv.URL+"/v1/me/mfa/verify", map[string]any{
+		"code": code, "email_code": enrollEmailCode(t, handlesDB, userID),
+	}, auth)
 
 	resp, body := doJSON(t, client, http.MethodPost, srv.URL+"/v1/me/mfa/enroll", nil, auth)
 	if resp.StatusCode != http.StatusConflict {
@@ -239,7 +245,9 @@ func TestMFA_AdminWithoutTOTPBlockedFromAdminScopedRoute(t *testing.T) {
 	_, enrollBody := doJSON(t, client, http.MethodPost, srv.URL+"/v1/me/mfa/enroll", nil, auth)
 	secret, _ := enrollBody["secret"].(string)
 	code := validTOTPCode(t, secret)
-	verifyResp, verifyBody := doJSON(t, client, http.MethodPost, srv.URL+"/v1/me/mfa/verify", map[string]any{"code": code}, auth)
+	verifyResp, verifyBody := doJSON(t, client, http.MethodPost, srv.URL+"/v1/me/mfa/verify", map[string]any{
+		"code": code, "email_code": enrollEmailCode(t, handlesDB, adminID),
+	}, auth)
 	if verifyResp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 activating TOTP, got %d body=%v", verifyResp.StatusCode, verifyBody)
 	}
@@ -305,7 +313,7 @@ func TestMFA_ActivationIsAtomicWithRecoveryCodeIssuance(t *testing.T) {
 
 	failRecoveryCodes.Store(true)
 	resp, body := doJSON(t, client, http.MethodPost, srv.URL+"/v1/me/mfa/verify", map[string]any{
-		"code": validTOTPCode(t, secret),
+		"code": validTOTPCode(t, secret), "email_code": enrollEmailCode(t, handlesDB, userID),
 	}, auth)
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("expected 500 when recovery-code issuance fails, got %d body=%v", resp.StatusCode, body)
@@ -322,7 +330,7 @@ func TestMFA_ActivationIsAtomicWithRecoveryCodeIssuance(t *testing.T) {
 
 	failRecoveryCodes.Store(false)
 	resp, body = doJSON(t, client, http.MethodPost, srv.URL+"/v1/me/mfa/verify", map[string]any{
-		"code": validTOTPCode(t, secret),
+		"code": validTOTPCode(t, secret), "email_code": enrollEmailCode(t, handlesDB, userID),
 	}, auth)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected the retry to activate TOTP, got %d body=%v", resp.StatusCode, body)

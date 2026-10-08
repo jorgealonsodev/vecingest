@@ -18,8 +18,20 @@ type Querier interface {
 	// rather than racing a prior read.
 	AcceptInvitation(ctx context.Context, arg AcceptInvitationParams) (uuid.UUID, error)
 	ConfirmUserMFAEnrollment(ctx context.Context, userID uuid.UUID) error
+	// Spends one attempt on the latest open challenge for user_id+purpose
+	// and returns it, or no row when there is none, it has expired, or its
+	// attempts are exhausted. It is a single autocommitted statement on
+	// purpose: the increment must survive the rejection that follows it, and
+	// Postgres re-evaluates `attempts < max` against the newest row version
+	// when two requests race for the same challenge.
+	ConsumeOTPChallengeAttempt(ctx context.Context, arg ConsumeOTPChallengeAttemptParams) (OtpChallenge, error)
 	ConsumePasswordResetToken(ctx context.Context, id uuid.UUID) error
 	ConsumeUserMFARecoveryCode(ctx context.Context, arg ConsumeUserMFARecoveryCodeParams) (int64, error)
+	// How many challenges of purpose were issued to user_id within the last
+	// window_seconds. created_at is the database's own clock, so the window
+	// is measured against now() rather than the caller's clock. It caps
+	// issuance, not use: superseded and expired challenges count too.
+	CountOTPChallengesIssuedSince(ctx context.Context, arg CountOTPChallengesIssuedSinceParams) (int64, error)
 	// CountOfficeMembersByOfficeID backs community-management: Community
 	// Detail Excludes Cross-Milestone Aggregates -- the community detail
 	// response's office-member count is a plain count of the owning
@@ -138,6 +150,10 @@ type Querier interface {
 	// caller is expected to load the existing row (GetUserByEmail) and, for
 	// bootstrap-superadmin only, ensure is_superadmin via EnsureSuperadmin.
 	InsertUserIgnoreConflict(ctx context.Context, arg InsertUserIgnoreConflictParams) (int64, error)
+	// Closes every still-open challenge for user_id+purpose by expiring it
+	// at `now` (the caller's clock). Issuing a new code calls this first, so a
+	// code from a superseded enrollment can never confirm the new one.
+	InvalidateOpenOTPChallenges(ctx context.Context, arg InvalidateOpenOTPChallengesParams) error
 	// auth-mfa-totp delta: Mandatory TOTP For Admin And Admin_staff Scope
 	// Access. Always returns exactly one row (true/false), never
 	// pgx.ErrNoRows, so a caller who never enrolled resolves cleanly to
@@ -159,6 +175,17 @@ type Querier interface {
 	// for GET /v1/me.
 	ListUnitMembershipsByUserID(ctx context.Context, userID uuid.UUID) ([]ListUnitMembershipsByUserIDRow, error)
 	ListUnitsByCommunityID(ctx context.Context, communityID uuid.UUID) ([]Unit, error)
+	// Re-reads one challenge FOR UPDATE inside the transaction that will
+	// mark it verified, so two concurrent correct submissions cannot both
+	// consume it: the second waits on the lock and then finds verified_at set.
+	LockOpenOTPChallenge(ctx context.Context, id uuid.UUID) (OtpChallenge, error)
+	// Row-locks the user at the start of every TOTP enrollment write
+	// (enroll and its confirmation), so per-user enrollment state changes
+	// one transaction at a time: the issuance cap is counted and enforced
+	// without a race, and enroll and confirm take their later locks
+	// (otp_challenges, then user_mfa) behind this one in the same order.
+	// NO KEY UPDATE leaves foreign-key checks against users unblocked.
+	LockUserForMFAEnrollment(ctx context.Context, id uuid.UUID) (string, error)
 	MarkOTPChallengeVerified(ctx context.Context, id uuid.UUID) error
 	// Community resolver, office leg (design D-4): an admin/admin_staff
 	// reaches a community whose office_id matches one of their

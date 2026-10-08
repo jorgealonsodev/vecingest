@@ -20,7 +20,32 @@ var (
 	passwordResetTemplate = template.Must(template.ParseFS(templateFS, "templates/password_reset.html"))
 	loginLockoutTemplate  = template.Must(template.ParseFS(templateFS, "templates/login_lockout.html"))
 	invitationTemplate    = template.Must(template.ParseFS(templateFS, "templates/invitation.html"))
+	mfaEnrollTemplate     = template.Must(template.ParseFS(templateFS, "templates/mfa_enroll.html"))
 )
+
+// MFAEnrollCodeSubject is the enrollment-confirmation email's fixed
+// subject line.
+const MFAEnrollCodeSubject = "Confirm your new authenticator app"
+
+// MFAEnrollCodeData is what mfa_enroll.html renders. Code is the
+// plaintext 6-digit enrollment code (auth-mfa-totp: Email-Confirmed
+// Enrollment); like InvitationData.ShortCode, it reaches this template
+// only by opening the sealed background-job payload. ExpiresInMinutes
+// is the code's lifetime as issued (mfa.EnrollEmailTTL), passed in
+// rather than written into the template so the two cannot drift.
+type MFAEnrollCodeData struct {
+	Code             string
+	ExpiresInMinutes int
+}
+
+// RenderMFAEnrollCode renders the enrollment-confirmation email body.
+func RenderMFAEnrollCode(data MFAEnrollCodeData) (subject, body string, err error) {
+	var buf bytes.Buffer
+	if err := mfaEnrollTemplate.Execute(&buf, data); err != nil {
+		return "", "", fmt.Errorf("mail: render mfa_enroll.html: %w", err)
+	}
+	return MFAEnrollCodeSubject, buf.String(), nil
+}
 
 // InvitationSubject is the invitation email's fixed subject line
 // (design D-6, following RenderPasswordReset's PasswordResetSubject

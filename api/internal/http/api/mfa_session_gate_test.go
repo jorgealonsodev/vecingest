@@ -182,7 +182,7 @@ func TestMFAGate_PasswordOnlySessionCannotEnrollItsWayPastTheGate(t *testing.T) 
 	client := newClient(srv, nil)
 
 	email := "mfa-session-enroll-bypass@example.com"
-	officeID, _ := seedOfficeAdminUser(t, handlesDB, email)
+	officeID, adminID := seedOfficeAdminUser(t, handlesDB, email)
 
 	// No factor yet, so the password alone is a complete credential --
 	// this is the legitimate bootstrap path, and an attacker holding a
@@ -202,8 +202,11 @@ func TestMFAGate_PasswordOnlySessionCannotEnrollItsWayPastTheGate(t *testing.T) 
 	if secret == "" {
 		t.Fatalf("expected a base32 secret from enroll, got %v", enrollBody)
 	}
+	// The enrollment email code is read from the queued job: this test is
+	// about the SESSION gate, so it plays an attacker who also controls
+	// the mailbox and asserts activation still opens nothing.
 	resp, verifyBody := doJSON(t, client, http.MethodPost, srv.URL+"/v1/me/mfa/verify", map[string]any{
-		"code": validTOTPCode(t, secret),
+		"code": validTOTPCode(t, secret), "email_code": enrollEmailCode(t, handlesDB, adminID),
 	}, auth)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200 activating the freshly enrolled factor, got %d body=%v", resp.StatusCode, verifyBody)

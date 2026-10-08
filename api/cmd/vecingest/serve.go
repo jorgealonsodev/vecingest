@@ -250,6 +250,8 @@ func buildServeDeps(cfg config.Config, holder *secrets.Holder, handlesDB db.Hand
 		// here, at the boundary where an in-memory payload becomes a
 		// durable river_job row.
 		Queue: queue.RiverInvitationQueue{Client: riverClient, Key: encryptionKey},
+		// The TOTP enrollment email code, sealed the same way.
+		MFAEnrollQueue: queue.RiverMFAEnrollQueue{Client: riverClient, Key: encryptionKey},
 		// public-form-protection: CaptchaVerifier (new, 6th seam).
 		// TURNSTILE_SECRET is REQUIRED outside development
 		// (internal/config): an empty secret is never valid at

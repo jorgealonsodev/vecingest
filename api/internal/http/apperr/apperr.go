@@ -42,6 +42,13 @@ const (
 	// code, and by the mandatory-TOTP gate, when an admin's session
 	// authenticated on a password alone.
 	CodeMFARequired = "AUTH_MFA_REQUIRED"
+
+	// CodeMFAEnrollmentConfirmationInvalid is the ONE rejection of a
+	// TOTP enrollment confirmation (auth-mfa-totp: Email-Confirmed
+	// Enrollment): missing, wrong, expired, exhausted or superseded email
+	// code, or a wrong TOTP code. A distinct answer per cause would tell a
+	// password-only attacker which half they already have right.
+	CodeMFAEnrollmentConfirmationInvalid = "AUTH_MFA_ENROLLMENT_CONFIRMATION_INVALID"
 )
 
 // Error is the stable envelope. It implements huma.StatusError

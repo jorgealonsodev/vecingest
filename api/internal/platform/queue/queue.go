@@ -55,11 +55,11 @@ func (noopWorker) Work(context.Context, *river.Job[noopArgs]) error { return nil
 // which only goose's database/sql-shaped migration runner needs). A nil
 // logger lets river.Config.WithDefaults install its own default logger.
 //
-// sender wires InvitationEmailWorker's mail dispatch (design's
-// Interfaces/Contracts table: "Queue -- first producers in the
-// project"). A nil sender is a legitimate, supported value: the worker
-// then no-ops on that job kind instead of failing it (M1 does not
-// depend on production SMTP), and a producer-only client (built by
+// sender wires InvitationEmailWorker's and MFAEnrollEmailWorker's mail
+// dispatch (design's Interfaces/Contracts table: "Queue -- first
+// producers in the project"). A nil sender is a legitimate, supported
+// value: the workers then no-op on their job kinds instead of failing
+// them (M1 does not depend on production SMTP), and a producer-only client (built by
 // serve, which never calls Start) never invokes Work at all regardless
 // of what sender it was given.
 //
@@ -72,6 +72,7 @@ func NewClient(pool *pgxpool.Pool, logger *slog.Logger, sender RawSender, encryp
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &noopWorker{})
 	river.AddWorker(workers, &InvitationEmailWorker{Sender: sender, Key: encryptionKey})
+	river.AddWorker(workers, &MFAEnrollEmailWorker{Sender: sender, Key: encryptionKey, Challenges: db.New(pool)})
 	river.AddWorker(workers, &invitationsExpireWorker{pool: pool})
 
 	driver := riverpgxv5.New(pool)

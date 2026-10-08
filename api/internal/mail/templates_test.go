@@ -48,3 +48,31 @@ func TestRenderLoginLockoutAlert_IncludesDomainAuthoredMessage(t *testing.T) {
 		t.Fatalf("expected rendered body to contain the domain-authored message, got: %s", body)
 	}
 }
+
+// auth-mfa-totp: Email-Confirmed Enrollment -- the enrollment email
+// carries the code and says it only confirms an enrollment the reader
+// started themselves.
+func TestRenderMFAEnrollCode_IncludesCode(t *testing.T) {
+	subject, body, err := mail.RenderMFAEnrollCode(mail.MFAEnrollCodeData{Code: "042917"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if subject != mail.MFAEnrollCodeSubject {
+		t.Fatalf("expected subject %q, got %q", mail.MFAEnrollCodeSubject, subject)
+	}
+	if !strings.Contains(body, "042917") || !strings.Contains(body, "<html") {
+		t.Fatalf("expected an HTML body containing the code, got: %s", body)
+	}
+}
+
+// The lifetime the email states is rendered from the caller's value, so
+// it cannot drift from the TTL the challenge is actually issued with.
+func TestRenderMFAEnrollCode_StatesTheGivenLifetime(t *testing.T) {
+	_, body, err := mail.RenderMFAEnrollCode(mail.MFAEnrollCodeData{Code: "042917", ExpiresInMinutes: 7})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(body, "expires in 7 minutes") {
+		t.Fatalf("expected the body to state the given lifetime, got: %s", body)
+	}
+}

@@ -12,6 +12,80 @@ import (
 	"github.com/google/uuid"
 )
 
+const consumeOTPChallengeAttempt = `-- name: ConsumeOTPChallengeAttempt :one
+UPDATE otp_challenges o SET attempts = o.attempts + 1, updated_at = now()
+WHERE o.id = (
+    SELECT c.id FROM otp_challenges c
+    WHERE c.user_id = $1 AND c.purpose = $2
+      AND c.verified_at IS NULL
+    ORDER BY c.created_at DESC
+    LIMIT 1
+)
+  AND o.verified_at IS NULL
+  AND o.expires_at > $3
+  AND o.attempts < $4::integer
+RETURNING id, user_id, purpose, code_hash, channel, expires_at, attempts, verified_at, created_at, updated_at
+`
+
+type ConsumeOTPChallengeAttemptParams struct {
+	UserID      uuid.UUID `json:"user_id"`
+	Purpose     string    `json:"purpose"`
+	Now         time.Time `json:"now"`
+	MaxAttempts int32     `json:"max_attempts"`
+}
+
+// Spends one attempt on the latest open challenge for user_id+purpose
+// and returns it, or no row when there is none, it has expired, or its
+// attempts are exhausted. It is a single autocommitted statement on
+// purpose: the increment must survive the rejection that follows it, and
+// Postgres re-evaluates `attempts < max` against the newest row version
+// when two requests race for the same challenge.
+func (q *Queries) ConsumeOTPChallengeAttempt(ctx context.Context, arg ConsumeOTPChallengeAttemptParams) (OtpChallenge, error) {
+	row := q.db.QueryRow(ctx, consumeOTPChallengeAttempt,
+		arg.UserID,
+		arg.Purpose,
+		arg.Now,
+		arg.MaxAttempts,
+	)
+	var i OtpChallenge
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Purpose,
+		&i.CodeHash,
+		&i.Channel,
+		&i.ExpiresAt,
+		&i.Attempts,
+		&i.VerifiedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const countOTPChallengesIssuedSince = `-- name: CountOTPChallengesIssuedSince :one
+SELECT count(*) FROM otp_challenges
+WHERE user_id = $1 AND purpose = $2
+  AND created_at > now() - make_interval(secs => $3::double precision)
+`
+
+type CountOTPChallengesIssuedSinceParams struct {
+	UserID        uuid.UUID `json:"user_id"`
+	Purpose       string    `json:"purpose"`
+	WindowSeconds float64   `json:"window_seconds"`
+}
+
+// How many challenges of purpose were issued to user_id within the last
+// window_seconds. created_at is the database's own clock, so the window
+// is measured against now() rather than the caller's clock. It caps
+// issuance, not use: superseded and expired challenges count too.
+func (q *Queries) CountOTPChallengesIssuedSince(ctx context.Context, arg CountOTPChallengesIssuedSinceParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countOTPChallengesIssuedSince, arg.UserID, arg.Purpose, arg.WindowSeconds)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const getOTPChallenge = `-- name: GetOTPChallenge :one
 SELECT id, user_id, purpose, code_hash, channel, expires_at, attempts, verified_at, created_at, updated_at FROM otp_challenges WHERE id = $1
 `
@@ -71,6 +145,53 @@ func (q *Queries) InsertOTPChallenge(ctx context.Context, arg InsertOTPChallenge
 		arg.Channel,
 		arg.ExpiresAt,
 	)
+	var i OtpChallenge
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Purpose,
+		&i.CodeHash,
+		&i.Channel,
+		&i.ExpiresAt,
+		&i.Attempts,
+		&i.VerifiedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const invalidateOpenOTPChallenges = `-- name: InvalidateOpenOTPChallenges :exec
+UPDATE otp_challenges SET expires_at = $1, updated_at = now()
+WHERE user_id = $2 AND purpose = $3
+  AND verified_at IS NULL AND expires_at > $1
+`
+
+type InvalidateOpenOTPChallengesParams struct {
+	Now     time.Time `json:"now"`
+	UserID  uuid.UUID `json:"user_id"`
+	Purpose string    `json:"purpose"`
+}
+
+// Closes every still-open challenge for user_id+purpose by expiring it
+// at `now` (the caller's clock). Issuing a new code calls this first, so a
+// code from a superseded enrollment can never confirm the new one.
+func (q *Queries) InvalidateOpenOTPChallenges(ctx context.Context, arg InvalidateOpenOTPChallengesParams) error {
+	_, err := q.db.Exec(ctx, invalidateOpenOTPChallenges, arg.Now, arg.UserID, arg.Purpose)
+	return err
+}
+
+const lockOpenOTPChallenge = `-- name: LockOpenOTPChallenge :one
+SELECT id, user_id, purpose, code_hash, channel, expires_at, attempts, verified_at, created_at, updated_at FROM otp_challenges
+WHERE id = $1 AND verified_at IS NULL
+FOR UPDATE
+`
+
+// Re-reads one challenge FOR UPDATE inside the transaction that will
+// mark it verified, so two concurrent correct submissions cannot both
+// consume it: the second waits on the lock and then finds verified_at set.
+func (q *Queries) LockOpenOTPChallenge(ctx context.Context, id uuid.UUID) (OtpChallenge, error) {
+	row := q.db.QueryRow(ctx, lockOpenOTPChallenge, id)
 	var i OtpChallenge
 	err := row.Scan(
 		&i.ID,

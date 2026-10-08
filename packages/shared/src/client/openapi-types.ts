@@ -932,6 +932,8 @@ export interface components {
             readonly $schema?: string;
             /** @description 6-digit TOTP code. */
             code: string;
+            /** @description 6-digit code emailed to the account's address by the enroll call. Required to confirm an enrollment; ignored once TOTP is active. */
+            email_code?: string;
         };
         MFAVerifyResponse: {
             /**

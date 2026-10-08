@@ -110,6 +110,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *handlers.Deps, db.Handles) 
 		TokenIssuer:     handlers.OpaqueTokenIssuer{},
 		InviteAttempts:  attempts.NewCounter(nil),
 		Queue:           queue.RiverInvitationQueue{Client: riverClient, Key: testEncryptionKey},
+		MFAEnrollQueue:  queue.RiverMFAEnrollQueue{Client: riverClient, Key: testEncryptionKey},
 		// Every test not specifically exercising Turnstile injects the
 		// AlwaysPass double, so none of them depend on network access
 		// (design D-7; this session's explicit instruction).

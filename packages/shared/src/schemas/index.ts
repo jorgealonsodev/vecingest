@@ -313,6 +313,7 @@ const MFAEnrollResponse = z.object({
 const MFAVerifyRequest = z.object({
   $schema: z.string().url().optional(),
   code: z.string().min(6).max(6),
+  email_code: z.string().min(6).max(6).optional(),
 });
 const MFAVerifyResponse = z.object({
   $schema: z.string().url().optional(),

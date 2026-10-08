@@ -21,7 +21,10 @@ type EnrollResult struct {
 // upserts it into user_mfa -- WITHOUT activating it. enabled_at stays
 // NULL until ConfirmEnrollment verifies one valid code
 // (auth-mfa-totp: TOTP Enrollment).
-func Enroll(ctx context.Context, wdb db.WriteDB, key [32]byte, userID uuid.UUID) (EnrollResult, error) {
+// It takes a db.DBTX so the caller can pass the transaction that also
+// issues the enrollment email challenge: a pending secret must never
+// exist without the code that confirms it, nor the reverse.
+func Enroll(ctx context.Context, dbtx db.DBTX, key [32]byte, userID uuid.UUID) (EnrollResult, error) {
 	secret, err := GenerateSecret()
 	if err != nil {
 		return EnrollResult{}, err
@@ -31,7 +34,7 @@ func Enroll(ctx context.Context, wdb db.WriteDB, key [32]byte, userID uuid.UUID)
 		return EnrollResult{}, err
 	}
 
-	q := db.New(wdb)
+	q := db.New(dbtx)
 	if _, err := q.UpsertUserMFA(ctx, db.UpsertUserMFAParams{
 		UserID:              userID,
 		TotpSecretEncrypted: encrypted,

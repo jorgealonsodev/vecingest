@@ -50,6 +50,12 @@ type Deps struct {
 	// Codes) -- an active factor with no recovery path is unreachable
 	// through any endpoint and would strand the account permanently.
 	RecoveryCodes func() (raw []string, hashed []string, err error)
+	// MFAEnrollQueue delivers the email code that confirms a TOTP
+	// enrollment (auth-mfa-totp: Email-Confirmed Enrollment), enqueued
+	// in the same transaction as the pending secret. nil fails
+	// enrollment CLOSED with a 500: an enrollment nobody can confirm is
+	// better than one confirmed without the mailbox.
+	MFAEnrollQueue mfa.EnrollEmailQueue
 
 	RevocationCache *cache.RevocationCache
 

@@ -368,8 +368,18 @@ func (d *Deps) PreviewInvitation(ctx context.Context, in *dto.PreviewInvitationI
 //  2. THROTTLE. The enumeration counter first (it keys on the address alone
 //     and gates step 1), then this invitation's own account lockout, which
 //     needs the email step 1 resolved.
-//  3. ONLY THEN THE CREDENTIAL WORK: password policy, password.Verify or
-//     password.Hash, and the second-factor challenge.
+//  3. ONLY THEN THE CREDENTIAL WORK: password.Verify or the password
+//     policy plus password.Hash, and the second-factor challenge. The policy
+//     judges a password being SET, so it runs in full on the create branch
+//     and never against an existing account's matching credential, which is
+//     only being verified: that account may hold a 12-14 character password
+//     legitimately (TOTP active) or one set before the policy last tightened,
+//     and re-litigating it locked the owner out of every invitation
+//     (R3-accept-invitation-applies-password-policy-to-an-existing-credential).
+//     A candidate that does NOT match still goes through the policy, so a
+//     policy-violating password answers the same 422 on both branches, and
+//     it is recorded as a failure on both branches so they also lock out
+//     identically; prior existence stays undisclosed either way.
 //  4. THEN THE TRANSACTION, holding the writes and nothing else.
 //
 // What each inversion cost, so the next reader does not have to rediscover
@@ -429,21 +439,17 @@ func (d *Deps) AcceptInvitation(ctx context.Context, in *dto.AcceptInvitationInp
 		return nil, apperr.New(429, apperr.CodeTooManyAttempts, "too many attempts, try again later", nil)
 	}
 
-	// Step 3. The policy runs on BOTH branches, deliberately: running it
-	// only where a new password is being set would make a policy-violating
-	// password answer 422 for an unknown address and 401 for a known one,
-	// which is precisely the prior-existence disclosure this endpoint's
-	// requirement forbids.
-	if perr := d.PasswordPolicy.Validate(ctx, in.Body.Password, false); perr != nil {
-		var pe *password.PolicyError
-		if errors.As(perr, &pe) {
-			return nil, apperr.New(422, pe.Code, pe.Error(), pe.Details)
-		}
-		return nil, apperr.New(500, apperr.CodeInternal, "internal error", nil)
-	}
-
-	// Resolve WHICH account this accept is for, and prove the caller may
-	// use it. newPasswordHash is non-empty only on the create branch.
+	// Step 3. Resolve WHICH account this accept is for, and prove the
+	// caller may use it. newPasswordHash is non-empty only on the create
+	// branch.
+	//
+	// The password policy is applied per branch, not up front: every
+	// candidate that is NOT an existing account's own password -- the new
+	// password on the create branch, a mismatch on the linking branch --
+	// goes through acceptPolicyError, so a policy-violating password answers
+	// the identical 422 whether or not the address has an account (no
+	// prior-existence disclosure). A MATCHING existing credential never does:
+	// it is being verified, not set, and today's policy has no say over it.
 	var (
 		userID           uuid.UUID
 		newPasswordHash  string
@@ -466,6 +472,12 @@ func (d *Deps) AcceptInvitation(ctx context.Context, in *dto.AcceptInvitationInp
 			// accountExists is unconditionally true here: this branch
 			// is reached only because GetUserByEmail returned a row.
 			_, _ = d.Lockout.RecordFailure(ctx, inv.Email.String, ip, true)
+			// The policy on the mismatch is what keeps this branch
+			// indistinguishable from the create branch: the same
+			// policy-violating password gets the same 422 there.
+			if perr := d.acceptPolicyError(ctx, in.Body.Password); perr != nil {
+				return nil, perr
+			}
 			return nil, invalidCredentials()
 		}
 		if existing.IsSuperadmin {
@@ -492,6 +504,19 @@ func (d *Deps) AcceptInvitation(ctx context.Context, in *dto.AcceptInvitationInp
 		}
 		userID = existing.ID
 	case isNoRows(err):
+		if perr := d.acceptPolicyError(ctx, in.Body.Password); perr != nil {
+			// Counted exactly as the linking branch counts the same
+			// password (it never matches, so it lands in that branch's
+			// mismatch path): otherwise an existing address would lock
+			// to 429 after lockout.Threshold policy-violating guesses
+			// while an unknown one answered 422 forever. accountExists
+			// is false as on POST /v1/auth/login's unknown-address path;
+			// it suppresses only the victim alert, never the counting
+			// or the lock.
+			_, _ = d.InviteAttempts.Fail(ctx, key, inviteLockoutWindow)
+			_, _ = d.Lockout.RecordFailure(ctx, inv.Email.String, ip, false)
+			return nil, perr
+		}
 		// Argon2id, deliberately slow -- which is exactly why it runs
 		// here and not inside the transaction below, and why nothing
 		// reaches it until the invitation has been proven usable.
@@ -583,6 +608,24 @@ func (d *Deps) AcceptInvitation(ctx context.Context, in *dto.AcceptInvitationInp
 		return nil, err
 	}
 	return &dto.AcceptInvitationOutput{SetCookie: sessionOut.SetCookie, Body: sessionOut.Body}, nil
+}
+
+// acceptPolicyError runs the full password policy on an accept candidate and
+// maps a violation to the 422 both AcceptInvitation branches return. It is
+// ONE function because disclosure parity depends on the two branches
+// producing byte-identical responses for the same candidate; totpActive is
+// false because neither caller has a second factor to credit -- a new account
+// has none yet, and a mismatching candidate is never that account's password.
+func (d *Deps) acceptPolicyError(ctx context.Context, candidate string) error {
+	perr := d.PasswordPolicy.Validate(ctx, candidate, false)
+	if perr == nil {
+		return nil
+	}
+	var pe *password.PolicyError
+	if errors.As(perr, &pe) {
+		return apperr.New(422, pe.Code, pe.Error(), pe.Details)
+	}
+	return apperr.New(500, apperr.CodeInternal, "internal error", nil)
 }
 
 // resolveUsableInvitation is step 1 of AcceptInvitation's ordering invariant,
