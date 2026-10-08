@@ -68,6 +68,12 @@ needs no push. Slice 8 is the current local branch.
       with explicit `--repo` and `--base`.
 - [x] D-5: Required CI reported per pull request below. Nothing is declared
       merge-ready.
+- [x] D-6: `ci` restored to green on pull request #9 by fixing two blockers in
+      the `go` job. `security` still blocks all nine.
+- [ ] D-7: Diagnose the pre-existing repository-wide `security` failure
+      (gitleaks whole-history scan, pnpm audit, semgrep, trivy).
+- [ ] D-8: Obtain a native review receipt for `94dc063`, currently blocked by
+      consent-binding expiry.
 
 ## Evidence
 - Branch state at planning time: `feature/m2-incidents-api`, clean tree, HEAD
@@ -138,6 +144,55 @@ needs no push. Slice 8 is the current local branch.
     isolated from the log.
 - No pull request is merge-ready. `security` blocks all nine, and `gofumpt`
   additionally blocks #9.
+
+### D-6 evidence
+- `ci` is now SUCCESS on all nine pull requests, `ci-required` included. The
+  final #9 run is 37803454855 at `94dc063` with all eight jobs green.
+- Two blockers, fixed as two work units, each reproduced before being changed:
+  1. `618efd9` style(incidents): `gofumpt` v0.9.2 flagged three files, all last
+     modified by M2 commits (`34d3971`, `479dc8d`, `5634883`), which is why #2
+     passed with an earlier formatted `register_test.go`. Semantically empty: an
+     independent verifier parsed the HEAD and reformatted versions and reported
+     identical syntax trees for all three files, comments included.
+  2. `94dc063` test(incidents): fixing `gofumpt` unmasked step 6,
+     `golangci-lint` v2.13.2, which had NEVER run on this branch because step 5
+     aborted the job first. It reported two gosec G602 findings on `want[i]` in
+     `assertIncidentIDs`. Both are false positives: `i` ranges over
+     `min(len(got), len(want))`, so it is below both lengths by construction,
+     and gosec flags only `want[i]`, never `got[i]`.
+- NEGATIVE RESULT worth keeping: rewriting the loop as
+  `for i, gotID := range got` with an explicit `if i >= len(want) { break }`
+  guard does NOT satisfy gosec either. Contorting correct test code for the
+  analyzer was abandoned in favour of the repository's established
+  documented-suppression convention, `//nolint:gosec // G602: <reason>`, already
+  used in ten places across this module.
+- ROOT CAUSE of the whole local/CI gap, now closed: neither `gofumpt` nor
+  `golangci-lint` was installed in this worktree, and both live only in the
+  `lint` target (`Makefile:40`). Every earlier full-suite verification was
+  accurate and never ran either tool. Both CI-pinned versions are now installed
+  and were run directly.
+- Final verification with the exact CI pins: `golangci-lint run ./...`
+  `0 issues`, `gofumpt -l .` clean, `go build ./...` and `go vet ./...` exit 0,
+  the CI's own fast lane `go test -race -short -count=1 ./...` 31 packages ok
+  with 0 failures, golden clean via
+  `git diff --exit-code -- '**/testdata/*.golden'`, and the Docker-backed
+  `-run 'Incident|PermissionMatrix'` suite ok in 17.608s with 24 RUN, 8
+  top-level PASS, 0 FAIL, 0 SKIP and 216 permission-matrix assertions.
+- REVIEW STATUS, stated honestly: `618efd9` and `8a9c9f8` were natively
+  reviewed under lineage `review-bc2e16bc8286f674` (medium, reliability lens,
+  13 files / 1815 lines), approved with five informational findings, all in the
+  markdown and none in the Go code, and the exact acknowledgement burned
+  authority for target
+  `sha256:797e882183a9af8e009528c0ffb5e26570e484753077bbceb211a225b61e7d76`.
+  `94dc063` is NOT natively reviewed: two START attempts returned
+  `consent-binding-expired` immediately, with a fresh binding each time, no
+  lineage created and no envelope available to relay. That is a host consent
+  resolution failure, not a review finding. It carries the verification evidence
+  above but no review receipt.
+- The native controller independently confirms the chained-delivery decision:
+  starting the accumulated whole-branch candidate fails terminally with
+  `lens_context_budget_exceeded`, whose own message says to review the change as
+  smaller candidates.
 
 ### D-1 and D-2 evidence
 - Two defects were found and corrected during branch creation, both before any
